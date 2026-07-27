@@ -1,0 +1,108 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'kotlin-parcelize'
+}
+
+android {
+    namespace 'com.karin.streamtv'
+    compileSdk 36
+
+    signingConfigs {
+        release {
+            storeFile file("karintv.keystore")
+            storePassword findProperty("KARIN_STORE_PASSWORD") ?: "karintv2026"
+            keyAlias findProperty("KARIN_KEY_ALIAS") ?: "karintv"
+            keyPassword findProperty("KARIN_KEY_PASSWORD") ?: "karintv2026"
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.karintv.player"
+        minSdk 23
+        targetSdk 34
+        versionCode 3
+        versionName "1.2.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+        debug {
+            minifyEnabled false
+            // No suffix - same package for both builds
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = '11'
+    }
+
+    buildFeatures {
+        viewBinding true
+        buildConfig true
+    }
+
+    packagingOptions {
+        resources {
+            excludes += 'META-INF/versions/9/**'
+            excludes += 'META-INF/*.SF'
+            excludes += 'META-INF/*.DSA'
+            excludes += 'META-INF/*.RSA'
+        }
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.leanback:leanback:1.0.0'
+    implementation 'androidx.leanback:leanback-preference:1.0.0'
+    implementation 'androidx.tvprovider:tvprovider:1.0.0'
+
+    // Media3 ExoPlayer (latest stable)
+    implementation 'androidx.media3:media3-exoplayer:1.10.1'
+    implementation 'androidx.media3:media3-ui:1.10.1'
+    implementation 'androidx.media3:media3-session:1.10.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.10.1'
+    implementation 'androidx.media3:media3-exoplayer-dash:1.10.1'
+    implementation 'androidx.media3:media3-datasource:1.10.1'
+    implementation 'androidx.media3:media3-datasource-okhttp:1.10.1'
+
+    // HTTP
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // HTML Parser (replaces fragile regex extraction)
+    implementation 'org.jsoup:jsoup:1.17.2'
+
+    // Rhino JS Engine (extract video URLs without WebView)
+    implementation 'org.mozilla:rhino:1.7.14'
+
+    // Coroutines
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    // MoonGetter - Video extraction library for all servers
+    implementation 'io.github.darkryh.moongetter:moongetter-core:2.0.0-alpha01'
+    implementation 'io.github.darkryh.moongetter:moongetter-server-bundle:2.0.0-alpha01'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'
+
+    // QR Code generation
+    implementation 'com.google.zxing:core:3.5.3'
+
+    // Sentry crash reporting
+    implementation 'io.sentry:sentry-android:7.14.0'
+
+}

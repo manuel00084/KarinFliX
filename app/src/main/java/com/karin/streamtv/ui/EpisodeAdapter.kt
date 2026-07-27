@@ -1,0 +1,133 @@
+package com.karin.streamtv.ui
+
+import android.graphics.Bitmap
+import android.util.LruCache
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
+import com.karin.streamtv.R
+import com.karin.streamtv.model.Episode
+import com.karin.streamtv.util.DiskImageCache
+import com.karin.streamtv.util.EpisodeProgress
+import com.karin.streamtv.util.onActionKey
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class EpisodeAdapter(
+    private val episodes: List<Episode>,
+    private val siteUrl: String = "",
+    private val onEpisodeClick: (Episode) -> Unit
+) : RecyclerView.Adapter<EpisodeAdapter.ViewHolder>() {
+
+    private val imageCache = object : LruCache<String, Bitmap>(15 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+    private val pendingJobs = mutableMapOf<String, Job>()
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val view = LayoutInflater.from(parent.context)
+            .inflate(R.layout.item_episode_card, parent, false)
+        return ViewHolder(view)
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val episode = episodes[position]
+        holder.title.text = episode.title
+        holder.date.text = episode.date
+
+        val epNum = episode.episodeNum.trim()
+        if (epNum.isNotBlank()) {
+            holder.tvEpisodeNumber.visibility = View.VISIBLE
+            holder.tvEpisodeNumber.text = if (epNum.length <= 4) "Ep $epNum" else epNum
+            holder.tvEpisodeNumber.contentDescription = "Episodio $epNum"
+        } else {
+            val inferredNum = position + 1
+            holder.tvEpisodeNumber.visibility = View.VISIBLE
+            holder.tvEpisodeNumber.text = "Ep $inferredNum"
+            holder.tvEpisodeNumber.contentDescription = "Episodio $inferredNum"
+        }
+
+        val cached = imageCache.get(episode.thumbnailUrl)
+        if (cached != null) {
+            holder.thumb.setImageBitmap(cached)
+        } else {
+            holder.thumb.setImageResource(android.R.color.darker_gray)
+            val existingJob = pendingJobs[episode.thumbnailUrl]
+            if (existingJob == null || existingJob.isCancelled) {
+                pendingJobs[episode.thumbnailUrl] = GlobalScope.launch(Dispatchers.Main) {
+                    val bmp = loadImage(episode.thumbnailUrl)
+                    if (bmp != null) {
+                        imageCache.put(episode.thumbnailUrl, bmp)
+                        if (holder.adapterPosition != RecyclerView.NO_POSITION) {
+                            notifyItemChanged(holder.adapterPosition)
+                        }
+                    }
+                    pendingJobs.remove(episode.thumbnailUrl)
+                }
+            }
+        }
+
+        val animeId = EpisodeProgress.generateAnimeId(episode.url)
+        val isWatched = EpisodeProgress.isWatched(animeId, position + 1)
+        val lastPos = EpisodeProgress.getLastPosition(animeId, position + 1)
+        val duration = EpisodeProgress.getDuration(animeId, position + 1)
+
+        if (isWatched) {
+            holder.watchedBadge.visibility = View.VISIBLE
+            holder.partialBadge.visibility = View.GONE
+            holder.itemView.contentDescription = "${episode.title} - Visto"
+        } else if (lastPos > 0 && duration > 0) {
+            val progress = ((lastPos * 100) / duration).toInt().coerceIn(1, 99)
+            holder.partialBadge.visibility = View.VISIBLE
+            holder.partialProgress.text = "${progress}% visto"
+            holder.watchedBadge.visibility = View.GONE
+            holder.itemView.contentDescription = "${episode.title} - ${progress}% visto"
+        } else {
+            holder.watchedBadge.visibility = View.GONE
+            holder.partialBadge.visibility = View.GONE
+            holder.itemView.contentDescription = episode.title
+        }
+
+        holder.itemView.setOnClickListener { onEpisodeClick(episode) }
+        holder.itemView.onActionKey { onEpisodeClick(episode) }
+    }
+
+    override fun getItemCount() = episodes.size
+
+    override fun onViewRecycled(holder: ViewHolder) {
+        super.onViewRecycled(holder)
+        val url = holder.thumb.tag as? String
+        if (url != null) {
+            pendingJobs.remove(url)?.cancel()
+        }
+    }
+
+    fun clearCache() {
+        imageCache.evictAll()
+        pendingJobs.values.forEach { it.cancel() }
+        pendingJobs.clear()
+    }
+
+    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val thumb: ImageView = view.findViewById(R.id.iv_thumbnail)
+        val title: TextView = view.findViewById(R.id.tv_episode_title)
+        val date: TextView = view.findViewById(R.id.tv_episode_date)
+        val watchedBadge: LinearLayout = view.findViewById(R.id.watched_badge)
+        val partialBadge: LinearLayout = view.findViewById(R.id.partial_badge)
+        val partialProgress: TextView = view.findViewById(R.id.tv_partial_progress)
+        val tvEpisodeNumber: TextView = view.findViewById(R.id.tv_episode_number)
+    }
+
+    private suspend fun loadImage(url: String): Bitmap? = withContext(Dispatchers.IO) {
+        if (url.isBlank()) return@withContext null
+        DiskImageCache.loadFromNetwork(url, 800, 600)
+    }
+}
