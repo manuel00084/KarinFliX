@@ -16,8 +16,9 @@ import com.karin.streamtv.util.EpisodeProgress
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -31,6 +32,7 @@ class EpisodeAdapter(
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val pendingJobs = mutableMapOf<String, Job>()
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val view = LayoutInflater.from(parent.context)
@@ -62,7 +64,7 @@ class EpisodeAdapter(
             holder.thumb.setImageResource(android.R.color.darker_gray)
             val existingJob = pendingJobs[episode.thumbnailUrl]
             if (existingJob == null || existingJob.isCancelled) {
-                pendingJobs[episode.thumbnailUrl] = GlobalScope.launch(Dispatchers.Main) {
+                pendingJobs[episode.thumbnailUrl] = scope.launch {
                     val bmp = loadImage(episode.thumbnailUrl)
                     if (bmp != null) {
                         imageCache.put(episode.thumbnailUrl, bmp)
@@ -114,6 +116,12 @@ class EpisodeAdapter(
         imageCache.evictAll()
         pendingJobs.values.forEach { it.cancel() }
         pendingJobs.clear()
+        scope.coroutineContext.cancelChildren()
+    }
+
+    fun destroy() {
+        clearCache()
+        scope.cancel()
     }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {

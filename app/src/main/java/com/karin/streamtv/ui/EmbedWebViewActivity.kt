@@ -382,8 +382,8 @@ class EmbedWebViewActivity : AppCompatActivity() {
             builtInZoomControls = false
             displayZoomControls = false
             cacheMode = WebSettings.LOAD_DEFAULT
-            allowFileAccess = true
-            allowContentAccess = true
+            allowFileAccess = false
+            allowContentAccess = false
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = true
             val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {

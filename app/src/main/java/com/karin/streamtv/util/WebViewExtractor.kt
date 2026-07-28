@@ -22,12 +22,13 @@ object WebViewExtractor {
     private const val TAG = "WebViewExtractor"
     private const val TIMEOUT_MS = 30_000L
     private var webView: WebView? = null
-    private val initDeferred = CompletableDeferred<Unit>()
+    private var initDeferred = CompletableDeferred<Unit>()
     @Volatile
     private var initialized = false
 
     fun init(context: Context) {
         if (initialized) return
+        initDeferred = CompletableDeferred()
         Handler(Looper.getMainLooper()).post {
             try {
                 val wv = WebView(context.applicationContext)
@@ -268,5 +269,9 @@ object WebViewExtractor {
             initialized = false
             Log.d(TAG, "WebView destroyed")
         }
+    }
+
+    fun resetInitState() {
+        initialized = false
     }
 }

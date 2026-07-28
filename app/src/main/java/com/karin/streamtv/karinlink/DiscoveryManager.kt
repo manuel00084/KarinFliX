@@ -36,7 +36,7 @@ class DiscoveryManager(private val context: Context) {
 
     fun registerService(port: Int, deviceId: String, deviceModel: String) {
         try {
-            nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
+            nsdManager = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
 
             val serviceInfo = NsdServiceInfo().apply {
                 serviceName = "$SERVICE_NAME-$deviceId"
@@ -72,7 +72,7 @@ class DiscoveryManager(private val context: Context) {
     fun startDiscovery() {
         try {
             if (nsdManager == null) {
-                nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
+                nsdManager = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
             }
 
             discoveryListener = object : NsdManager.DiscoveryListener {

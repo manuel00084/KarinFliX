@@ -12,9 +12,11 @@ import com.karin.streamtv.R
 import com.karin.streamtv.model.CalendarItem
 import com.karin.streamtv.util.DiskImageCache
 import com.karin.streamtv.util.onActionKey
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -27,6 +29,7 @@ class CalendarSeriesAdapter(
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val pendingJobs = mutableMapOf<String, Job>()
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val view = LayoutInflater.from(parent.context)
@@ -53,7 +56,7 @@ class CalendarSeriesAdapter(
             holder.thumb.setImageResource(android.R.color.darker_gray)
             val job = pendingJobs[item.thumbnailUrl]
             if (job == null || job.isCancelled) {
-                pendingJobs[item.thumbnailUrl] = GlobalScope.launch(Dispatchers.Main) {
+                pendingJobs[item.thumbnailUrl] = scope.launch {
                     val bmp = withContext(Dispatchers.IO) {
                         if (item.thumbnailUrl.isNotBlank()) {
                             DiskImageCache.loadFromNetwork(item.thumbnailUrl, 400, 240)
@@ -87,6 +90,12 @@ class CalendarSeriesAdapter(
         imageCache.evictAll()
         pendingJobs.values.forEach { it.cancel() }
         pendingJobs.clear()
+        scope.coroutineContext.cancelChildren()
+    }
+
+    fun destroy() {
+        clearCache()
+        scope.cancel()
     }
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {

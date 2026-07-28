@@ -18,7 +18,7 @@ abstract class GenericScraper : BaseScraper {
 
     protected suspend fun fetchDocument(url: String? = null, forceFresh: Boolean = false): Document? {
         val target = url ?: baseUrl
-        val cacheKey = "${name}::home"
+        val cacheKey = "${name}::${target.hashCode()}"
         return withContext(Dispatchers.IO) {
             engine.fetch(target, name, cacheKey, forceFresh)
         }

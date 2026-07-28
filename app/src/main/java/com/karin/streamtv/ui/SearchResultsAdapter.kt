@@ -15,9 +15,11 @@ import androidx.recyclerview.widget.RecyclerView
 import com.karin.streamtv.R
 import com.karin.streamtv.util.DiskImageCache
 import com.karin.streamtv.util.SearchManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -30,6 +32,7 @@ class SearchResultsAdapter(
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val pendingJobs = mutableMapOf<String, Job>()
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     private val siteColors = mapOf(
         "Cuevana3" to Color.parseColor("#E53935"),
@@ -55,6 +58,12 @@ class SearchResultsAdapter(
         placeholderCache.evictAll()
         pendingJobs.values.forEach { it.cancel() }
         pendingJobs.clear()
+        scope.coroutineContext.cancelChildren()
+    }
+
+    fun destroy() {
+        clearCache()
+        scope.cancel()
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -71,6 +80,7 @@ class SearchResultsAdapter(
 
     override fun onViewRecycled(holder: ViewHolder) {
         super.onViewRecycled(holder)
+        holder.cancelPendingImageLoad()
     }
 
     inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -79,6 +89,7 @@ class SearchResultsAdapter(
         private val siteBadge: TextView = view.findViewById(R.id.tv_search_site_badge)
         private val episodeNum: TextView = view.findViewById(R.id.tv_search_episode_num)
         private val date: TextView = view.findViewById(R.id.tv_search_date)
+        private var currentUrl: String? = null
 
         fun bind(result: SearchManager.SearchResult) {
             title.text = result.title
@@ -102,6 +113,8 @@ class SearchResultsAdapter(
                 date.visibility = View.GONE
             }
 
+            currentUrl = result.posterUrl.takeIf { it.isNotBlank() }
+
             if (result.posterUrl.isNotBlank()) {
                 val cached = imageCache.get(result.posterUrl)
                 if (cached != null) {
@@ -110,7 +123,7 @@ class SearchResultsAdapter(
                     poster.setImageBitmap(createPlaceholder(siteName))
                     val existingJob = pendingJobs[result.posterUrl]
                     if (existingJob == null || existingJob.isCancelled) {
-                        pendingJobs[result.posterUrl] = GlobalScope.launch(Dispatchers.Main) {
+                        pendingJobs[result.posterUrl] = scope.launch {
                             val bmp = loadImage(result.posterUrl)
                             if (bmp != null) {
                                 imageCache.put(result.posterUrl, bmp)
@@ -127,6 +140,10 @@ class SearchResultsAdapter(
             }
 
             itemView.setOnClickListener { onClick(result) }
+        }
+
+        fun cancelPendingImageLoad() {
+            if (currentUrl != null) pendingJobs.remove(currentUrl)?.cancel()
         }
     }
 

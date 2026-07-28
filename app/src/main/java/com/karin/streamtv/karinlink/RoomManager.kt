@@ -84,19 +84,29 @@ class RoomManager {
 
     fun updateSync(state: SyncState) {
         val room = _currentRoom.value ?: return
-        room.currentEpisode = state
-        room.isPlaying = state.isPlaying
+        val updated = room.copy(
+            currentEpisode = state,
+            isPlaying = state.isPlaying,
+            members = room.members.toMutableList()
+        )
+        _currentRoom.value = updated
         Log.d(TAG, "Sync update: ${state.episodeTitle} @ ${state.positionMs}ms")
     }
 
     fun updateProgress(deviceId: String, positionMs: Long) {
         val room = _currentRoom.value ?: return
-        room.members.find { it.deviceId == deviceId }?.progressMs = positionMs
+        val updatedMembers = room.members.map {
+            if (it.deviceId == deviceId) it.copy(progressMs = positionMs) else it
+        }
+        _currentRoom.value = room.copy(members = updatedMembers.toMutableList())
     }
 
     fun memberReady(deviceId: String, ready: Boolean) {
         val room = _currentRoom.value ?: return
-        room.members.find { it.deviceId == deviceId }?.isReady = ready
+        val updatedMembers = room.members.map {
+            if (it.deviceId == deviceId) it.copy(isReady = ready) else it
+        }
+        _currentRoom.value = room.copy(members = updatedMembers.toMutableList())
     }
 
     fun getRoomUrl(roomId: String): String {

@@ -2,6 +2,7 @@ package com.karin.streamtv.ui.tv
 
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
+import android.util.LruCache
 import android.view.ViewGroup
 import androidx.leanback.widget.ImageCardView
 import androidx.leanback.widget.Presenter
@@ -9,13 +10,18 @@ import com.karin.streamtv.model.Episode
 import com.karin.streamtv.util.DiskImageCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class TvEpisodeCardPresenter : Presenter() {
 
-    private val scope = CoroutineScope(Dispatchers.Main)
-    private val thumbCache = mutableMapOf<String, Bitmap>()
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private val thumbCache = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup): ViewHolder {
         val cardView = ImageCardView(parent.context).apply {
@@ -44,7 +50,7 @@ class TvEpisodeCardPresenter : Presenter() {
                         DiskImageCache.loadFromNetwork(episode.thumbnailUrl, 320, 180)
                     }
                     if (bmp != null) {
-                        thumbCache[episode.thumbnailUrl] = bmp
+                        thumbCache.put(episode.thumbnailUrl, bmp)
                         cardView.setMainImage(BitmapDrawable(cardView.resources, bmp))
                     }
                 }
