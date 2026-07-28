@@ -1,0 +1,748 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:src="@drawable/fondo_app"
+        android:scaleType="fitCenter"
+        android:adjustViewBounds="true"
+        android:importantForAccessibility="no" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#AA002060" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="32dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingBottom="24dp">
+
+            <TextView
+                android:id="@+id/btn_back"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:gravity="center"
+                android:text="←"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
+                android:background="@drawable/selector_card"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:nextFocusDown="@id/row_server_fallback"
+                android:nextFocusRight="@id/row_server_fallback"
+                android:contentDescription="Volver" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Configuración"
+                android:textColor="@color/text_primary"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:layout_marginStart="16dp" />
+
+        </LinearLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:scrollbars="none"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:descendantFocusability="afterDescendants">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Reproducción"
+                    android:textColor="@color/accent"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="16dp" />
+
+                <LinearLayout
+                    android:id="@+id/row_server_fallback"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/btn_back"
+                    android:nextFocusDown="@id/row_autoplay">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Fallback de servidores"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                        android:text="Si un servidor falla, probar el siguiente automáticamente"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switch_server_fallback"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Activar fallback de servidores" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/row_autoplay"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_server_fallback"
+                    android:nextFocusDown="@id/row_playnow">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Auto-play"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                        android:text="Reproducir siguiente episodio automáticamente al terminar"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switch_autoplay"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Activar auto-play" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/row_playnow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_autoplay"
+                    android:nextFocusDown="@id/row_fx_sound">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="PlayNow"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                        android:text="Iniciar reproducción automáticamente al abrir el reproductor"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switch_playnow"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Activar PlayNow" />
+
+                </LinearLayout>
+
+                <!-- Sonido Section -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Sonido"
+                    android:textColor="@color/accent"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="16dp" />
+
+                <LinearLayout
+                    android:id="@+id/row_fx_sound"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_playnow"
+                    android:nextFocusDown="@id/row_volume_boost">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="FxSound"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Mejora de audio con ecualizador y refuerzo de graves"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switch_fx_sound"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Activar FxSound" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/row_volume_boost"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_fx_sound"
+                    android:nextFocusDown="@id/row_audio_preset">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Aumentar Volumen"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Amplificar el volumen más allá del máximo del sistema"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tv_volume_boost_value"
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:background="@drawable/btn_primary"
+                        android:gravity="center"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="1.0x"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Volumen: 1.0x. Pulsa para cambiar." />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/row_audio_preset"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_volume_boost"
+                    android:nextFocusDown="@id/row_skip_opening">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Preset de Audio"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Ecualizador predefinido para diferentes tipos de contenido"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tv_audio_preset_value"
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:background="@drawable/btn_primary"
+                        android:gravity="center"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="Normal"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Preset: Normal. Pulsa para cambiar." />
+
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Skip Intro / Outro"
+                    android:textColor="@color/accent"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="16dp" />
+
+                <LinearLayout
+                    android:id="@+id/row_skip_opening"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_audio_preset"
+                    android:nextFocusDown="@id/row_skip_ending">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Saltar Opening"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                        android:text="Saltar la intro automáticamente cuando esté disponible"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switch_skip_opening"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Activar saltar opening" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/row_skip_ending"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_skip_opening"
+                    android:nextFocusDown="@id/row_karin_link">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Saltar Ending"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                        android:text="Saltar el ending automáticamente cuando esté disponible"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switch_skip_ending"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Activar saltar ending" />
+
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="KARIN Link"
+                    android:textColor="@color/accent"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="16dp" />
+
+                <LinearLayout
+                    android:id="@+id/row_karin_link"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_skip_ending"
+                    android:nextFocusDown="@id/btn_save">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Activar KARIN Link"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                        android:text="Descubrir dispositivos en la red y compartir episodios sincronizados"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switch_karin_link"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:focusable="true"
+                        android:focusableInTouchMode="true"
+                        android:contentDescription="Activar KARIN Link" />
+
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Ayuda"
+                    android:textColor="@color/accent"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="16dp" />
+
+                <LinearLayout
+                    android:id="@+id/row_tutorial"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_karin_link"
+                    android:nextFocusDown="@id/row_terms">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Tutorial"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Aprende a usar la aplicación paso a paso"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="📖"
+                        android:textSize="24sp"
+                        android:contentDescription="Abrir tutorial" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/row_terms"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_tutorial"
+                    android:nextFocusDown="@id/row_credits">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Términos y Condiciones"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Revisa los términos de uso de la aplicación"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🃏"
+                        android:textSize="24sp"
+                        android:contentDescription="Abrir términos" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/row_credits"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/selector_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="12dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/row_terms"
+                    android:nextFocusDown="@id/btn_save">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Créditos"
+                            android:textColor="@color/text_primary"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Tecnologías y agradecimientos"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="14sp"
+                            android:layout_marginTop="4dp" />
+
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="⭐"
+                        android:textSize="24sp"
+                        android:contentDescription="Abrir créditos" />
+
+                </LinearLayout>
+
+            </LinearLayout>
+
+        </ScrollView>
+
+        <TextView
+            android:id="@+id/btn_save"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:background="@drawable/btn_primary"
+            android:gravity="center"
+            android:text="Guardar"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:nextFocusUp="@id/row_credits"
+            android:layout_marginTop="16dp"
+            android:contentDescription="Guardar configuración" />
+
+    </LinearLayout>
+
+</FrameLayout>

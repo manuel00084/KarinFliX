@@ -2,6 +2,7 @@ package com.karin.streamtv.ui
 
 import android.graphics.Color
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityManager
 import android.widget.TextView
 import android.widget.Toast
@@ -11,6 +12,8 @@ import com.karin.streamtv.R
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.AudioEffectsManager
 import com.karin.streamtv.util.AutoPlayManager
+import com.karin.streamtv.util.DeviceUtils
+import com.karin.streamtv.util.GamepadHelper
 import com.karin.streamtv.util.onActionKey
 
 class SettingsActivity : FragmentActivity() {
@@ -121,11 +124,29 @@ class SettingsActivity : FragmentActivity() {
         }
         rowCredits.onActionKey { rowCredits.performClick() }
 
-        if (findViewById<android.widget.FrameLayout>(android.R.id.content).childCount > 0) {
-            switchServerFallback.requestFocus()
+        if (DeviceUtils.isTvDevice(this)) {
+            btnBack.post { btnBack.requestFocus() }
+        } else {
+            if (findViewById<android.widget.FrameLayout>(android.R.id.content).childCount > 0) {
+                switchServerFallback.requestFocus()
+            }
         }
 
         applyHighContrastIfNeeded()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        val mapped = GamepadHelper.mapGamepadToDpad(keyCode)
+        if (mapped != keyCode) {
+            return onKeyDown(mapped, event)
+        }
+        when (keyCode) {
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                finish()
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun updateVolumeBoostContentDescription() {

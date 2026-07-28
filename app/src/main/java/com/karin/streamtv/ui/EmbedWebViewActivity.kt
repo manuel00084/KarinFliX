@@ -19,7 +19,6 @@ import com.karin.streamtv.R
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.AudioEffectsManager
 import com.karin.streamtv.util.DeviceUtils
-import com.karin.streamtv.util.onActionKey
 
 class EmbedWebViewActivity : AppCompatActivity() {
 

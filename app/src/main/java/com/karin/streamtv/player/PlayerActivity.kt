@@ -678,6 +678,10 @@ class PlayerActivity : FragmentActivity(), AudioEffectsManager.FxStateListener {
                 cycleFxVolumeBoost()
                 return true
             }
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                cycleFxPreset()
+                return true
+            }
 
         }
         return super.onKeyDown(keyCode, event)
