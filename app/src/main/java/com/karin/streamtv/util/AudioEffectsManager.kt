@@ -12,6 +12,7 @@ class AudioEffectsManager(private val context: Context) {
 
     companion object {
         private const val TAG = "AudioEffects"
+        private const val MAX_SAFE_GAIN_MB = 1800
 
         data class AudioPreset(
             val name: String,
@@ -20,35 +21,21 @@ class AudioEffectsManager(private val context: Context) {
         )
 
         val PRESETS = listOf(
-            AudioPreset(
-                name = "Normal",
-                equalizerBands = listOf(0, 0, 0, 0, 0),
-                bassBoost = 0
-            ),
-            AudioPreset(
-                name = "Cine",
-                equalizerBands = listOf(1000, 500, 0, 600, 1000),
-                bassBoost = 800
-            ),
-            AudioPreset(
-                name = "Musica",
-                equalizerBands = listOf(700, 400, 0, 500, 800),
-                bassBoost = 500
-            ),
-            AudioPreset(
-                name = "Bass Boost",
-                equalizerBands = listOf(1200, 900, 300, 0, -300),
-                bassBoost = 1000
-            ),
-            AudioPreset(
-                name = "Voz",
-                equalizerBands = listOf(-600, 0, 1000, 800, 300),
-                bassBoost = 0
-            )
+            AudioPreset(name = "Normal", equalizerBands = listOf(0, 0, 0, 0, 0), bassBoost = 0),
+            AudioPreset(name = "Cine", equalizerBands = listOf(1000, 500, 0, 600, 1000), bassBoost = 800),
+            AudioPreset(name = "Musica", equalizerBands = listOf(700, 400, 0, 500, 800), bassBoost = 500),
+            AudioPreset(name = "Bass Boost", equalizerBands = listOf(1200, 900, 300, 0, -300), bassBoost = 1000),
+            AudioPreset(name = "Voz", equalizerBands = listOf(-600, 0, 1000, 800, 300), bassBoost = 0),
+            AudioPreset(name = "Gaming", equalizerBands = listOf(800, 300, -200, 500, 1100), bassBoost = 600),
+            AudioPreset(name = "Podcast", equalizerBands = listOf(-400, 200, 1200, 900, -200), bassBoost = 200)
         )
 
         val VOLUME_BOOST_LEVELS = listOf(0, 600, 1200, 1800, 2400)
         val VOLUME_BOOST_LABELS = listOf("1.0x", "1.5x", "2.0x", "2.5x", "3.0x")
+    }
+
+    interface FxStateListener {
+        fun onFxStateChanged(enabled: Boolean, presetName: String, boostLabel: String)
     }
 
     private var equalizer: Equalizer? = null
@@ -57,25 +44,41 @@ class AudioEffectsManager(private val context: Context) {
     private var currentPresetIndex = 0
     private var currentVolumeBoostIndex = 0
     private var lastSessionId = -1
+    private var isAttached = false
     private val handler = Handler(Looper.getMainLooper())
     private var reapplyRunnable: Runnable? = null
     private var fxEnabled: Boolean = AppPreferences.isFxSoundEnabled()
+    private var listener: FxStateListener? = null
+
+    private var cachedMinLevel: Short = -1500
+    private var cachedMaxLevel: Short = 1500
+    private var cachedNumBands: Short = 5
 
     val currentPresetName: String get() = PRESETS[currentPresetIndex].name
     val presetIndex: Int get() = currentPresetIndex
     val presetCount: Int get() = PRESETS.size
     val volumeBoostLabel: String get() = VOLUME_BOOST_LABELS[currentVolumeBoostIndex]
     val volumeBoostIndex: Int get() = currentVolumeBoostIndex
+    val isSessionAttached: Boolean get() = isAttached
+
+    fun setListener(l: FxStateListener?) { listener = l }
 
     fun attachToSession(audioSessionId: Int) {
+        if (audioSessionId == lastSessionId && isAttached) {
+            Log.d(TAG, "Session $audioSessionId already attached, skipping")
+            return
+        }
         lastSessionId = audioSessionId
         release()
 
         try {
             equalizer = Equalizer(0, audioSessionId).apply {
                 enabled = true
+                cachedMinLevel = bandLevelRange[0]
+                cachedMaxLevel = bandLevelRange[1]
+                cachedNumBands = numberOfBands
             }
-            Log.d(TAG, "Equalizer attached to session $audioSessionId, bands=${equalizer?.numberOfBands}, range=${equalizer?.bandLevelRange?.toList()}")
+            Log.d(TAG, "Equalizer attached: session=$audioSessionId, bands=$cachedNumBands, range=[$cachedMinLevel, $cachedMaxLevel]")
         } catch (e: Exception) {
             Log.w(TAG, "Equalizer not supported: ${e.message}")
             equalizer = null
@@ -85,7 +88,7 @@ class AudioEffectsManager(private val context: Context) {
             bassBoost = BassBoost(0, audioSessionId).apply {
                 enabled = true
             }
-            Log.d(TAG, "BassBoost attached to session $audioSessionId")
+            Log.d(TAG, "BassBoost attached: session=$audioSessionId")
         } catch (e: Exception) {
             Log.w(TAG, "BassBoost not supported: ${e.message}")
             bassBoost = null
@@ -95,12 +98,13 @@ class AudioEffectsManager(private val context: Context) {
             loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply {
                 enabled = true
             }
-            Log.d(TAG, "LoudnessEnhancer attached to session $audioSessionId")
+            Log.d(TAG, "LoudnessEnhancer attached: session=$audioSessionId")
         } catch (e: Exception) {
             Log.w(TAG, "LoudnessEnhancer not supported: ${e.message}")
             loudnessEnhancer = null
         }
 
+        isAttached = true
         val savedPreset = AppPreferences.getAudioPresetIndex()
         currentPresetIndex = savedPreset.coerceIn(0, PRESETS.size - 1)
         val savedBoost = AppPreferences.getVolumeBoostIndex()
@@ -113,14 +117,16 @@ class AudioEffectsManager(private val context: Context) {
             reapplyWithDelay(500)
         } else {
             disableAllFx()
-            Log.d(TAG, "FxSound is OFF — effects not applied on session attach")
+            Log.d(TAG, "FxSound is OFF - effects not applied on session attach")
         }
+
+        notifyListener()
     }
 
     private fun reapplyWithDelay(delayMs: Long) {
         reapplyRunnable?.let { handler.removeCallbacks(it) }
         reapplyRunnable = Runnable {
-            if (lastSessionId > 0) {
+            if (isAttached && lastSessionId > 0) {
                 applyPresetImmediate(currentPresetIndex)
                 applyVolumeBoostImmediate(currentVolumeBoostIndex)
                 Log.d(TAG, "Reapplied effects: preset=$currentPresetName, boost=${volumeBoostLabel}")
@@ -129,10 +135,17 @@ class AudioEffectsManager(private val context: Context) {
         handler.postDelayed(reapplyRunnable!!, delayMs)
     }
 
+    fun reapplyEffects() {
+        if (!isAttached || !fxEnabled) return
+        applyPresetImmediate(currentPresetIndex)
+        applyVolumeBoostImmediate(currentVolumeBoostIndex)
+    }
+
     fun cyclePreset(): String {
         currentPresetIndex = (currentPresetIndex + 1) % PRESETS.size
         AppPreferences.setAudioPresetIndex(currentPresetIndex)
         if (fxEnabled) applyPresetImmediate(currentPresetIndex)
+        notifyListener()
         return PRESETS[currentPresetIndex].name
     }
 
@@ -140,12 +153,14 @@ class AudioEffectsManager(private val context: Context) {
         currentPresetIndex = index.coerceIn(0, PRESETS.size - 1)
         AppPreferences.setAudioPresetIndex(currentPresetIndex)
         if (fxEnabled) applyPresetImmediate(currentPresetIndex)
+        notifyListener()
     }
 
     fun cycleVolumeBoost(): Int {
         currentVolumeBoostIndex = (currentVolumeBoostIndex + 1) % VOLUME_BOOST_LEVELS.size
         AppPreferences.setVolumeBoostIndex(currentVolumeBoostIndex)
         if (fxEnabled) applyVolumeBoostImmediate(currentVolumeBoostIndex)
+        notifyListener()
         return currentVolumeBoostIndex
     }
 
@@ -164,6 +179,7 @@ class AudioEffectsManager(private val context: Context) {
             disableAllFx()
             Log.d(TAG, "FxSound DISABLED: all effects off")
         }
+        notifyListener()
         return fxEnabled
     }
 
@@ -171,7 +187,7 @@ class AudioEffectsManager(private val context: Context) {
         equalizer?.let { try { it.enabled = false } catch (_: Exception) {} }
         bassBoost?.let { try { it.enabled = false } catch (_: Exception) {} }
         loudnessEnhancer?.let { try { it.enabled = false } catch (_: Exception) {} }
-        Log.d(TAG, "All audio effects disabled (EQ + BB + LE)")
+        Log.d(TAG, "All audio effects disabled")
     }
 
     fun enableAllFx() {
@@ -186,9 +202,9 @@ class AudioEffectsManager(private val context: Context) {
 
         equalizer?.let { eq ->
             try {
-                val numBands = eq.numberOfBands.toInt()
-                val minLevel = eq.bandLevelRange[0].toInt()
-                val maxLevel = eq.bandLevelRange[1].toInt()
+                val numBands = cachedNumBands.toInt()
+                val minLevel = cachedMinLevel.toInt()
+                val maxLevel = cachedMaxLevel.toInt()
                 val bandCount = minOf(preset.equalizerBands.size, numBands)
 
                 for (i in 0 until bandCount) {
@@ -197,7 +213,6 @@ class AudioEffectsManager(private val context: Context) {
                     eq.setBandLevel(i.toShort(), level)
                 }
                 eq.enabled = true
-                Log.d(TAG, "Equalizer bands set: ${preset.equalizerBands.take(bandCount)}, range=[$minLevel, $maxLevel]")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to set equalizer: ${e.message}")
             }
@@ -208,17 +223,14 @@ class AudioEffectsManager(private val context: Context) {
                 @Suppress("DEPRECATION")
                 bb.setStrength(preset.bassBoost)
                 bb.enabled = preset.bassBoost > 0
-                Log.d(TAG, "BassBoost strength=${preset.bassBoost}")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to set bass boost: ${e.message}")
             }
         }
-
-        Log.d(TAG, "Applied preset: ${preset.name} (index=$index)")
     }
 
     private fun applyVolumeBoostImmediate(boostIndex: Int) {
-        val gainMb = VOLUME_BOOST_LEVELS[boostIndex]
+        val gainMb = VOLUME_BOOST_LEVELS[boostIndex].coerceAtMost(MAX_SAFE_GAIN_MB)
 
         loudnessEnhancer?.let { le ->
             try {
@@ -231,6 +243,10 @@ class AudioEffectsManager(private val context: Context) {
         }
     }
 
+    private fun notifyListener() {
+        listener?.onFxStateChanged(fxEnabled, currentPresetName, volumeBoostLabel)
+    }
+
     fun release() {
         reapplyRunnable?.let { handler.removeCallbacks(it) }
         reapplyRunnable = null
@@ -240,5 +256,7 @@ class AudioEffectsManager(private val context: Context) {
         equalizer = null
         bassBoost = null
         loudnessEnhancer = null
+        isAttached = false
+        lastSessionId = -1
     }
 }

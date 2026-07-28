@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/player_bg">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:use_controller="true"
+        android:focusable="true"
+        android:focusableInTouchMode="true" />
+
+    <LinearLayout
+        android:id="@+id/player_loading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/player_bg"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:indeterminate="true" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/loading"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp"
+            android:layout_marginTop="16dp" />
+
+    </LinearLayout>
+
+    <!-- Auto-play countdown overlay -->
+    <LinearLayout
+        android:id="@+id/autoplay_overlay"
+        android:layout_width="300dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="24dp"
+        android:background="@drawable/autoplay_bg"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_autoplay_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Siguiente episodio"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_autoplay_countdown"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="5"
+            android:textColor="@color/accent"
+            android:textSize="48sp"
+            android:textStyle="bold"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/tv_autoplay_episode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Episodio 6"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp"
+            android:layout_marginTop="4dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="12dp">
+
+            <TextView
+                android:id="@+id/btn_autoplay_cancel"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:background="@drawable/btn_secondary"
+                android:gravity="center"
+                android:text="Cancelar"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:layout_marginEnd="8dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clickable="true"
+                android:nextFocusUp="@id/player_view"
+                android:nextFocusRight="@id/btn_autoplay_play"
+                android:contentDescription="Cancelar auto-play" />
+
+            <TextView
+                android:id="@+id/btn_autoplay_play"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:background="@drawable/btn_primary"
+                android:gravity="center"
+                android:text="Reproducir"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clickable="true"
+                android:nextFocusUp="@id/player_view"
+                android:nextFocusLeft="@id/btn_autoplay_cancel"
+                android:contentDescription="Reproducir siguiente" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Skip Intro/Outro button -->
+    <LinearLayout
+        android:id="@+id/skip_overlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="80dp"
+        android:background="@drawable/btn_primary"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:visibility="gone"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:contentDescription="Saltar Opening/Ending"
+        android:nextFocusUp="@id/player_view"
+        android:nextFocusLeft="@id/player_view">
+
+        <TextView
+            android:id="@+id/tv_skip_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Saltar Opening"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+    <!-- FxSound overlay -->
+    <LinearLayout
+        android:id="@+id/fx_overlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="48dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/fx_overlay_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone"
+        android:focusable="false">
+
+        <TextView
+            android:id="@+id/tv_fx_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="FxSound"
+            android:textColor="@color/accent"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_fx_preset"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=" | Normal"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp"
+            android:layout_marginStart="4dp" />
+
+        <TextView
+            android:id="@+id/tv_fx_boost"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=" 1.0x"
+            android:textColor="@color/accent"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:layout_marginStart="6dp" />
+
+    </LinearLayout>
+
+</FrameLayout>

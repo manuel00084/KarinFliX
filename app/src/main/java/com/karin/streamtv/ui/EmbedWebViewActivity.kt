@@ -245,114 +245,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
 })();
 """
 
-        private fun buildVolumeBoostJs(level: Float): String {
-            val safeLevel = level.coerceIn(0.1f, 5.0f)
-            return """
-(function(){
-    if(window.__kf_gain_applied) {
-        if(window.__kf_gain_node){window.__kf_gain_node.gain.value=$safeLevel;}
-        return 'gain-updated:$safeLevel';
-    }
-    var video=document.querySelector('video');
-    if(!video){return 'no-video-found';}
-    try{
-        var ctx=new(window.AudioContext||window.webkitAudioContext)();
-        var source=ctx.createMediaElementSource(video);
-        var gain=ctx.createGain();
-        gain.gain.value=$safeLevel;
-        source.connect(gain);
-        gain.connect(ctx.destination);
-        window.__kf_gain_node=gain;
-        window.__kf_gain_applied=1;
-        return 'gain-applied:$safeLevel';
-    }catch(e){
-        return 'gain-error:'+e.message;
-    }
-})();
-"""
-        }
-
-        private fun buildVolumeBoostIframeJs(level: Float): String {
-            val safeLevel = level.coerceIn(0.1f, 5.0f)
-            return """
-(function(){
-    var frames=document.querySelectorAll('iframe');
-    frames.forEach(function(f){
-        try{
-            var doc=f.contentDocument||f.contentWindow.document;
-            if(!doc)return;
-            if(f.contentWindow.__kf_gain_applied){
-                f.contentWindow.__kf_gain_node.gain.value=$safeLevel;
-                return;
-            }
-            var video=doc.querySelector('video');
-            if(!video)return;
-            var ctx=new(f.contentWindow.AudioContext||f.contentWindow.webkitAudioContext)();
-            var source=ctx.createMediaElementSource(video);
-            var gain=ctx.createGain();
-            gain.gain.value=$safeLevel;
-            source.connect(gain);
-            gain.connect(ctx.destination);
-            f.contentWindow.__kf_gain_node=gain;
-            f.contentWindow.__kf_gain_applied=1;
-        }catch(e){}
-    });
-    return 'iframe-boost:$safeLevel';
-})();
-"""
-        }
-
-        private fun buildAudioFxJs(eqValues: String, bassBoost: Float, presetName: String): String {
-            return """
-(function(){
-    if(window.__kf_audio_fx_applied){
-        if(window.__kf_audio_fx_filters){
-            var bands=[$eqValues];
-            var f=window.__kf_audio_fx_filters;
-            for(var i=0;i<f.length&&i<bands.length;i++){
-                f[i].gain.value=bands[i]/1000*15;
-            }
-        }
-        if(window.__kf_audio_fx_bass){
-            window.__kf_audio_fx_bass.gain.value=$bassBoost*12;
-        }
-        return 'fx-updated:$presetName';
-    }
-    var video=document.querySelector('video');
-    if(!video)return 'no-video';
-    try{
-        var ctx=new(window.AudioContext||window.webkitAudioContext)();
-        var source=ctx.createMediaElementSource(video);
-        var prevNode=source;
-        var freqs=[60,230,910,3000,14000];
-        var bands=[$eqValues];
-        var filters=[];
-        for(var i=0;i<freqs.length;i++){
-            var biq=ctx.createBiquadFilter();
-            biq.type='peaking';
-            biq.frequency.value=freqs[i];
-            biq.Q.value=1.0;
-            biq.gain.value=bands[i]/1000*15;
-            prevNode.connect(biq);
-            prevNode=biq;
-            filters.push(biq);
-        }
-        var bass=ctx.createBiquadFilter();
-        bass.type='lowshelf';
-        bass.frequency.value=150;
-        bass.gain.value=$bassBoost*12;
-        prevNode.connect(bass);
-        prevNode.connect(ctx.destination);
-        window.__kf_audio_fx_filters=filters;
-        window.__kf_audio_fx_bass=bass;
-        window.__kf_audio_fx_applied=1;
-        return 'fx-applied:$presetName';
-    }catch(e){
-        return 'fx-error:'+e.message;
-    }
-})();
-"""
-        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -657,20 +549,23 @@ class EmbedWebViewActivity : AppCompatActivity() {
             }
         }catch(e){}
     });
-    var mo=new MutationObserver(function(){
-        if(!window.__kf_audio_fx_chain_applied){kfSetupAudioChain(window,document);}
-        document.querySelectorAll('iframe').forEach(function(f){
-            try{
-                var doc=f.contentDocument||f.contentWindow.document;
-                if(!doc)return;
-                if(!f.contentWindow.__kf_audio_fx_chain_applied){
-                    kfSetupAudioChain(f.contentWindow,doc);
-                }
-            }catch(e){}
+    if(!done){
+        var mo=new MutationObserver(function(){
+            if(!window.__kf_audio_fx_chain_applied){kfSetupAudioChain(window,document);}
+            document.querySelectorAll('iframe').forEach(function(f){
+                try{
+                    var doc=f.contentDocument||f.contentWindow.document;
+                    if(!doc)return;
+                    if(!f.contentWindow.__kf_audio_fx_chain_applied){
+                        kfSetupAudioChain(f.contentWindow,doc);
+                    }
+                }catch(e){}
+            });
+            if(window.__kf_audio_fx_chain_applied){mo.disconnect();}
         });
-    });
-    mo.observe(document.documentElement,{childList:true,subtree:true});
-    setTimeout(function(){mo.disconnect();},10000);
+        mo.observe(document.documentElement,{childList:true,subtree:true});
+        setTimeout(function(){try{mo.disconnect();}catch(e){}},30000);
+    }
     return done?'fx-chain-applied':'waiting';
 })();
 """
@@ -688,6 +583,11 @@ class EmbedWebViewActivity : AppCompatActivity() {
                 Log.d(TAG, "AudioFX re-injection (5s): $result")
             }
         }, 5000)
+        this.mainHandler.postDelayed({
+            webView.evaluateJavascript(combinedJs) { result ->
+                Log.d(TAG, "AudioFX re-injection (12s): $result")
+            }
+        }, 12000)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

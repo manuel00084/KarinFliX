@@ -48,7 +48,7 @@ import com.karin.streamtv.util.WatchHistory
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.launch
 
-class PlayerActivity : FragmentActivity() {
+class PlayerActivity : FragmentActivity(), AudioEffectsManager.FxStateListener {
 
     companion object {
         private const val MAX_RETRY_ATTEMPTS = 2
@@ -64,6 +64,9 @@ class PlayerActivity : FragmentActivity() {
     private lateinit var btnAutoPlayPlay: TextView
     private lateinit var skipOverlay: LinearLayout
     private lateinit var tvSkipLabel: TextView
+    private lateinit var fxOverlay: LinearLayout
+    private lateinit var tvFxPreset: TextView
+    private lateinit var tvFxBoost: TextView
     private var audioEffectsManager: AudioEffectsManager? = null
     private var player: ExoPlayer? = null
     private var trackSelector: DefaultTrackSelector? = null
@@ -121,8 +124,13 @@ class PlayerActivity : FragmentActivity() {
         btnAutoPlayPlay = findViewById(R.id.btn_autoplay_play)
         skipOverlay = findViewById(R.id.skip_overlay)
         tvSkipLabel = findViewById(R.id.tv_skip_label)
+        fxOverlay = findViewById(R.id.fx_overlay)
+        tvFxPreset = findViewById(R.id.tv_fx_preset)
+        tvFxBoost = findViewById(R.id.tv_fx_boost)
 
-        audioEffectsManager = AudioEffectsManager(this)
+        audioEffectsManager = AudioEffectsManager(this).apply {
+            setListener(this@PlayerActivity)
+        }
 
         videoUrl = intent.getStringExtra("video_url") ?: ""
         videoTitle = intent.getStringExtra("video_title") ?: ""
@@ -167,6 +175,41 @@ class PlayerActivity : FragmentActivity() {
 
         initializePlayer()
         fetchSkipTimes()
+        updateFxOverlay()
+    }
+
+    override fun onFxStateChanged(enabled: Boolean, presetName: String, boostLabel: String) {
+        updateFxOverlay()
+    }
+
+    private fun updateFxOverlay() {
+        val mgr = audioEffectsManager
+        if (mgr != null && mgr.isFxEnabled && mgr.isSessionAttached) {
+            tvFxPreset.text = "| ${mgr.currentPresetName}"
+            tvFxBoost.text = mgr.volumeBoostLabel
+            fxOverlay.visibility = View.VISIBLE
+        } else {
+            fxOverlay.visibility = View.GONE
+        }
+    }
+
+    private fun cycleFxPreset() {
+        val name = audioEffectsManager?.cyclePreset() ?: return
+        Toast.makeText(this, "FxSound: $name", Toast.LENGTH_SHORT).show()
+        updateFxOverlay()
+    }
+
+    private fun toggleFxSound() {
+        val enabled = audioEffectsManager?.toggleFx() ?: return
+        val msg = if (enabled) "FxSound ACTIVADO" else "FxSound DESACTIVADO"
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        updateFxOverlay()
+    }
+
+    private fun cycleFxVolumeBoost() {
+        audioEffectsManager?.cycleVolumeBoost()
+        updateFxOverlay()
+        Toast.makeText(this, "Volumen: ${audioEffectsManager?.volumeBoostLabel}", Toast.LENGTH_SHORT).show()
     }
 
     private fun fetchSkipTimes() {
@@ -611,16 +654,28 @@ class PlayerActivity : FragmentActivity() {
                 return true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                playerView.resizeMode = when (playerView.resizeMode) {
-                    AspectRatioFrameLayout.RESIZE_MODE_FIT ->
-                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM ->
-                        AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    AspectRatioFrameLayout.RESIZE_MODE_FILL ->
-                        AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
-                    else ->
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
+                if (playerView.isControllerFullyVisible) {
+                    playerView.resizeMode = when (playerView.resizeMode) {
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT ->
+                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM ->
+                            AspectRatioFrameLayout.RESIZE_MODE_FILL
+                        AspectRatioFrameLayout.RESIZE_MODE_FILL ->
+                            AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+                        else ->
+                            AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    }
+                } else {
+                    cycleFxPreset()
                 }
+                return true
+            }
+            KeyEvent.KEYCODE_MENU -> {
+                toggleFxSound()
+                return true
+            }
+            KeyEvent.KEYCODE_CHANNEL_UP -> {
+                cycleFxVolumeBoost()
                 return true
             }
 
@@ -645,6 +700,7 @@ class PlayerActivity : FragmentActivity() {
         skipHandler.removeCallbacksAndMessages(null)
         skipCheckScheduled = false
         audioEffectsManager?.release()
+        fxOverlay.visibility = View.GONE
         player?.release()
         player = null
         trackSelector = null
@@ -664,6 +720,9 @@ class PlayerActivity : FragmentActivity() {
 
     override fun onDestroy() {
         saveCurrentPosition()
+        audioEffectsManager?.setListener(null)
+        audioEffectsManager?.release()
+        audioEffectsManager = null
         releasePlayer()
         AutoPlayManager.cancelCountdown()
         skipHandler.removeCallbacksAndMessages(null)
