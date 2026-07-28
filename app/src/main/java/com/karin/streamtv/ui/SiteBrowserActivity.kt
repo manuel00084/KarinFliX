@@ -110,6 +110,13 @@ class SiteBrowserActivity : AppCompatActivity() {
                 true
             } else false
         }
+        etSearch.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                etSearch.clearFocus()
+                rvEpisodes.requestFocus()
+                true
+            } else false
+        }
 
         findViewById<android.view.View>(R.id.btn_voice).setOnClickListener {
             com.karin.streamtv.util.VoiceSearchHelper.startVoiceSearch(this)

@@ -126,6 +126,10 @@ class MainActivity : FragmentActivity() {
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
                     performGlobalSearch()
                     true
+                } else if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    etSearch.clearFocus()
+                    scrollSites.requestFocus()
+                    true
                 } else false
             }
 
