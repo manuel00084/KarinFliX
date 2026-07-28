@@ -81,21 +81,23 @@ object AniSkipService {
                     doOutput = true
                 }
 
-                conn.outputStream.write(query.toString().toByteArray())
-                val response = conn.inputStream.bufferedReader().readText()
-                conn.disconnect()
+                try {
+                    conn.outputStream.write(query.toString().toByteArray())
+                    val response = conn.inputStream.bufferedReader().readText()
+                    val json = JSONObject(response)
+                    val media = json.optJSONObject("data")?.optJSONObject("Media")
+                    val malId = media?.optInt("idMal", -1)?.takeIf { it > 0 }
 
-                val json = JSONObject(response)
-                val media = json.optJSONObject("data")?.optJSONObject("Media")
-                val malId = media?.optInt("idMal", -1)?.takeIf { it > 0 }
+                    if (malId != null) {
+                        malIdCache[cacheKey] = malId
+                        val titles = media.optJSONObject("title")
+                        Log.d(TAG, "Resolved '$cleanTitle' → MAL $malId (${titles?.opt("romaji")})")
+                    }
 
-                if (malId != null) {
-                    malIdCache[cacheKey] = malId
-                    val titles = media.optJSONObject("title")
-                    Log.d(TAG, "Resolved '$cleanTitle' → MAL $malId (${titles?.opt("romaji")})")
+                    malId
+                } finally {
+                    conn.disconnect()
                 }
-
-                malId
             } catch (e: Exception) {
                 Log.w(TAG, "AniList lookup failed for '$cleanTitle': ${e.message}")
                 null
@@ -114,37 +116,39 @@ object AniSkipService {
                     readTimeout = 8000
                 }
 
-                val response = conn.inputStream.bufferedReader().readText()
-                conn.disconnect()
-
-                val json = JSONObject(response)
-                val found = json.optBoolean("found", false)
-                if (!found) {
-                    Log.d(TAG, "No skip times for MAL $malId ep $episodeNumber")
-                    return@withContext SkipResult(null, null, malId)
-                }
-
-                val results = json.optJSONArray("results") ?: JSONArray()
-                var opening: SkipInterval? = null
-                var ending: SkipInterval? = null
-
-                for (i in 0 until results.length()) {
-                    val item = results.getJSONObject(i)
-                    val type = item.optString("skipType", "")
-                    val interval = item.optJSONObject("interval") ?: continue
-                    val start = interval.optDouble("startTime", -1.0)
-                    val end = interval.optDouble("endTime", -1.0)
-
-                    if (start < 0 || end < 0) continue
-
-                    when (type) {
-                        "op" -> opening = SkipInterval(start, end, "op")
-                        "ed" -> ending = SkipInterval(start, end, "ed")
+                try {
+                    val response = conn.inputStream.bufferedReader().readText()
+                    val json = JSONObject(response)
+                    val found = json.optBoolean("found", false)
+                    if (!found) {
+                        Log.d(TAG, "No skip times for MAL $malId ep $episodeNumber")
+                        return@withContext SkipResult(null, null, malId)
                     }
-                }
 
-                Log.d(TAG, "MAL $malId ep $episodeNumber: op=${opening != null} ed=${ending != null}")
-                SkipResult(opening, ending, malId)
+                    val results = json.optJSONArray("results") ?: JSONArray()
+                    var opening: SkipInterval? = null
+                    var ending: SkipInterval? = null
+
+                    for (i in 0 until results.length()) {
+                        val item = results.getJSONObject(i)
+                        val type = item.optString("skipType", "")
+                        val interval = item.optJSONObject("interval") ?: continue
+                        val start = interval.optDouble("startTime", -1.0)
+                        val end = interval.optDouble("endTime", -1.0)
+
+                        if (start < 0 || end < 0) continue
+
+                        when (type) {
+                            "op" -> opening = SkipInterval(start, end, "op")
+                            "ed" -> ending = SkipInterval(start, end, "ed")
+                        }
+                    }
+
+                    Log.d(TAG, "MAL $malId ep $episodeNumber: op=${opening != null} ed=${ending != null}")
+                    SkipResult(opening, ending, malId)
+                } finally {
+                    conn.disconnect()
+                }
 
             } catch (e: Exception) {
                 Log.w(TAG, "AniSkip fetch failed for MAL $malId ep $episodeNumber: ${e.message}")

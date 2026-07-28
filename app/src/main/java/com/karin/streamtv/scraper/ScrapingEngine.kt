@@ -276,7 +276,7 @@ object ScrapingEngine {
                      enforceRateLimit(siteName)
                      Log.i(TAG, "Fetch [$attempts/$maxRetries] $url ($siteName)")
                      val response = executeRequest(url)
-                     val html = response.body?.string() ?: ""
+                     val html = try { response.body?.string() ?: "" } catch (_: Exception) { "" }
                      val serverHeader = response.header("Server")
                      val statusCode = response.code
                      response.close()
@@ -318,6 +318,8 @@ object ScrapingEngine {
                             return@withConcurrencyLimit null
                         }
                         Log.w(TAG, "HTTP $statusCode from $url ($siteName)")
+                        emitMetrics(siteName, url, false, "http_$statusCode", attempts, System.currentTimeMillis() - metricsStart, false)
+                        return@withConcurrencyLimit null
                     }
 
                     val doc = safeParse(html, url)

@@ -517,8 +517,8 @@ class PlayerActivity : FragmentActivity() {
                                 "Reintentando... ($retryCount/$MAX_RETRY_ATTEMPTS)",
                                 Toast.LENGTH_SHORT
                             ).show()
-                            android.os.Handler(Looper.getMainLooper()).postDelayed({
-                                if (player != null && videoUrl.isNotEmpty()) {
+                            skipHandler.postDelayed({
+                                if (!isFinishing && !isDestroyed && player != null && videoUrl.isNotEmpty()) {
                                     initializePlayer()
                                 }
                             }, delay)
@@ -663,10 +663,10 @@ class PlayerActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        saveCurrentPosition()
         releasePlayer()
         AutoPlayManager.cancelCountdown()
         skipHandler.removeCallbacksAndMessages(null)
-        saveCurrentPosition()
         super.onDestroy()
     }
 

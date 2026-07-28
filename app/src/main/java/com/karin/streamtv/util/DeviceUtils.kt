@@ -14,7 +14,7 @@ object DeviceUtils {
     }
 
     fun isTablet(context: Context): Boolean {
-        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return false
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)

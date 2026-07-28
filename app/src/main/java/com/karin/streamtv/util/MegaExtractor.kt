@@ -291,23 +291,28 @@ object MegaExtractor {
 
             val bufferSize = 64 * 1024
             val buffer = ByteArray(bufferSize)
-            val outputStream = FileOutputStream(tempFile)
 
-            var totalRead = 0L
-            var read: Int
-            while (inputStream.read(buffer).also { read = it } != -1) {
-                val decrypted = cipher.update(buffer, 0, read)
-                outputStream.write(decrypted)
-                totalRead += read
-                if (totalRead % (10 * 1024 * 1024) == 0L) {
-                    Log.d(TAG, "Downloaded ${totalRead / (1024 * 1024)}MB / ${expectedSize / (1024 * 1024)}MB")
+            try {
+                val outputStream = FileOutputStream(tempFile)
+                try {
+                    var totalRead = 0L
+                    var read: Int
+                    while (inputStream.read(buffer).also { read = it } != -1) {
+                        val decrypted = cipher.update(buffer, 0, read)
+                        outputStream.write(decrypted)
+                        totalRead += read
+                        if (totalRead % (10 * 1024 * 1024) == 0L) {
+                            Log.d(TAG, "Downloaded ${totalRead / (1024 * 1024)}MB / ${expectedSize / (1024 * 1024)}MB")
+                        }
+                    }
+                    outputStream.flush()
+                } finally {
+                    outputStream.close()
                 }
+            } finally {
+                inputStream.close()
+                response.close()
             }
-
-            outputStream.flush()
-            outputStream.close()
-            inputStream.close()
-            response.close()
 
             Log.d(TAG, "Download complete: ${tempFile.length()} bytes")
 

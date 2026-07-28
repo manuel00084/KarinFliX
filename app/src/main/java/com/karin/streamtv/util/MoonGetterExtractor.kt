@@ -84,7 +84,7 @@ object MoonGetterExtractor {
                 .newCall(builder.build())
             val httpResponse = requestCall.execute()
 
-            val requestBody = httpResponse.body?.string() ?: ""
+            val requestBody = try { httpResponse.body?.string() ?: "" } finally { httpResponse.close() }
             val responseUrl = httpResponse.request.url.toString()
             val responseHost = httpResponse.request.url.host
             val contentType = httpResponse.header("Content-Type")

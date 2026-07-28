@@ -111,7 +111,8 @@ object DiskImageCache {
 
     private fun trimCache() {
         val dir = cacheDir ?: return
-        val files = dir.listFiles()?.sortedBy { it.lastModified() } ?: return
+        val allFiles = dir.listFiles() ?: return
+        val files = allFiles.sortedBy { it.lastModified() }
 
         var totalSize = files.sumOf { it.length() }
         var i = 0
@@ -121,8 +122,9 @@ object DiskImageCache {
             i++
         }
 
-        if (files.size - i > MAX_ENTRIES) {
-            files.dropLast(MAX_ENTRIES).forEach { it.delete() }
+        val remaining = dir.listFiles() ?: return
+        if (remaining.size > MAX_ENTRIES) {
+            remaining.sortedBy { it.lastModified() }.take(remaining.size - MAX_ENTRIES).forEach { it.delete() }
         }
     }
 

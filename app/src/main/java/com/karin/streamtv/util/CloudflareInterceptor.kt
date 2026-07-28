@@ -71,7 +71,6 @@ object CloudflareInterceptor {
 
                     val cookieManager = CookieManager.getInstance()
                     cookieManager.setAcceptCookie(true)
-                    cookieManager.removeAllCookies(null)
 
                     webViewRef = WebView(context).apply {
                         settings.javaScriptEnabled = true

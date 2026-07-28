@@ -18,6 +18,7 @@ class SplashActivity : AppCompatActivity() {
 
     private lateinit var progressBar: ProgressBar
     private lateinit var tvProgress: TextView
+    private var timer: CountDownTimer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         try {
@@ -35,7 +36,7 @@ class SplashActivity : AppCompatActivity() {
             progressBar = findViewById(R.id.progress_splash)
             tvProgress = findViewById(R.id.tv_progress)
 
-            object : CountDownTimer(1500, 50) {
+            timer = object : CountDownTimer(1500, 50) {
                 override fun onTick(millisUntilFinished: Long) {
                     val progress = ((1500 - millisUntilFinished) * 100 / 1500).toInt()
                     progressBar.progress = progress
@@ -60,5 +61,11 @@ class SplashActivity : AppCompatActivity() {
             }
             finish()
         }
+    }
+
+    override fun onDestroy() {
+        timer?.cancel()
+        timer = null
+        super.onDestroy()
     }
 }

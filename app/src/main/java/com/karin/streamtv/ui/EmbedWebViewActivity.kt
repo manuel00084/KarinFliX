@@ -26,6 +26,7 @@ class EmbedWebViewActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var loadingLayout: LinearLayout
     private var audioEffectsManager: AudioEffectsManager? = null
+    private lateinit var mainHandler: Handler
 
     companion object {
         private const val TAG = "EmbedWebView"
@@ -362,6 +363,7 @@ class EmbedWebViewActivity : AppCompatActivity() {
         audioEffectsManager = AudioEffectsManager(this)
         webView = findViewById(R.id.webview)
         loadingLayout = findViewById(R.id.webview_loading)
+        mainHandler = Handler(Looper.getMainLooper())
 
         val embedUrl = intent.getStringExtra("embed_url") ?: ""
         val title = intent.getStringExtra("video_title") ?: ""
@@ -454,10 +456,10 @@ class EmbedWebViewActivity : AppCompatActivity() {
                 val cssToInject = buildCssForUrl(embedUrl)
                 if (cssToInject.isNotEmpty()) {
                     view?.evaluateJavascript(cssToInject, null)
-                    Handler(Looper.getMainLooper()).postDelayed({
+                    mainHandler.postDelayed({
                         view?.evaluateJavascript(cssToInject, null)
                     }, 2000)
-                    Handler(Looper.getMainLooper()).postDelayed({
+                    mainHandler.postDelayed({
                         view?.evaluateJavascript(ADBLOCK_JS, null)
                         view?.evaluateJavascript(cssToInject, null)
                     }, 5000)
@@ -465,10 +467,10 @@ class EmbedWebViewActivity : AppCompatActivity() {
 
                 if ("trembed=" in lowerUrl && AppPreferences.isPlayNowEnabled()) {
                     view?.evaluateJavascript(TOROPLAY_AUTOPLAY_JS, null)
-                    Handler(Looper.getMainLooper()).postDelayed({
+                    mainHandler.postDelayed({
                         view?.evaluateJavascript(TOROPLAY_AUTOPLAY_JS, null)
                     }, 3000)
-                    Handler(Looper.getMainLooper()).postDelayed({
+                    mainHandler.postDelayed({
                         view?.evaluateJavascript(TOROPLAY_AUTOPLAY_JS, null)
                     }, 8000)
                 }
@@ -676,13 +678,12 @@ class EmbedWebViewActivity : AppCompatActivity() {
             Log.d(TAG, "AudioFX injection: $result")
         }
 
-        val mainHandler = Handler(Looper.getMainLooper())
-        mainHandler.postDelayed({
+        this.mainHandler.postDelayed({
             webView.evaluateJavascript(combinedJs) { result ->
                 Log.d(TAG, "AudioFX re-injection (2s): $result")
             }
         }, 2000)
-        mainHandler.postDelayed({
+        this.mainHandler.postDelayed({
             webView.evaluateJavascript(combinedJs) { result ->
                 Log.d(TAG, "AudioFX re-injection (5s): $result")
             }
@@ -725,6 +726,7 @@ class EmbedWebViewActivity : AppCompatActivity() {
     override fun onDestroy() {
         audioEffectsManager?.release()
         audioEffectsManager = null
+        mainHandler.removeCallbacksAndMessages(null)
         webView.handler?.removeCallbacksAndMessages(null)
         webView.stopLoading()
         webView.destroy()

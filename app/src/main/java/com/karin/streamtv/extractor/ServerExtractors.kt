@@ -62,8 +62,11 @@ object DoodStreamServerExtractor : ServerExtractor {
                     .build()
                     .newCall(request)
                     .execute()
-                val body = response.body?.string()?.trim() ?: ""
-                response.close()
+                val body = try {
+                    response.body?.string()?.trim() ?: ""
+                } finally {
+                    response.close()
+                }
                 if (body.startsWith("http")) {
                     val token = java.util.UUID.randomUUID().toString().replace("-", "")
                     return "$body$token"
