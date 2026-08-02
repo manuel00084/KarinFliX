@@ -177,7 +177,7 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
         val megaFactory = DataSource.Factory {
             MegaDecryptingDataSource(key, resolved.megaCtrStart, resolved.extraHeaders)
         }
-        val exoPlayer = ExoPlayer.Builder(requireContext())
+        val exoPlayer = ExoPlayer.Builder(requireContext(), com.karin.streamtv.player.dsp.DspRenderersFactory(requireContext()))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(megaFactory)
             )
@@ -203,7 +203,7 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
     }
 
     private fun playStandard(url: String) {
-        val exoPlayer = ExoPlayer.Builder(requireContext())
+        val exoPlayer = ExoPlayer.Builder(requireContext(), com.karin.streamtv.player.dsp.DspRenderersFactory(requireContext()))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(VideoDataSource.factory(referer))
             )

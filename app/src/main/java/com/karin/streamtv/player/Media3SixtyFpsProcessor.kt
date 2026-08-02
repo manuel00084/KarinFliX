@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.video.VideoFrameMetadataListener
+import com.karin.streamtv.player.dsp.DspRenderersFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -38,7 +39,7 @@ class Media3SixtyFpsProcessor(
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     fun createPlayer(trackSelector: DefaultTrackSelector? = null): ExoPlayer {
-        val renderersFactory = DefaultRenderersFactory(context)
+        val renderersFactory = DspRenderersFactory(context)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             .setMediaCodecSelector(MediaCodecSelector.DEFAULT)
 

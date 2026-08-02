@@ -13,5 +13,6 @@ class KarinTVApplication : Application() {
         com.karin.streamtv.util.Http.initCookies(this)
         com.karin.streamtv.scraper.ScrapingEngine.init(this)
         com.karin.streamtv.player.VideoEnhanceConfig.init(this)
+        com.karin.streamtv.player.dsp.AudioEnhanceConfig.init(this)
     }
 }

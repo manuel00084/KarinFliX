@@ -11,6 +11,7 @@ import androidx.fragment.app.FragmentActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.karin.streamtv.R
 import com.karin.streamtv.player.VideoEnhanceConfig
+import com.karin.streamtv.player.dsp.AudioEnhanceConfig
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.AutoPlayManager
 import com.karin.streamtv.util.DeviceUtils
@@ -27,6 +28,22 @@ class SettingsActivity : FragmentActivity() {
     private lateinit var switchSkipEnding: SwitchMaterial
     private lateinit var switchVideoEnhance: SwitchMaterial
     private lateinit var switchInterpolation: SwitchMaterial
+    private lateinit var switchDspEnabled: SwitchMaterial
+
+    private lateinit var tvDspPreset: TextView
+    private lateinit var tvDspThx: TextView
+    private lateinit var tvDspBass: TextView
+    private lateinit var tvDspSpace: TextView
+    private lateinit var tvDspVoice: TextView
+    private lateinit var tvDspMaster: TextView
+
+    private lateinit var seekDspThx: SeekBar
+    private lateinit var seekDspBass: SeekBar
+    private lateinit var seekDspSpace: SeekBar
+    private lateinit var seekDspVoice: SeekBar
+    private lateinit var seekDspMaster: SeekBar
+
+    private var dspPreset = AudioEnhanceConfig.Preset.BATTLE
 
     private lateinit var seekSaturation: SeekBar
     private lateinit var seekContrast: SeekBar
@@ -50,6 +67,7 @@ class SettingsActivity : FragmentActivity() {
 
         AppPreferences.init(this)
         VideoEnhanceConfig.init(this)
+        com.karin.streamtv.player.dsp.AudioEnhanceConfig.init(this)
 
         switchServerFallback = findViewById(R.id.switch_server_fallback)
         switchAutoplay = findViewById(R.id.switch_autoplay)
@@ -59,6 +77,20 @@ class SettingsActivity : FragmentActivity() {
         switchSkipEnding = findViewById(R.id.switch_skip_ending)
         switchVideoEnhance = findViewById(R.id.switch_video_enhance)
         switchInterpolation = findViewById(R.id.switch_interpolation)
+        switchDspEnabled = findViewById(R.id.switch_dsp_enabled)
+
+        tvDspPreset = findViewById(R.id.tv_dsp_preset_value)
+        tvDspThx = findViewById(R.id.tv_dsp_thx_value)
+        tvDspBass = findViewById(R.id.tv_dsp_bass_value)
+        tvDspSpace = findViewById(R.id.tv_dsp_space_value)
+        tvDspVoice = findViewById(R.id.tv_dsp_voice_value)
+        tvDspMaster = findViewById(R.id.tv_dsp_master_value)
+
+        seekDspThx = findViewById(R.id.seekbar_dsp_thx)
+        seekDspBass = findViewById(R.id.seekbar_dsp_bass)
+        seekDspSpace = findViewById(R.id.seekbar_dsp_space)
+        seekDspVoice = findViewById(R.id.seekbar_dsp_voice)
+        seekDspMaster = findViewById(R.id.seekbar_dsp_master)
 
         seekSaturation = findViewById(R.id.seekbar_saturation)
         seekContrast = findViewById(R.id.seekbar_contrast)
@@ -84,6 +116,14 @@ class SettingsActivity : FragmentActivity() {
         switchSkipEnding.isChecked = AppPreferences.isSkipEndingEnabled()
         switchVideoEnhance.isChecked = VideoEnhanceConfig.isEnabled()
         switchInterpolation.isChecked = VideoEnhanceConfig.isInterpolationEnabled()
+        dspPreset = AudioEnhanceConfig.preset()
+        switchDspEnabled.isChecked = AudioEnhanceConfig.isEnabled()
+        tvDspPreset.text = dspPreset.label
+        seekDspThx.progress = dspToSeekBar(AudioEnhanceConfig.getThx())
+        seekDspBass.progress = dspToSeekBar(AudioEnhanceConfig.getBass())
+        seekDspSpace.progress = dspToSeekBar(AudioEnhanceConfig.getSpace())
+        seekDspVoice.progress = dspToSeekBar(AudioEnhanceConfig.getVoice())
+        seekDspMaster.progress = dspMasterToSeekBar(AudioEnhanceConfig.getMaster())
 
         seekSaturation.progress = VideoEnhanceConfig.saturationToSeekBar(VideoEnhanceConfig.getSaturation())
         seekContrast.progress = VideoEnhanceConfig.contrastToSeekBar(VideoEnhanceConfig.getContrast())
@@ -108,6 +148,23 @@ class SettingsActivity : FragmentActivity() {
         switchSkipEnding.setOnCheckedChangeListener { _, _ -> switchListener(switchSkipEnding, "Saltar ending") }
         switchVideoEnhance.setOnCheckedChangeListener { _, _ -> switchListener(switchVideoEnhance, "Mejora de video") }
         switchInterpolation.setOnCheckedChangeListener { _, _ -> switchListener(switchInterpolation, "Motionx2 60p") }
+        switchDspEnabled.setOnCheckedChangeListener { _, _ -> switchListener(switchDspEnabled, "Mejora de audio") }
+
+        val rowDspPreset = findViewById<android.widget.LinearLayout>(R.id.row_dsp_preset)
+        rowDspPreset.setOnClickListener {
+            val next = AudioEnhanceConfig.Preset.values()[(dspPreset.ordinal + 1) % AudioEnhanceConfig.Preset.values().size]
+            dspPreset = next
+            tvDspPreset.text = next.label
+            val p = AudioEnhanceConfig.Params().withPreset(next)
+            switchDspEnabled.isChecked = true
+            seekDspThx.progress = dspToSeekBar(p.thx)
+            seekDspBass.progress = dspToSeekBar(p.bass)
+            seekDspSpace.progress = dspToSeekBar(p.space)
+            seekDspVoice.progress = dspToSeekBar(p.voice)
+            seekDspMaster.progress = dspMasterToSeekBar(p.masterGain)
+            updateSliderTexts()
+        }
+        rowDspPreset.onActionKey { rowDspPreset.performClick() }
 
         val seekListener = object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -123,6 +180,11 @@ class SettingsActivity : FragmentActivity() {
         seekColorBoost.setOnSeekBarChangeListener(seekListener)
         seekDenoise.setOnSeekBarChangeListener(seekListener)
         seekDeband.setOnSeekBarChangeListener(seekListener)
+        seekDspThx.setOnSeekBarChangeListener(seekListener)
+        seekDspBass.setOnSeekBarChangeListener(seekListener)
+        seekDspSpace.setOnSeekBarChangeListener(seekListener)
+        seekDspVoice.setOnSeekBarChangeListener(seekListener)
+        seekDspMaster.setOnSeekBarChangeListener(seekListener)
 
         val btnSave = findViewById<TextView>(R.id.btn_save)
         btnSave.setOnClickListener { saveSettings() }
@@ -177,7 +239,19 @@ class SettingsActivity : FragmentActivity() {
         tvColorBoost.text = "${(col * 100).toInt()}%"
         tvDenoise.text = "${(den * 100).toInt()}%"
         tvDeband.text = "${(deb / 0.06f * 100).toInt()}%"
+
+        tvDspThx.text = "${(seekBarToDsp(seekDspThx.progress) * 100).toInt()}%"
+        tvDspBass.text = "${(seekBarToDsp(seekDspBass.progress) * 100).toInt()}%"
+        tvDspSpace.text = "${(seekBarToDsp(seekDspSpace.progress) * 100).toInt()}%"
+        tvDspVoice.text = "${(seekBarToDsp(seekDspVoice.progress) * 100).toInt()}%"
+        tvDspMaster.text = "${(seekBarToDspMaster(seekDspMaster.progress) * 100).toInt()}%"
     }
+
+    private fun dspToSeekBar(value: Float): Int = (value / 2.0f * 100).toInt().coerceIn(0, 100)
+    private fun seekBarToDsp(progress: Int): Float = progress / 100.0f * 2.0f
+
+    private fun dspMasterToSeekBar(value: Float): Int = ((value - 0.7f) / 1.3f * 100).toInt().coerceIn(0, 100)
+    private fun seekBarToDspMaster(progress: Int): Float = 0.7f + progress / 100.0f * 1.3f
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val mapped = GamepadHelper.mapGamepadToDpad(keyCode)
@@ -225,6 +299,16 @@ class SettingsActivity : FragmentActivity() {
         VideoEnhanceConfig.setColorBoost(VideoEnhanceConfig.seekBarToColorBoost(seekColorBoost.progress))
         VideoEnhanceConfig.setDenoise(VideoEnhanceConfig.seekBarToDenoise(seekDenoise.progress))
         VideoEnhanceConfig.setDeband(VideoEnhanceConfig.seekBarToDeband(seekDeband.progress))
+
+        AudioEnhanceConfig.applyParams(AudioEnhanceConfig.Params(
+            preset = dspPreset,
+            enabled = switchDspEnabled.isChecked,
+            thx = seekBarToDsp(seekDspThx.progress),
+            bass = seekBarToDsp(seekDspBass.progress),
+            space = seekBarToDsp(seekDspSpace.progress),
+            voice = seekBarToDsp(seekDspVoice.progress),
+            masterGain = seekBarToDspMaster(seekDspMaster.progress)
+        ))
 
         val btnSave = findViewById<TextView>(R.id.btn_save)
         btnSave.announceForAccessibility("Configuración guardada")

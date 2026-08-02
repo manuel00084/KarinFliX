@@ -325,7 +325,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         val megaFactory = androidx.media3.datasource.DataSource.Factory {
             com.karin.streamtv.player.MegaDecryptingDataSource(key, resolved.megaCtrStart, resolved.extraHeaders)
         }
-        val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this)
+        val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, com.karin.streamtv.player.dsp.DspRenderersFactory(this))
             .setTrackSelector(trackSelector!!)
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
@@ -462,7 +462,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun playStandard(url: String) {
-        val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this)
+        val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, com.karin.streamtv.player.dsp.DspRenderersFactory(this))
             .setTrackSelector(trackSelector!!)
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
