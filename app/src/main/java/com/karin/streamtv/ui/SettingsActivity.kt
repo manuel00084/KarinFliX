@@ -29,29 +29,32 @@ class SettingsActivity : FragmentActivity() {
     private lateinit var switchVideoEnhance: SwitchMaterial
     private lateinit var switchInterpolation: SwitchMaterial
     private lateinit var switchDspEnabled: SwitchMaterial
+    private lateinit var switchVideoPlayer: SwitchMaterial
 
     private lateinit var tvDspPreset: TextView
-    private lateinit var tvDspThx: TextView
     private lateinit var tvDspBass: TextView
-    private lateinit var tvDspSpace: TextView
-    private lateinit var tvDspVoice: TextView
-    private lateinit var tvDspExcite: TextView
+    private lateinit var tvDspSubbass: TextView
+    private lateinit var tvDspTreble: TextView
+    private lateinit var tvDspPresence: TextView
+    private lateinit var tvDspSurround: TextView
+    private lateinit var tvDspExciter: TextView
     private lateinit var tvDspHarmbass: TextView
-    private lateinit var tvDspDynamic: TextView
-    private lateinit var tvDspAmbience: TextView
+    private lateinit var tvDspCompression: TextView
+    private lateinit var tvDspReverb: TextView
     private lateinit var tvDspMaster: TextView
 
-    private lateinit var seekDspThx: SeekBar
     private lateinit var seekDspBass: SeekBar
-    private lateinit var seekDspSpace: SeekBar
-    private lateinit var seekDspVoice: SeekBar
-    private lateinit var seekDspExcite: SeekBar
+    private lateinit var seekDspSubbass: SeekBar
+    private lateinit var seekDspTreble: SeekBar
+    private lateinit var seekDspPresence: SeekBar
+    private lateinit var seekDspSurround: SeekBar
+    private lateinit var seekDspExciter: SeekBar
     private lateinit var seekDspHarmbass: SeekBar
-    private lateinit var seekDspDynamic: SeekBar
-    private lateinit var seekDspAmbience: SeekBar
+    private lateinit var seekDspCompression: SeekBar
+    private lateinit var seekDspReverb: SeekBar
     private lateinit var seekDspMaster: SeekBar
 
-    private var dspPreset = AudioEnhanceConfig.Preset.BATTLE
+    private var dspPreset = AudioEnhanceConfig.Preset.ANIME
 
     private lateinit var seekSaturation: SeekBar
     private lateinit var seekContrast: SeekBar
@@ -86,26 +89,29 @@ class SettingsActivity : FragmentActivity() {
         switchVideoEnhance = findViewById(R.id.switch_video_enhance)
         switchInterpolation = findViewById(R.id.switch_interpolation)
         switchDspEnabled = findViewById(R.id.switch_dsp_enabled)
+        switchVideoPlayer = findViewById(R.id.switch_video_player)
 
         tvDspPreset = findViewById(R.id.tv_dsp_preset_value)
-        tvDspThx = findViewById(R.id.tv_dsp_thx_value)
         tvDspBass = findViewById(R.id.tv_dsp_bass_value)
-        tvDspSpace = findViewById(R.id.tv_dsp_space_value)
-        tvDspVoice = findViewById(R.id.tv_dsp_voice_value)
-        tvDspExcite = findViewById(R.id.tv_dsp_excite_value)
+        tvDspSubbass = findViewById(R.id.tv_dsp_subbass_value)
+        tvDspTreble = findViewById(R.id.tv_dsp_treble_value)
+        tvDspPresence = findViewById(R.id.tv_dsp_presence_value)
+        tvDspSurround = findViewById(R.id.tv_dsp_surround_value)
+        tvDspExciter = findViewById(R.id.tv_dsp_exciter_value)
         tvDspHarmbass = findViewById(R.id.tv_dsp_harmbass_value)
-        tvDspDynamic = findViewById(R.id.tv_dsp_dynamic_value)
-        tvDspAmbience = findViewById(R.id.tv_dsp_ambience_value)
+        tvDspCompression = findViewById(R.id.tv_dsp_compression_value)
+        tvDspReverb = findViewById(R.id.tv_dsp_reverb_value)
         tvDspMaster = findViewById(R.id.tv_dsp_master_value)
 
-        seekDspThx = findViewById(R.id.seekbar_dsp_thx)
         seekDspBass = findViewById(R.id.seekbar_dsp_bass)
-        seekDspSpace = findViewById(R.id.seekbar_dsp_space)
-        seekDspVoice = findViewById(R.id.seekbar_dsp_voice)
-        seekDspExcite = findViewById(R.id.seekbar_dsp_excite)
+        seekDspSubbass = findViewById(R.id.seekbar_dsp_subbass)
+        seekDspTreble = findViewById(R.id.seekbar_dsp_treble)
+        seekDspPresence = findViewById(R.id.seekbar_dsp_presence)
+        seekDspSurround = findViewById(R.id.seekbar_dsp_surround)
+        seekDspExciter = findViewById(R.id.seekbar_dsp_exciter)
         seekDspHarmbass = findViewById(R.id.seekbar_dsp_harmbass)
-        seekDspDynamic = findViewById(R.id.seekbar_dsp_dynamic)
-        seekDspAmbience = findViewById(R.id.seekbar_dsp_ambience)
+        seekDspCompression = findViewById(R.id.seekbar_dsp_compression)
+        seekDspReverb = findViewById(R.id.seekbar_dsp_reverb)
         seekDspMaster = findViewById(R.id.seekbar_dsp_master)
 
         seekSaturation = findViewById(R.id.seekbar_saturation)
@@ -135,15 +141,16 @@ class SettingsActivity : FragmentActivity() {
         dspPreset = AudioEnhanceConfig.preset()
         switchDspEnabled.isChecked = AudioEnhanceConfig.isEnabled()
         tvDspPreset.text = dspPreset.label
-        seekDspThx.progress = dspToSeekBar(AudioEnhanceConfig.getThx())
-        seekDspBass.progress = dspToSeekBar(AudioEnhanceConfig.getBass())
-        seekDspSpace.progress = dspToSeekBar(AudioEnhanceConfig.getSpace())
-        seekDspVoice.progress = dspToSeekBar(AudioEnhanceConfig.getVoice())
-        seekDspExcite.progress = dspToSeekBar(AudioEnhanceConfig.getExcite())
-        seekDspHarmbass.progress = dspToSeekBar(AudioEnhanceConfig.getHarmbass())
-        seekDspDynamic.progress = dspToSeekBar(AudioEnhanceConfig.getDynamic())
-        seekDspAmbience.progress = dspToSeekBar(AudioEnhanceConfig.getAmbience())
-        seekDspMaster.progress = dspMasterToSeekBar(AudioEnhanceConfig.getMaster())
+        seekDspBass.progress = dbToSeekBar(AudioEnhanceConfig.getBass())
+        seekDspSubbass.progress = dbToSeekBar(AudioEnhanceConfig.getSubBass())
+        seekDspTreble.progress = dbToSeekBar(AudioEnhanceConfig.getTreble())
+        seekDspPresence.progress = dbToSeekBar(AudioEnhanceConfig.getPresence())
+        seekDspSurround.progress = unitToSeekBar(AudioEnhanceConfig.getSurround(), 1.5f)
+        seekDspExciter.progress = unitToSeekBar(AudioEnhanceConfig.getExciter(), 1f)
+        seekDspHarmbass.progress = unitToSeekBar(AudioEnhanceConfig.getHarmbass(), 1f)
+        seekDspCompression.progress = unitToSeekBar(AudioEnhanceConfig.getCompression(), 1f)
+        seekDspReverb.progress = unitToSeekBar(AudioEnhanceConfig.getReverb(), 0.5f)
+        seekDspMaster.progress = masterToSeekBar(AudioEnhanceConfig.getMaster())
 
         seekSaturation.progress = VideoEnhanceConfig.saturationToSeekBar(VideoEnhanceConfig.getSaturation())
         seekContrast.progress = VideoEnhanceConfig.contrastToSeekBar(VideoEnhanceConfig.getContrast())
@@ -169,6 +176,7 @@ class SettingsActivity : FragmentActivity() {
         switchVideoEnhance.setOnCheckedChangeListener { _, _ -> switchListener(switchVideoEnhance, "Mejora de video") }
         switchInterpolation.setOnCheckedChangeListener { _, _ -> switchListener(switchInterpolation, "Motionx2 60p") }
         switchDspEnabled.setOnCheckedChangeListener { _, _ -> switchListener(switchDspEnabled, "Activar DSP en ExoPlayer") }
+        switchVideoPlayer.setOnCheckedChangeListener { _, _ -> switchListener(switchVideoPlayer, "Reproductor de video del sistema") }
 
         val rowDspPreset = findViewById<android.widget.LinearLayout>(R.id.row_dsp_preset)
         rowDspPreset.setOnClickListener {
@@ -177,15 +185,16 @@ class SettingsActivity : FragmentActivity() {
             tvDspPreset.text = next.label
             val p = AudioEnhanceConfig.Params().withPreset(next)
             switchDspEnabled.isChecked = true
-            seekDspThx.progress = dspToSeekBar(p.thx)
-            seekDspBass.progress = dspToSeekBar(p.bass)
-            seekDspSpace.progress = dspToSeekBar(p.space)
-            seekDspVoice.progress = dspToSeekBar(p.voice)
-            seekDspExcite.progress = dspToSeekBar(p.excite)
-            seekDspHarmbass.progress = dspToSeekBar(p.harmbass)
-            seekDspDynamic.progress = dspToSeekBar(p.dynamic)
-            seekDspAmbience.progress = dspToSeekBar(p.ambience)
-            seekDspMaster.progress = dspMasterToSeekBar(p.masterGain)
+            seekDspBass.progress = dbToSeekBar(p.bassGain)
+            seekDspSubbass.progress = dbToSeekBar(p.subBassGain)
+            seekDspTreble.progress = dbToSeekBar(p.trebleGain)
+            seekDspPresence.progress = dbToSeekBar(p.presenceGain)
+            seekDspSurround.progress = unitToSeekBar(p.surroundWidth, 1.5f)
+            seekDspExciter.progress = unitToSeekBar(p.exciterAmount, 1f)
+            seekDspHarmbass.progress = unitToSeekBar(p.harmonicBass, 1f)
+            seekDspCompression.progress = unitToSeekBar(p.compression, 1f)
+            seekDspReverb.progress = unitToSeekBar(p.reverbMix, 0.5f)
+            seekDspMaster.progress = masterToSeekBar(p.masterGain)
             updateSliderTexts()
         }
         rowDspPreset.onActionKey { rowDspPreset.performClick() }
@@ -204,14 +213,15 @@ class SettingsActivity : FragmentActivity() {
         seekColorBoost.setOnSeekBarChangeListener(seekListener)
         seekDenoise.setOnSeekBarChangeListener(seekListener)
         seekDeband.setOnSeekBarChangeListener(seekListener)
-        seekDspThx.setOnSeekBarChangeListener(seekListener)
         seekDspBass.setOnSeekBarChangeListener(seekListener)
-        seekDspSpace.setOnSeekBarChangeListener(seekListener)
-        seekDspVoice.setOnSeekBarChangeListener(seekListener)
-        seekDspExcite.setOnSeekBarChangeListener(seekListener)
+        seekDspSubbass.setOnSeekBarChangeListener(seekListener)
+        seekDspTreble.setOnSeekBarChangeListener(seekListener)
+        seekDspPresence.setOnSeekBarChangeListener(seekListener)
+        seekDspSurround.setOnSeekBarChangeListener(seekListener)
+        seekDspExciter.setOnSeekBarChangeListener(seekListener)
         seekDspHarmbass.setOnSeekBarChangeListener(seekListener)
-        seekDspDynamic.setOnSeekBarChangeListener(seekListener)
-        seekDspAmbience.setOnSeekBarChangeListener(seekListener)
+        seekDspCompression.setOnSeekBarChangeListener(seekListener)
+        seekDspReverb.setOnSeekBarChangeListener(seekListener)
         seekDspMaster.setOnSeekBarChangeListener(seekListener)
 
         val btnSave = findViewById<TextView>(R.id.btn_save)
@@ -268,22 +278,26 @@ class SettingsActivity : FragmentActivity() {
         tvDenoise.text = "${(den * 100).toInt()}%"
         tvDeband.text = "${(deb / 0.06f * 100).toInt()}%"
 
-        tvDspThx.text = "${(seekBarToDsp(seekDspThx.progress) * 100).toInt()}%"
-        tvDspBass.text = "${(seekBarToDsp(seekDspBass.progress) * 100).toInt()}%"
-        tvDspSpace.text = "${(seekBarToDsp(seekDspSpace.progress) * 100).toInt()}%"
-        tvDspVoice.text = "${(seekBarToDsp(seekDspVoice.progress) * 100).toInt()}%"
-        tvDspExcite.text = "${(seekBarToDsp(seekDspExcite.progress) * 100).toInt()}%"
-        tvDspHarmbass.text = "${(seekBarToDsp(seekDspHarmbass.progress) * 100).toInt()}%"
-        tvDspDynamic.text = "${(seekBarToDsp(seekDspDynamic.progress) * 100).toInt()}%"
-        tvDspAmbience.text = "${(seekBarToDsp(seekDspAmbience.progress) * 100).toInt()}%"
-        tvDspMaster.text = "${(seekBarToDspMaster(seekDspMaster.progress) * 100).toInt()}%"
+        tvDspBass.text = "${seekBarToDb(seekDspBass.progress)} dB"
+        tvDspSubbass.text = "${seekBarToDb(seekDspSubbass.progress)} dB"
+        tvDspTreble.text = "${seekBarToDb(seekDspTreble.progress)} dB"
+        tvDspPresence.text = "${seekBarToDb(seekDspPresence.progress)} dB"
+        tvDspSurround.text = "${(seekBarToUnit(seekDspSurround.progress, 1.5f) * 100).toInt()}%"
+        tvDspExciter.text = "${(seekBarToUnit(seekDspExciter.progress, 1f) * 100).toInt()}%"
+        tvDspHarmbass.text = "${(seekBarToUnit(seekDspHarmbass.progress, 1f) * 100).toInt()}%"
+        tvDspCompression.text = "${(seekBarToUnit(seekDspCompression.progress, 1f) * 100).toInt()}%"
+        tvDspReverb.text = "${(seekBarToUnit(seekDspReverb.progress, 0.5f) * 100).toInt()}%"
+        tvDspMaster.text = "${(seekBarToMaster(seekDspMaster.progress) * 100).toInt()}%"
     }
 
-    private fun dspToSeekBar(value: Float): Int = (value / 2.0f * 100).toInt().coerceIn(0, 100)
-    private fun seekBarToDsp(progress: Int): Float = progress / 100.0f * 2.0f
+    private fun dbToSeekBar(value: Float): Int = ((value + 12f) / 24f * 100).toInt().coerceIn(0, 100)
+    private fun seekBarToDb(progress: Int): Float = progress / 100.0f * 24f - 12f
 
-    private fun dspMasterToSeekBar(value: Float): Int = ((value - 0.7f) / 1.3f * 100).toInt().coerceIn(0, 100)
-    private fun seekBarToDspMaster(progress: Int): Float = 0.7f + progress / 100.0f * 1.3f
+    private fun unitToSeekBar(value: Float, max: Float): Int = (value / max * 100).toInt().coerceIn(0, 100)
+    private fun seekBarToUnit(progress: Int, max: Float): Float = progress / 100.0f * max
+
+    private fun masterToSeekBar(value: Float): Int = ((value - 0.5f) / 1.5f * 100).toInt().coerceIn(0, 100)
+    private fun seekBarToMaster(progress: Int): Float = 0.5f + progress / 100.0f * 1.5f
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val mapped = GamepadHelper.mapGamepadToDpad(keyCode)
@@ -319,6 +333,7 @@ class SettingsActivity : FragmentActivity() {
         editor?.putBoolean("karin_link_enabled", switchKarinLink.isChecked)
         editor?.putBoolean("skip_opening_enabled", switchSkipOpening.isChecked)
         editor?.putBoolean("skip_ending_enabled", switchSkipEnding.isChecked)
+        editor?.putBoolean("video_player_mode_enabled", switchVideoPlayer.isChecked)
         editor?.apply()
         AutoPlayManager.setAutoPlayEnabled(switchAutoplay.isChecked)
 
@@ -335,15 +350,16 @@ class SettingsActivity : FragmentActivity() {
         AudioEnhanceConfig.applyParams(AudioEnhanceConfig.Params(
             preset = dspPreset,
             enabled = switchDspEnabled.isChecked,
-            thx = seekBarToDsp(seekDspThx.progress),
-            bass = seekBarToDsp(seekDspBass.progress),
-            space = seekBarToDsp(seekDspSpace.progress),
-            voice = seekBarToDsp(seekDspVoice.progress),
-            excite = seekBarToDsp(seekDspExcite.progress),
-            harmbass = seekBarToDsp(seekDspHarmbass.progress),
-            dynamic = seekBarToDsp(seekDspDynamic.progress),
-            ambience = seekBarToDsp(seekDspAmbience.progress),
-            masterGain = seekBarToDspMaster(seekDspMaster.progress)
+            bassGain = seekBarToDb(seekDspBass.progress),
+            trebleGain = seekBarToDb(seekDspTreble.progress),
+            subBassGain = seekBarToDb(seekDspSubbass.progress),
+            presenceGain = seekBarToDb(seekDspPresence.progress),
+            surroundWidth = seekBarToUnit(seekDspSurround.progress, 1.5f),
+            exciterAmount = seekBarToUnit(seekDspExciter.progress, 1f),
+            harmonicBass = seekBarToUnit(seekDspHarmbass.progress, 1f),
+            compression = seekBarToUnit(seekDspCompression.progress, 1f),
+            reverbMix = seekBarToUnit(seekDspReverb.progress, 0.5f),
+            masterGain = seekBarToMaster(seekDspMaster.progress)
         ))
 
         val btnSave = findViewById<TextView>(R.id.btn_save)

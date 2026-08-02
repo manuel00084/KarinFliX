@@ -63,6 +63,15 @@ class BiquadFilter {
                 a1 = (-2.0 * cw) / a0
                 a2 = (1.0 - alpha) / a0
             }
+            Kind.HIGHPASS -> {
+                val alpha = sw / (2.0 * q)
+                val a0 = 1.0 + alpha
+                b0 = (1.0 + cw) / 2.0 / a0
+                b1 = -(1.0 + cw) / a0
+                b2 = (1.0 + cw) / 2.0 / a0
+                a1 = (-2.0 * cw) / a0
+                a2 = (1.0 - alpha) / a0
+            }
         }
     }
 
@@ -82,5 +91,5 @@ class BiquadFilter {
         y2 = 0.0
     }
 
-    enum class Kind { PEAKING, LOWSHELF, HIGHSHELF, LOWPASS }
+    enum class Kind { PEAKING, LOWSHELF, HIGHSHELF, LOWPASS, HIGHPASS }
 }

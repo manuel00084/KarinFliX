@@ -2,6 +2,7 @@ package com.karin.streamtv.player
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
@@ -111,7 +112,8 @@ class ExoPlayerActivity : AppCompatActivity() {
 
         trackSelector = DefaultTrackSelector(this)
 
-        val videoUrl = intent.getStringExtra("video_url")
+        val externalUri: Uri? = if (intent.action == Intent.ACTION_VIEW) intent.data else null
+        val videoUrl = intent.getStringExtra("video_url") ?: externalUri?.toString()
         val embedUrl = intent.getStringExtra("embed_url")
         val serverName = intent.getStringExtra("server_name") ?: ""
         val episodeUrl = intent.getStringExtra("episode_url") ?: ""
