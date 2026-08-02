@@ -7,10 +7,10 @@ object AudioEnhanceConfig {
 
     enum class Preset(val label: String) {
         BATTLE("Shonen Batalla"),
-        THX("Cine THX"),
-        TRUBASS("TruBass"),
-        SPACE("3D Space"),
-        VOICE("Voz clara")
+        CINE("Modo Cine"),
+        BASS("Graves profundos"),
+        WIDE("Ancho estéreo"),
+        VOICE("Diálogos claros")
     }
 
     data class Params(
@@ -20,14 +20,18 @@ object AudioEnhanceConfig {
         val bass: Float = 1.0f,
         val space: Float = 1.0f,
         val voice: Float = 1.0f,
+        val excite: Float = 0.6f,
+        val harmbass: Float = 0.8f,
+        val dynamic: Float = 0.6f,
+        val ambience: Float = 0.3f,
         val masterGain: Float = 1.12f
     ) {
         fun withPreset(p: Preset): Params = when (p) {
-            Preset.BATTLE -> Params(Preset.BATTLE, true, 1.0f, 1.0f, 1.0f, 1.0f, 1.12f)
-            Preset.THX -> Params(Preset.THX, true, 1.0f, 0.4f, 0.6f, 0.6f, 1.1f)
-            Preset.TRUBASS -> Params(Preset.TRUBASS, true, 0.5f, 1.3f, 0.4f, 0.4f, 1.08f)
-            Preset.SPACE -> Params(Preset.SPACE, true, 0.6f, 0.4f, 1.3f, 0.6f, 1.1f)
-            Preset.VOICE -> Params(Preset.VOICE, true, 0.5f, 0.3f, 0.3f, 1.3f, 1.08f)
+            Preset.BATTLE -> Params(Preset.BATTLE, true, 1.0f, 1.0f, 1.0f, 1.0f, 0.6f, 0.8f, 0.6f, 0.3f, 1.12f)
+            Preset.CINE -> Params(Preset.CINE, true, 1.0f, 0.4f, 0.6f, 0.6f, 0.4f, 0.3f, 0.4f, 0.4f, 1.1f)
+            Preset.BASS -> Params(Preset.BASS, true, 0.5f, 1.3f, 0.4f, 0.4f, 0.3f, 1.0f, 0.5f, 0.2f, 1.08f)
+            Preset.WIDE -> Params(Preset.WIDE, true, 0.6f, 0.4f, 1.3f, 0.6f, 0.5f, 0.2f, 0.3f, 0.5f, 1.1f)
+            Preset.VOICE -> Params(Preset.VOICE, true, 0.5f, 0.3f, 0.3f, 1.3f, 0.5f, 0.2f, 0.6f, 0.2f, 1.08f)
         }
     }
 
@@ -38,6 +42,10 @@ object AudioEnhanceConfig {
     private const val KEY_BASS = "dsp_bass"
     private const val KEY_SPACE = "dsp_space"
     private const val KEY_VOICE = "dsp_voice"
+    private const val KEY_EXCITE = "dsp_excite"
+    private const val KEY_HARMBASS = "dsp_harmbass"
+    private const val KEY_DYNAMIC = "dsp_dynamic"
+    private const val KEY_AMBIENCE = "dsp_ambience"
     private const val KEY_MASTER = "dsp_master"
 
     private var prefs: SharedPreferences? = null
@@ -67,6 +75,18 @@ object AudioEnhanceConfig {
     fun getVoice(): Float = prefs?.getFloat(KEY_VOICE, 1.0f) ?: 1.0f
     fun setVoice(v: Float) { prefs?.edit()?.putFloat(KEY_VOICE, v.coerceIn(0f, 2f))?.apply() }
 
+    fun getExcite(): Float = prefs?.getFloat(KEY_EXCITE, 0.6f) ?: 0.6f
+    fun setExcite(v: Float) { prefs?.edit()?.putFloat(KEY_EXCITE, v.coerceIn(0f, 2f))?.apply() }
+
+    fun getHarmbass(): Float = prefs?.getFloat(KEY_HARMBASS, 0.8f) ?: 0.8f
+    fun setHarmbass(v: Float) { prefs?.edit()?.putFloat(KEY_HARMBASS, v.coerceIn(0f, 2f))?.apply() }
+
+    fun getDynamic(): Float = prefs?.getFloat(KEY_DYNAMIC, 0.6f) ?: 0.6f
+    fun setDynamic(v: Float) { prefs?.edit()?.putFloat(KEY_DYNAMIC, v.coerceIn(0f, 2f))?.apply() }
+
+    fun getAmbience(): Float = prefs?.getFloat(KEY_AMBIENCE, 0.3f) ?: 0.3f
+    fun setAmbience(v: Float) { prefs?.edit()?.putFloat(KEY_AMBIENCE, v.coerceIn(0f, 2f))?.apply() }
+
     fun getMaster(): Float = prefs?.getFloat(KEY_MASTER, 1.12f) ?: 1.12f
     fun setMaster(v: Float) { prefs?.edit()?.putFloat(KEY_MASTER, v.coerceIn(0.7f, 2f))?.apply() }
 
@@ -77,6 +97,10 @@ object AudioEnhanceConfig {
         bass = getBass(),
         space = getSpace(),
         voice = getVoice(),
+        excite = getExcite(),
+        harmbass = getHarmbass(),
+        dynamic = getDynamic(),
+        ambience = getAmbience(),
         masterGain = getMaster()
     )
 
@@ -87,6 +111,10 @@ object AudioEnhanceConfig {
         setBass(p.bass)
         setSpace(p.space)
         setVoice(p.voice)
+        setExcite(p.excite)
+        setHarmbass(p.harmbass)
+        setDynamic(p.dynamic)
+        setAmbience(p.ambience)
         setMaster(p.masterGain)
     }
 }

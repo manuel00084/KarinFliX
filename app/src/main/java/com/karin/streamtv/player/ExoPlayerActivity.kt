@@ -1,5 +1,9 @@
 package com.karin.streamtv.player
 
+import android.app.DownloadManager
+import android.content.Context
+import android.database.Cursor
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -26,6 +30,7 @@ import com.karin.streamtv.util.EpisodeProgress
 import com.karin.streamtv.util.GamepadHelper
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -47,7 +52,9 @@ class ExoPlayerActivity : AppCompatActivity() {
     private lateinit var tvDuration: TextView
     private lateinit var btnQuality: TextView
     private lateinit var btnVolume: TextView
+    private lateinit var btnDsp: TextView
     private lateinit var btnDebug: TextView
+    private lateinit var btnDownload: ImageButton
     private var seekDragging = false
     private var selectedHeight = -1
     private val controllerHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -98,7 +105,9 @@ class ExoPlayerActivity : AppCompatActivity() {
         tvDuration = findViewById(R.id.tv_duration)
         btnQuality = findViewById(R.id.btn_quality)
         btnVolume = findViewById(R.id.btn_volume)
+        btnDsp = findViewById(R.id.btn_dsp)
         btnDebug = findViewById(R.id.btn_debug)
+        btnDownload = findViewById(R.id.btn_download)
 
         trackSelector = DefaultTrackSelector(this)
 
@@ -152,9 +161,12 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnBack.onActionKey { finish() }
         playerContainer.setOnClickListener { showController() }
         btnPlayPause.setOnClickListener { togglePlayPause() }
+        updateDspButton()
         btnQuality.setOnClickListener { showQualityDialog() }
         btnVolume.setOnClickListener { showVolumeDialog() }
+        btnDsp.setOnClickListener { showDspDialog() }
         btnDebug.setOnClickListener { showDebugDialog() }
+        btnDownload.setOnClickListener { startDownload() }
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
             override fun onStartTrackingTouch(seekBar: SeekBar?) { seekDragging = true }
@@ -263,6 +275,37 @@ class ExoPlayerActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun showDspDialog() {
+        val presets = com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.values()
+        val labels = ArrayList<String>()
+        labels.add("Sin efectos")
+        presets.forEach { labels.add(it.label) }
+        val current = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
+        val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
+        val selectedIdx = if (!enabled) 0 else presets.indexOf(current) + 1
+        AlertDialog.Builder(this)
+            .setTitle("Sonido (DSP)")
+            .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
+                if (which == 0) {
+                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.setEnabled(false)
+                } else {
+                    val preset = presets[which - 1]
+                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.applyParams(
+                        com.karin.streamtv.player.dsp.AudioEnhanceConfig.Params().withPreset(preset)
+                    )
+                }
+                updateDspButton()
+                showController()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun updateDspButton() {
+        val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
+        btnDsp.text = if (!enabled) "Sonido: OFF" else "Sonido: ${com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset().label}"
+    }
+
     private fun showDebugDialog() {
         val labels = arrayOf("OFF", "PREV", "CURR", "UV", "FACTOR", "MOTION", "V0V1", "VISUAL")
         val current = VideoEnhanceConfig.getDebugMode()
@@ -276,6 +319,66 @@ class ExoPlayerActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cerrar", null)
             .show()
+    }
+
+    private fun startDownload() {
+        val url = getCurrentVideoUrl() ?: run {
+            Toast.makeText(this, "No hay URL de video disponible", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val title = intent.getStringExtra("episode_title") ?: "video"
+        val safeTitle = title.replace(Regex("[^\\w\\-. ]"), "_").take(100)
+        val extension = if (url.contains(".m3u8")) ".mp4" else if (url.contains(".mp4")) ".mp4" else ".mp4"
+        val fileName = "${safeTitle}${extension}"
+
+        val request = DownloadManager.Request(Uri.parse(url)).apply {
+            setTitle(fileName)
+            setDescription("Descargando $fileName")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "KarinFLiX/$fileName")
+            setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+            allowScanningByMediaScanner()
+        }
+
+        referer?.let { request.addRequestHeader("Referer", it) }
+
+        val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val downloadId = downloadManager.enqueue(request)
+
+        Toast.makeText(this, "Descarga iniciada: $fileName", Toast.LENGTH_LONG).show()
+
+        // Optional: show notification with progress (could be enhanced with a foreground service)
+        lifecycleScope.launch {
+            var downloading = true
+            while (downloading) {
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                val cursor = downloadManager.query(query)
+                if (cursor.moveToFirst()) {
+                    val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                    val bytesDownloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    val totalBytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                        Toast.makeText(this@ExoPlayerActivity, "Descarga completada: $fileName", Toast.LENGTH_LONG).show()
+                        downloading = false
+                    } else if (status == DownloadManager.STATUS_FAILED) {
+                        val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                        Toast.makeText(this@ExoPlayerActivity, "Descarga fallida (código: $reason)", Toast.LENGTH_LONG).show()
+                        downloading = false
+                    }
+                }
+                cursor.close()
+                if (downloading) delay(2000)
+            }
+        }
+    }
+
+    private fun getCurrentVideoUrl(): String? {
+        return when {
+            intent.getStringExtra("video_url")?.isNotBlank() == true -> intent.getStringExtra("video_url")
+            player?.currentMediaItem?.mediaId?.isNotBlank() == true -> player?.currentMediaItem?.mediaId
+            else -> null
+        }
     }
 
     private fun extractAndPlay(embedUrl: String, serverName: String) {
@@ -365,8 +468,11 @@ class ExoPlayerActivity : AppCompatActivity() {
         })
     }
 
+    private fun isLocalUrl(url: String): Boolean =
+        url.startsWith("content://") || url.startsWith("file://")
+
     private fun playVideo(url: String) {
-        if (useEnhancedMode) {
+        if (useEnhancedMode && !isLocalUrl(url)) {
             playWithEnhancedPipeline(url)
         } else {
             playStandard(url)
@@ -462,11 +568,25 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun playStandard(url: String) {
+        if (url.startsWith("content://")) {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    android.net.Uri.parse(url),
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+        }
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, com.karin.streamtv.player.dsp.DspRenderersFactory(this))
             .setTrackSelector(trackSelector!!)
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
-                    .setDataSourceFactory(VideoDataSource.factory(referer))
+                    .setDataSourceFactory(
+                        if (isLocalUrl(url)) {
+                            androidx.media3.datasource.DefaultDataSource.Factory(this)
+                        } else {
+                            VideoDataSource.factory(referer)
+                        }
+                    )
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(android.os.PowerManager.PARTIAL_WAKE_LOCK)

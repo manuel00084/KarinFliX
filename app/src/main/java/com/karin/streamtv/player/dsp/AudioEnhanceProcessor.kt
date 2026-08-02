@@ -6,7 +6,9 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import java.nio.ByteBuffer
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.tanh
 
 class AudioEnhanceProcessor : BaseAudioProcessor() {
     private var sampleRate = 48000
@@ -23,8 +25,16 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
     private var bassLpR = BiquadFilter()
     private var shelfL = BiquadFilter()
     private var shelfR = BiquadFilter()
+    private var exciteLpL = BiquadFilter()
+    private var exciteLpR = BiquadFilter()
     private var envL = 0.0
     private var envR = 0.0
+
+    private var reverbL: SimpleReverb? = null
+    private var reverbR: SimpleReverb? = null
+
+    private var agcEnv = 0.0
+    private var agcSm = 1.0
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         sampleRate = inputAudioFormat.sampleRate
@@ -32,6 +42,8 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         encoding = inputAudioFormat.encoding
         stereo = channels >= 2
         eqReady = false
+        reverbL = SimpleReverb(sampleRate)
+        reverbR = SimpleReverb(sampleRate)
         Log.i("AudioEnhance", "config fs=$sampleRate ch=$channels enc=$encoding")
         return inputAudioFormat
     }
@@ -52,7 +64,7 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         }
         if (!logged) {
             logged = true
-            Log.i("AudioEnhance", "dsp activo preset=${params.preset} thx=${params.thx} bass=${params.bass} space=${params.space} voice=${params.voice} master=${params.masterGain}")
+            Log.i("AudioEnhance", "dsp activo preset=${params.preset} thx=${params.thx} bass=${params.bass} space=${params.space} voice=${params.voice} excite=${params.excite} harmbass=${params.harmbass} dynamic=${params.dynamic} ambience=${params.ambience} master=${params.masterGain}")
         }
         ensureConfigured(params)
         val bytesPerSample = if (encoding == C.ENCODING_PCM_FLOAT) 4 else 2
@@ -64,28 +76,62 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
                 if (stereo) {
                     val l0 = readSample(inputBuffer)
                     val r0 = readSample(inputBuffer)
-                    var l = l0.toDouble()
-                    var r = r0.toDouble()
-                    val m = (l + r) * 0.5
-                    val s = (l - r) * 0.5
+                    val m = (l0 + r0) * 0.5
+                    val s = (l0 - r0) * 0.5
                     val w = 1.0 + params.space * 0.55
-                    l = m + s * w
-                    r = m - s * w
-                    l = truBass(l, params, env = true)
-                    r = truBass(r, params, env = false)
+                    var l = m + s * w
+                    var r = m - s * w
+
+                    reverbL?.let { l += params.ambience * it.process(l) * 0.5 }
+                    reverbR?.let { r += params.ambience * it.process(r) * 0.5 }
+
+                    val bassL = bassLpL.process(l)
+                    val bassR = bassLpR.process(r)
+                    val aL = abs(bassL)
+                    val aR = abs(bassR)
+                    envL = if (aL > envL) envL + (aL - envL) * 0.35 else envL + (aL - envL) * 0.012
+                    envR = if (aR > envR) envR + (aR - envR) * 0.35 else envR + (aR - envR) * 0.012
+                    shelfL.configure(BiquadFilter.Kind.LOWSHELF, sampleRate, 65f, (params.bass * (3.0 + 7.0 * min(1.0, envL * 6.0))).toFloat(), 0.8f)
+                    shelfR.configure(BiquadFilter.Kind.LOWSHELF, sampleRate, 65f, (params.bass * (3.0 + 7.0 * min(1.0, envR * 6.0))).toFloat(), 0.8f)
+                    l = shelfL.process(l)
+                    r = shelfR.process(r)
+                    l += params.harmbass * harmonic(bassL)
+                    r += params.harmbass * harmonic(bassR)
+
+                    l = excite(l, exciteLpL, params.excite)
+                    r = excite(r, exciteLpR, params.excite)
+
                     for (i in eqL.indices) {
                         l = eqL[i].process(l)
                         r = eqR[i].process(r)
                     }
+
+                    val a = max(abs(l), abs(r))
+                    val g = agcGain(a, params.dynamic)
+                    l *= g
+                    r *= g
+
                     writeSample(out, l)
                     writeSample(out, r)
                 } else {
                     val x0 = readSample(inputBuffer)
                     var x = x0.toDouble()
-                    x = truBass(x, params, env = true)
+
+                    val bass = bassLpL.process(x)
+                    val aB = abs(bass)
+                    envL = if (aB > envL) envL + (aB - envL) * 0.35 else envL + (aB - envL) * 0.012
+                    shelfL.configure(BiquadFilter.Kind.LOWSHELF, sampleRate, 65f, (params.bass * (3.0 + 7.0 * min(1.0, envL * 6.0))).toFloat(), 0.8f)
+                    x = shelfL.process(x)
+                    x += params.harmbass * harmonic(bass)
+
+                    x = excite(x, exciteLpL, params.excite)
+
                     for (i in eqL.indices) {
                         x = eqL[i].process(x)
                     }
+
+                    x *= agcGain(abs(x), params.dynamic)
+
                     writeSample(out, x)
                 }
             }
@@ -95,17 +141,22 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         out.flip()
     }
 
-    private fun truBass(x: Double, params: AudioEnhanceConfig.Params, env: Boolean): Double {
-        val b = if (env) bassLpL.process(x) else bassLpR.process(x)
-        val a = abs(b)
-        val e = if (env) envL else envR
-        val e2 = if (a > e) e + (a - e) * 0.35 else e + (a - e) * 0.012
-        if (env) envL = e2 else envR = e2
-        val norm = min(1.0, e2 * 6.0)
-        val gainDb = params.bass * (3.0 + 7.0 * norm)
-        val shelf = if (env) shelfL else shelfR
-        shelf.configure(BiquadFilter.Kind.LOWSHELF, sampleRate, 65f, gainDb.toFloat(), 0.8f)
-        return shelf.process(x)
+    private fun harmonic(b: Double): Double = 0.5 * (b * abs(b) + b * b * b)
+
+    private fun excite(x: Double, lp: BiquadFilter, amt: Float): Double {
+        val lpOut = lp.process(x)
+        val high = x - lpOut
+        val shaped = tanh(high * 4.0) * 0.4
+        return x + amt * 0.7 * shaped
+    }
+
+    private fun agcGain(level: Double, dynamic: Float): Double {
+        if (level > agcEnv) agcEnv += (level - agcEnv) * 0.2 else agcEnv += (level - agcEnv) * 0.006
+        var g = 0.16 / (agcEnv + 1e-4)
+        g = 1.0 + (g - 1.0) * dynamic
+        g = g.coerceIn(0.7, 1.8)
+        agcSm += (g - agcSm) * 0.05
+        return agcSm
     }
 
     private data class Band(val kind: BiquadFilter.Kind, val f0: Float, val gain: Float, val q: Float)
@@ -127,6 +178,8 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         }
         bassLpL.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 65f, 0f, 0.707f)
         if (stereo) bassLpR.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 65f, 0f, 0.707f)
+        exciteLpL.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 1400f, 0f, 0.707f)
+        if (stereo) exciteLpR.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 1400f, 0f, 0.707f)
         eqReady = true
     }
 
@@ -165,11 +218,72 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         bassLpR.reset()
         shelfL.reset()
         shelfR.reset()
+        exciteLpL.reset()
+        exciteLpR.reset()
+        reverbL?.reset()
+        reverbR?.reset()
         envL = 0.0
         envR = 0.0
+        agcEnv = 0.0
+        agcSm = 1.0
     }
 
     override fun onReset() {
         onFlush()
+    }
+}
+
+private class SimpleReverb(fs: Int) {
+    private val combGains = doubleArrayOf(0.80, 0.78, 0.76, 0.74)
+    private val combDelays = intArrayOf(
+        (0.0297 * fs).toInt().coerceAtLeast(1),
+        (0.0371 * fs).toInt().coerceAtLeast(1),
+        (0.0411 * fs).toInt().coerceAtLeast(1),
+        (0.0437 * fs).toInt().coerceAtLeast(1)
+    )
+    private val combBuf = Array(4) { i -> DoubleArray(combDelays[i]) }
+    private val combIdx = IntArray(4)
+
+    private val allpassDelays = intArrayOf(
+        (0.0050 * fs).toInt().coerceAtLeast(1),
+        (0.0017 * fs).toInt().coerceAtLeast(1)
+    )
+    private val apGain = 0.5
+    private val apInBuf = Array(2) { i -> DoubleArray(allpassDelays[i]) }
+    private val apOutBuf = Array(2) { i -> DoubleArray(allpassDelays[i]) }
+    private val apIdx = IntArray(2)
+
+    fun process(x: Double): Double {
+        var out = 0.0
+        for (i in combBuf.indices) {
+            val buf = combBuf[i]
+            val idx = combIdx[i]
+            val delayed = buf[idx]
+            buf[idx] = (x + delayed * combGains[i]).toFloat().toDouble()
+            combIdx[i] = (idx + 1) % buf.size
+            out += delayed
+        }
+        out *= 0.25
+        for (i in apInBuf.indices) {
+            val inBuf = apInBuf[i]
+            val outBuf = apOutBuf[i]
+            val idx = apIdx[i]
+            val xd = inBuf[idx]
+            val yd = outBuf[idx]
+            val y = -apGain * out + xd + apGain * yd
+            inBuf[idx] = out
+            outBuf[idx] = y
+            out = y
+            apIdx[i] = (idx + 1) % inBuf.size
+        }
+        return out
+    }
+
+    fun reset() {
+        for (b in combBuf) b.fill(0.0)
+        combIdx.fill(0)
+        for (b in apInBuf) b.fill(0.0)
+        for (b in apOutBuf) b.fill(0.0)
+        apIdx.fill(0)
     }
 }
