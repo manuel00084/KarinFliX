@@ -517,7 +517,7 @@ class Media3SixtyFpsProcessor(
                         float trust = 1.0 - smoothstep(0.1, 0.8, residual);
                         float maskConf = m0.b * m0.a;
                         float panBoost = smoothstep(0.06, 0.19, length(uGlobalVec));
-                        float warpBase = mix(0.1 + 0.9 * clamp(maskConf, 0.0, 1.0), 0.85, panBoost);
+                        float warpBase = mix(0.1 + 0.9 * clamp(maskConf, 0.0, 1.0), 0.92, panBoost);
                         float warpSel = clamp(trust * consistency * warpBase, 0.0, 1.0);
                         interp = mix(mix(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb, uFactor), interp, warpSel);
                         mask = mix(0.3, 1.0, warpSel);
@@ -758,7 +758,7 @@ class Media3SixtyFpsProcessor(
                         }
                     }
                 }
-                vec2 f = (bestS < s0 * 0.7) ? bestD : vec2(0.0);
+                vec2 f = (bestS < s0 * 0.8) ? bestD : vec2(0.0);
                 vec2 enc = clamp(f * 0.0625 + 0.5, 0.0, 1.0);
                 float valley = bestS / (sumS * 0.0204 + 1e-4);
                 float q = 1.0 - smoothstep(0.3, 0.7, valley);
