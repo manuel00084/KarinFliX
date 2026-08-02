@@ -51,15 +51,11 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
     override fun queueInput(inputBuffer: ByteBuffer) {
         val params = AudioEnhanceConfig.params()
         if (encoding != C.ENCODING_PCM_16BIT && encoding != C.ENCODING_PCM_FLOAT) {
-            val out = replaceOutputBuffer(inputBuffer.remaining())
-            out.put(inputBuffer)
-            out.flip()
+            bypass(inputBuffer)
             return
         }
         if (!params.enabled) {
-            val out = replaceOutputBuffer(inputBuffer.remaining())
-            out.put(inputBuffer)
-            out.flip()
+            bypass(inputBuffer)
             return
         }
         if (!logged) {
@@ -138,6 +134,14 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         } catch (t: Throwable) {
             Log.w("AudioEnhance", "dsp error: ${t.message}")
         }
+        out.flip()
+    }
+
+    private fun bypass(inputBuffer: ByteBuffer) {
+        val remaining = inputBuffer.remaining()
+        if (remaining == 0) return
+        val out = replaceOutputBuffer(remaining)
+        out.put(inputBuffer)
         out.flip()
     }
 
