@@ -743,6 +743,7 @@ class Media3SixtyFpsProcessor(
                 float l0 = boxCurr(vTexCoord, hs);
                 float bestS = 1e9;
                 vec2 bestD = vec2(0.0);
+                float s0 = 0.0;
                 float sumS = 0.0;
                 for (int dy = -3; dy <= 3; dy++) {
                     for (int dx = -3; dx <= 3; dx++) {
@@ -750,13 +751,14 @@ class Media3SixtyFpsProcessor(
                         float lp = boxPrev(vTexCoord - off, hs);
                         float s = abs(lp - l0);
                         sumS += s;
+                        if (dx == 0 && dy == 0) s0 = s;
                         if (s < bestS) {
                             bestS = s;
                             bestD = vec2(float(dx), float(dy));
                         }
                     }
                 }
-                vec2 f = bestD;
+                vec2 f = (bestS < s0 * 0.7) ? bestD : vec2(0.0);
                 vec2 enc = clamp(f * 0.0625 + 0.5, 0.0, 1.0);
                 float valley = bestS / (sumS * 0.0204 + 1e-4);
                 float q = 1.0 - smoothstep(0.3, 0.7, valley);
