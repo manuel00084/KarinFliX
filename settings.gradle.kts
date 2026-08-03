@@ -13,5 +13,3 @@ dependencyResolution {
 }
 rootProject.name = "KarinFLiX"
 include(":app")
-include(":dsp")
-include(":motion")

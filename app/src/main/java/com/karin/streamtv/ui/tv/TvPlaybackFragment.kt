@@ -52,11 +52,12 @@ class TvPlaybackFragment : Fragment() {
     private lateinit var topBar: View
     private lateinit var tvVideoTitle: TextView
     private lateinit var tvEpisodeInfo: TextView
-    private lateinit var btnBack: TextView
+    private lateinit var btnBack: ImageButton
     private lateinit var fpsBadge: TextView
     private lateinit var tvQueueBadge: TextView
     private lateinit var playStateOverlay: TextView
     private lateinit var controllerPanel: LinearLayout
+    private lateinit var centerControls: View
     private lateinit var seekBar: SeekBar
     private lateinit var btnPrev: TextView
     private lateinit var btnPlayPause: ImageButton
@@ -69,6 +70,8 @@ class TvPlaybackFragment : Fragment() {
     private lateinit var btnInterp: TextView
     private lateinit var btnVideoProfile: TextView
     private lateinit var btnQuality: TextView
+    private lateinit var btnRewind: ImageButton
+    private lateinit var btnForward: ImageButton
     private var seekDragging = false
     private var selectedHeight = -1
     private var playlist: List<com.karin.streamtv.model.PlaylistItem> = emptyList()
@@ -123,7 +126,7 @@ class TvPlaybackFragment : Fragment() {
         if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
 
         trackSelector = DefaultTrackSelector(requireContext())
-        useEnhancedMode = isEnhancementActive()
+        useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled()
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
@@ -138,8 +141,11 @@ class TvPlaybackFragment : Fragment() {
         tvQueueBadge = content.findViewById(R.id.tv_queue_badge)
         playStateOverlay = content.findViewById(R.id.tv_play_state)
         controllerPanel = content.findViewById(R.id.controller_panel)
+        centerControls = content.findViewById(R.id.center_controls)
         seekBar = content.findViewById(R.id.seek_bar)
         btnPlayPause = content.findViewById(R.id.btn_play_pause)
+        btnRewind = content.findViewById(R.id.btn_rewind)
+        btnForward = content.findViewById(R.id.btn_forward)
         btnPrev = content.findViewById(R.id.btn_prev)
         btnNext = content.findViewById(R.id.btn_next)
         tvPosition = content.findViewById(R.id.tv_position)
@@ -183,11 +189,21 @@ class TvPlaybackFragment : Fragment() {
                         hideController()
                         true
                     }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        seekRelative(-10000)
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        seekRelative(10000)
+                        true
+                    }
                     else -> false
                 }
             } else false
         }
         btnPlayPause.setOnClickListener { togglePlayPause() }
+        btnRewind.setOnClickListener { seekRelative(-10000) }
+        btnForward.setOnClickListener { seekRelative(10000) }
         if (playlist.isEmpty()) {
             btnPrev.visibility = View.GONE
             btnNext.visibility = View.GONE
@@ -213,7 +229,7 @@ class TvPlaybackFragment : Fragment() {
                 player?.seekTo(seekBar?.progress?.toLong() ?: 0L)
             }
         })
-        listOf(btnBack, btnPrev, btnPlayPause, btnNext, btnVolume, btnDsp, btnUpscaler, btnInterp, btnVideoProfile, btnQuality)
+        listOf(btnBack, btnPrev, btnPlayPause, btnNext, btnVolume, btnDsp, btnUpscaler, btnInterp, btnVideoProfile, btnQuality, btnRewind, btnForward)
             .forEach { btn ->
                 btn.setOnKeyListener { _, keyCode, event ->
                     if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -228,7 +244,7 @@ class TvPlaybackFragment : Fragment() {
     fun showController() {
         topBar.visibility = View.VISIBLE
         controllerPanel.visibility = View.VISIBLE
-        btnBack.visibility = View.GONE
+        centerControls.visibility = View.VISIBLE
         updateProgress()
         btnPlayPause.requestFocus()
         controllerHandler.removeCallbacks(hideController)
@@ -238,7 +254,7 @@ class TvPlaybackFragment : Fragment() {
     fun hideController() {
         topBar.visibility = View.GONE
         controllerPanel.visibility = View.GONE
-        btnBack.visibility = View.GONE
+        centerControls.visibility = View.GONE
         controllerHandler.removeCallbacks(hideController)
         playerContainer.requestFocus()
     }
@@ -278,6 +294,13 @@ class TvPlaybackFragment : Fragment() {
     private fun formatTime(ms: Long): String {
         val s = ms / 1000
         return String.format("%d:%02d", s / 60, s % 60)
+    }
+
+    private fun seekRelative(ms: Long) {
+        val p = player ?: return
+        val newPos = (p.currentPosition + ms).coerceIn(0, p.duration.coerceAtLeast(0))
+        p.seekTo(newPos)
+        showController()
     }
 
     private fun showQualityDialog() {
@@ -382,7 +405,7 @@ class TvPlaybackFragment : Fragment() {
             .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
                 VideoEnhanceConfig.applyPreset(presets[which])
                 updateVideoProfileButton()
-                syncEnhancementMode()
+                showController()
             }
             .setNegativeButton("Cerrar", null)
             .show()
@@ -420,10 +443,6 @@ class TvPlaybackFragment : Fragment() {
         if (enabling && !useEnhancedMode) {
             useEnhancedMode = true
             restartWithEnhanced()
-        } else if (!enabling && useEnhancedMode && !isEnhancementActive()) {
-            switchToStandardPlayback()
-        } else {
-            showController()
         }
     }
 
@@ -447,38 +466,6 @@ class TvPlaybackFragment : Fragment() {
         btnInterp.text = "MotionX2 60p: ${if (VideoEnhanceConfig.isInterpolationEnabled()) "ON" else "OFF"}"
     }
 
-    private fun isEnhancementActive(): Boolean =
-        VideoEnhanceConfig.isEnabled() ||
-            VideoEnhanceConfig.isInterpolationEnabled() ||
-            VideoEnhanceConfig.getUpscalerMode() != VideoEnhanceConfig.UpscalerMode.OFF
-
-    private fun syncEnhancementMode() {
-        val active = isEnhancementActive()
-        when {
-            active && !useEnhancedMode -> {
-                useEnhancedMode = true
-                restartWithEnhanced()
-            }
-            !active && useEnhancedMode -> switchToStandardPlayback()
-            else -> showController()
-        }
-    }
-
-    private fun switchToStandardPlayback() {
-        useEnhancedMode = false
-        Log.i(TAG, "Switching to native playback (sin pipeline GL)")
-        fpsBadge.visibility = View.GONE
-        player?.release()
-        player = null
-        processor?.release()
-        processor = null
-        playerContainer.removeAllViews()
-        glActive = false
-        if (currentVideoUrl.isNotBlank()) {
-            playVideo(currentVideoUrl)
-        }
-    }
-
     private fun showUpscalerDialog() {
         val modes = VideoEnhanceConfig.UpscalerMode.entries
         val labels = modes.map { it.label }.toTypedArray()
@@ -489,7 +476,7 @@ class TvPlaybackFragment : Fragment() {
             .setSingleChoiceItems(labels, selectedIdx) { _, which ->
                 VideoEnhanceConfig.setUpscalerMode(modes[which])
                 updateUpscalerButton()
-                syncEnhancementMode()
+                showController()
             }
             .setNegativeButton("Cerrar", null)
             .show()

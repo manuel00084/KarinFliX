@@ -68,8 +68,6 @@ android {
 }
 
 dependencies {
-    implementation project(':motion')
-    implementation project(':dsp')
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -110,6 +108,9 @@ dependencies {
     implementation 'androidx.media3:media3-ui-leanback:1.5.1'
     implementation 'androidx.media3:media3-effect:1.5.1'
     implementation 'androidx.media3:media3-common:1.5.1'
+
+    // VLC (used by VlcGlRenderer for 60fps interpolation)
+    implementation 'org.videolan.android:libvlc-all:3.6.3'
 
     // Unit tests
     testImplementation 'junit:junit:4.13.2'

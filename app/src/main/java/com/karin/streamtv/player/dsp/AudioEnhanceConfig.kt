@@ -12,8 +12,7 @@ object AudioEnhanceConfig {
         BASS_BOOST("Bass Boost"),
         SURROUND("3D Surround"),
         DIALOGUE("Diálogos/Noticias"),
-        MUSIC("Música"),
-        SPEAKER("Bocina sencilla")
+        MUSIC("Música")
     }
 
     data class Params(
@@ -81,7 +80,7 @@ object AudioEnhanceConfig {
                 exciterAmount = 0.35f, // detalle espacial
                 harmonicBass = 0.15f,
                 compression = 0.3f,
-                reverbMix = 0.12f,     // ambiente sutil, sin eco
+                reverbMix = 0.25f,     // reverb envolvente
                 masterGain = 1.1f
             )
             Preset.DIALOGUE -> Params(
@@ -110,19 +109,6 @@ object AudioEnhanceConfig {
                 reverbMix = 0.05f,
                 masterGain = 1.08f
             )
-            Preset.SPEAKER -> Params(
-                Preset.SPEAKER, true,
-                bassGain = +4.0f,      // golpe medio que la bocina sí reproduce
-                trebleGain = -0.5f,    // suaviza agudos metálicos
-                subBassGain = -6.0f,   // elimina sub-graves que el driver no puede mover
-                presenceGain = +2.5f,  // claridad de voces
-                surroundWidth = 0.0f,  // mono-ish (bocina única/portátil)
-                exciterAmount = 0.15f,
-                harmonicBass = 0.5f,   // graves percibidos por armónicos
-                compression = 0.55f,   // dinámica pareja, menos distorsión
-                reverbMix = 0.02f,
-                masterGain = 1.1f
-            )
         }
     }
 
@@ -139,12 +125,6 @@ object AudioEnhanceConfig {
     private const val KEY_COMPRESSION = "dsp_compression"
     private const val KEY_REVERB = "dsp_reverb"
     private const val KEY_MASTER = "dsp_master"
-
-    @Volatile
-    private var playbackVolume = 1.0f
-
-    fun getPlaybackVolume(): Float = playbackVolume
-    fun setPlaybackVolume(v: Float) { playbackVolume = v.coerceIn(0.05f, 3f) }
 
     private var prefs: SharedPreferences? = null
 

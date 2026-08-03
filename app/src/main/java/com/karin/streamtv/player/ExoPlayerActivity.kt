@@ -43,13 +43,16 @@ class ExoPlayerActivity : AppCompatActivity() {
     private lateinit var topBar: View
     private lateinit var tvVideoTitle: TextView
     private lateinit var tvEpisodeInfo: TextView
-    private lateinit var btnBack: TextView
+    private lateinit var btnBack: ImageButton
     private lateinit var fpsBadge: TextView
     private lateinit var tvQueueBadge: TextView
     private lateinit var playStateOverlay: TextView
     private lateinit var controllerPanel: View
+    private lateinit var centerControls: View
     private lateinit var seekBar: SeekBar
     private lateinit var btnPlayPause: ImageButton
+    private lateinit var btnRewind: ImageButton
+    private lateinit var btnForward: ImageButton
     private lateinit var btnPrev: TextView
     private lateinit var btnNext: TextView
     private lateinit var tvPosition: TextView
@@ -72,7 +75,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     private val hideController = Runnable {
         topBar.visibility = View.GONE
         controllerPanel.visibility = View.GONE
-        btnBack.visibility = View.GONE
+        centerControls.visibility = View.GONE
     }
     private var animeId: String = ""
     private var episodeNumber: Int = 0
@@ -115,8 +118,11 @@ class ExoPlayerActivity : AppCompatActivity() {
         tvQueueBadge = findViewById(R.id.tv_queue_badge)
         playStateOverlay = findViewById(R.id.tv_play_state)
         controllerPanel = findViewById(R.id.controller_panel)
+        centerControls = findViewById(R.id.center_controls)
         seekBar = findViewById(R.id.seek_bar)
         btnPlayPause = findViewById(R.id.btn_play_pause)
+        btnRewind = findViewById(R.id.btn_rewind)
+        btnForward = findViewById(R.id.btn_forward)
         btnPrev = findViewById(R.id.btn_prev)
         btnNext = findViewById(R.id.btn_next)
         tvPosition = findViewById(R.id.tv_position)
@@ -158,7 +164,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             ?: ""
         if (referer.startsWith("http://")) referer = "https://" + referer.substringAfter("http://")
 
-        useEnhancedMode = isEnhancementActive()
+        useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled()
 
         val dbgExtra = intent.getIntExtra("debug_mode", -1)
         if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
@@ -191,6 +197,8 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnBack.onActionKey { finish() }
         playerContainer.setOnClickListener { showController() }
         btnPlayPause.setOnClickListener { togglePlayPause() }
+        btnRewind.setOnClickListener { seekRelative(-10000) }
+        btnForward.setOnClickListener { seekRelative(10000) }
         if (playlist.isEmpty()) {
             btnPrev.visibility = View.GONE
             btnNext.visibility = View.GONE
@@ -222,7 +230,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun showController() {
         topBar.visibility = View.VISIBLE
         controllerPanel.visibility = View.VISIBLE
-        btnBack.visibility = View.GONE
+        centerControls.visibility = View.VISIBLE
         updateProgress()
         controllerHandler.removeCallbacks(hideController)
         controllerHandler.postDelayed(hideController, 4000)
@@ -257,6 +265,13 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun formatTime(ms: Long): String {
         val s = ms / 1000
         return String.format("%d:%02d", s / 60, s % 60)
+    }
+
+    private fun seekRelative(ms: Long) {
+        val p = player ?: return
+        val newPos = (p.currentPosition + ms).coerceIn(0, p.duration.coerceAtLeast(0))
+        p.seekTo(newPos)
+        showController()
     }
 
     private fun showQualityDialog() {
@@ -362,7 +377,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
                 VideoEnhanceConfig.applyPreset(presets[which])
                 updateVideoProfileButton()
-                syncEnhancementMode()
+                showController()
             }
             .setNegativeButton("Cerrar", null)
             .show()
@@ -400,10 +415,6 @@ class ExoPlayerActivity : AppCompatActivity() {
         if (enabling && !useEnhancedMode) {
             useEnhancedMode = true
             restartWithEnhanced()
-        } else if (!enabling && useEnhancedMode && !isEnhancementActive()) {
-            switchToStandardPlayback()
-        } else {
-            showController()
         }
     }
 
@@ -412,8 +423,6 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun restartWithEnhanced() {
-        isPlainFallback = false
-        fallbackTriggered = false
         val p = player
         pendingResumeMs = if (p != null && p.duration > 0) p.currentPosition else -1
         p?.release()
@@ -428,40 +437,6 @@ class ExoPlayerActivity : AppCompatActivity() {
         } else {
             pendingResumeMs = -1
             Toast.makeText(this, "MotionX2 60p se aplicará al próximo video", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun isEnhancementActive(): Boolean =
-        VideoEnhanceConfig.isEnabled() ||
-            VideoEnhanceConfig.isInterpolationEnabled() ||
-            VideoEnhanceConfig.getUpscalerMode() != VideoEnhanceConfig.UpscalerMode.OFF
-
-    private fun syncEnhancementMode() {
-        val active = isEnhancementActive()
-        when {
-            active && !useEnhancedMode -> {
-                useEnhancedMode = true
-                restartWithEnhanced()
-            }
-            !active && useEnhancedMode -> switchToStandardPlayback()
-            else -> showController()
-        }
-    }
-
-    private fun switchToStandardPlayback() {
-        useEnhancedMode = false
-        isPlainFallback = true
-        Log.i(TAG, "Switching to native playback (sin pipeline GL)")
-        fpsBadge.visibility = View.GONE
-        processor?.release()
-        processor = null
-        player?.release()
-        player = null
-        playerContainer.removeAllViews()
-        if (currentMegaResolved != null) {
-            playVideoMega(currentMegaResolved!!)
-        } else if (currentVideoUrl.isNotBlank()) {
-            playVideo(currentVideoUrl)
         }
     }
 
@@ -482,7 +457,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             .setSingleChoiceItems(labels, selectedIdx) { _, which ->
                 VideoEnhanceConfig.setUpscalerMode(modes[which])
                 updateUpscalerButton()
-                syncEnhancementMode()
+                showController()
             }
             .setNegativeButton("Cerrar", null)
             .show()

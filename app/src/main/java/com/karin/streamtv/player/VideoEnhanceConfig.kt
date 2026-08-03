@@ -25,8 +25,8 @@ object VideoEnhanceConfig {
     }
 
     data class Params(
-        val preset: Preset = Preset.OFF,
-        val enabled: Boolean = false,
+        val preset: Preset = Preset.ANIME,
+        val enabled: Boolean = true,
         val saturation: Float = 1.0f,    // 0.5..2.0
         val contrast: Float = 1.0f,       // 0.5..2.0
         val brightness: Float = 0.0f,     // -0.5..+0.5
@@ -100,21 +100,10 @@ object VideoEnhanceConfig {
         }
     }
 
-    // Técnica de suavizado de frames (reemplaza la interpolación óptica 60p):
-    //  DOUBLING -> repite cada frame (24/25/30 -> ~48/50/60)
-    //  BLEND    -> mezcla alpha de los 2 frames vecinos (más suave)
-    enum class InterpolationMode(val label: String, val intValue: Int) {
-        DOUBLING("Frame x2", 1),
-        BLEND("Suavizado", 2),
-        INTERP("Interpolado", 3)
-    }
-
-    const val KEY_INTERPOLATION = "interpolation_enabled"
-    const val KEY_INTERPOLATION_MODE = "interpolation_mode"
-
     private const val PREF_NAME = "karin_video_enhance"
     private const val KEY_PRESET = "enhance_preset"
     private const val KEY_ENABLED = "enhance_enabled"
+    private const val KEY_INTERPOLATION = "interpolation_enabled"
     private const val KEY_SATURATION = "saturation"
     private const val KEY_CONTRAST = "contrast"
     private const val KEY_BRIGHTNESS = "brightness"
@@ -124,7 +113,6 @@ object VideoEnhanceConfig {
     private const val KEY_DEBAND = "deband"
     private const val KEY_DEBUG_MODE = "debug_mode"
     private const val KEY_UPSCALER_MODE = "upscaler_mode"
-    private const val KEY_DRS = "dynamic_resolution"
 
     private var prefs: SharedPreferences? = null
 
@@ -132,30 +120,19 @@ object VideoEnhanceConfig {
         prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
     }
 
-    fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, false) ?: false
+    fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, true) ?: true
     fun setEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_ENABLED, v)?.apply() }
 
     fun preset(): Preset {
-        val idx = prefs?.getInt(KEY_PRESET, 0) ?: 0 // default OFF = render nativo limpio
-        return Preset.entries.getOrElse(idx.coerceIn(0, Preset.entries.size - 1)) { Preset.OFF }
+        val idx = prefs?.getInt(KEY_PRESET, 1) ?: 1 // default ANIME
+        return Preset.entries.getOrElse(idx.coerceIn(0, Preset.entries.size - 1)) { Preset.ANIME }
     }
     fun setPreset(p: Preset) { prefs?.edit()?.putInt(KEY_PRESET, p.ordinal)?.apply() }
 
     fun isInterpolationEnabled(): Boolean = prefs?.getBoolean(KEY_INTERPOLATION, false) ?: false
     fun setInterpolationEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_INTERPOLATION, v)?.apply() }
 
-    fun interpolationMode(): InterpolationMode {
-        val idx = prefs?.getInt(KEY_INTERPOLATION_MODE, InterpolationMode.DOUBLING.ordinal) ?: InterpolationMode.DOUBLING.ordinal
-        return InterpolationMode.entries.getOrElse(idx.coerceIn(0, InterpolationMode.entries.size - 1)) { InterpolationMode.DOUBLING }
-    }
-    fun setInterpolationMode(m: InterpolationMode) { prefs?.edit()?.putInt(KEY_INTERPOLATION_MODE, m.ordinal)?.apply() }
-
-    fun qualityLabel(): String = when {
-        !isInterpolationEnabled() -> "OFF"
-        interpolationMode() == InterpolationMode.INTERP -> "60p"
-        interpolationMode() == InterpolationMode.BLEND -> "BLEND"
-        else -> "x2"
-    }
+    fun qualityLabel(): String = if (isInterpolationEnabled()) "60p" else "OFF"
 
     fun getSaturation(): Float = prefs?.getFloat(KEY_SATURATION, 1.0f) ?: 1.0f
     fun setSaturation(v: Float) { prefs?.edit()?.putFloat(KEY_SATURATION, v)?.apply() }
@@ -186,12 +163,6 @@ object VideoEnhanceConfig {
         return UpscalerMode.entries.getOrElse(idx.coerceIn(0, UpscalerMode.entries.size - 1)) { UpscalerMode.OFF }
     }
     fun setUpscalerMode(mode: UpscalerMode) { prefs?.edit()?.putInt(KEY_UPSCALER_MODE, mode.ordinal)?.apply() }
-
-    // DRS (Dynamic Resolution Scaling) baja la resolución interna durante la
-    // interpolación cuando el dispositivo no da a basto. Desactivado por defecto
-    // para máxima nitidez; los dispositivos débiles pueden reactivarlo.
-    fun isDynamicResolutionEnabled(): Boolean = prefs?.getBoolean(KEY_DRS, false) ?: false
-    fun setDynamicResolutionEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_DRS, v)?.apply() }
 
     fun debugModeLabel(mode: Int): String = when (mode) {
         1 -> "PREV"
