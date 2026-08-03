@@ -25,8 +25,8 @@ object VideoEnhanceConfig {
     }
 
     data class Params(
-        val preset: Preset = Preset.ANIME,
-        val enabled: Boolean = true,
+        val preset: Preset = Preset.OFF,
+        val enabled: Boolean = false,
         val saturation: Float = 1.0f,    // 0.5..2.0
         val contrast: Float = 1.0f,       // 0.5..2.0
         val brightness: Float = 0.0f,     // -0.5..+0.5
@@ -113,6 +113,7 @@ object VideoEnhanceConfig {
     private const val KEY_DEBAND = "deband"
     private const val KEY_DEBUG_MODE = "debug_mode"
     private const val KEY_UPSCALER_MODE = "upscaler_mode"
+    private const val KEY_DRS = "dynamic_resolution"
 
     private var prefs: SharedPreferences? = null
 
@@ -120,12 +121,12 @@ object VideoEnhanceConfig {
         prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
     }
 
-    fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, true) ?: true
+    fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, false) ?: false
     fun setEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_ENABLED, v)?.apply() }
 
     fun preset(): Preset {
-        val idx = prefs?.getInt(KEY_PRESET, 1) ?: 1 // default ANIME
-        return Preset.entries.getOrElse(idx.coerceIn(0, Preset.entries.size - 1)) { Preset.ANIME }
+        val idx = prefs?.getInt(KEY_PRESET, 0) ?: 0 // default OFF = render nativo limpio
+        return Preset.entries.getOrElse(idx.coerceIn(0, Preset.entries.size - 1)) { Preset.OFF }
     }
     fun setPreset(p: Preset) { prefs?.edit()?.putInt(KEY_PRESET, p.ordinal)?.apply() }
 
@@ -163,6 +164,12 @@ object VideoEnhanceConfig {
         return UpscalerMode.entries.getOrElse(idx.coerceIn(0, UpscalerMode.entries.size - 1)) { UpscalerMode.OFF }
     }
     fun setUpscalerMode(mode: UpscalerMode) { prefs?.edit()?.putInt(KEY_UPSCALER_MODE, mode.ordinal)?.apply() }
+
+    // DRS (Dynamic Resolution Scaling) baja la resolución interna durante la
+    // interpolación cuando el dispositivo no da a basto. Desactivado por defecto
+    // para máxima nitidez; los dispositivos débiles pueden reactivarlo.
+    fun isDynamicResolutionEnabled(): Boolean = prefs?.getBoolean(KEY_DRS, false) ?: false
+    fun setDynamicResolutionEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_DRS, v)?.apply() }
 
     fun debugModeLabel(mode: Int): String = when (mode) {
         1 -> "PREV"

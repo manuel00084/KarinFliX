@@ -442,7 +442,7 @@ class Media3SixtyFpsProcessor(
                         }
                         lowFpsStreak = 0
                         highFpsStreak = 0
-                    } else if (outputFps < 28f && renderScale > 0.7f) {
+                    } else if (VideoEnhanceConfig.isDynamicResolutionEnabled() && outputFps < 28f && renderScale > 0.7f) {
                         lowFpsStreak++
                         if (lowFpsStreak >= 2) {
                             lowFpsStreak = 0
