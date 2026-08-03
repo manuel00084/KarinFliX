@@ -81,6 +81,7 @@ class MainActivity : FragmentActivity() {
             if (isTvDevice) {
                 etSearch.isFocusableInTouchMode = false
             }
+            rowSites.columnCount = computeSiteColumns()
 
             rvSearchResults.layoutManager = LinearLayoutManager(this)
             rvSearchResults.adapter = searchAdapter
@@ -301,6 +302,18 @@ class MainActivity : FragmentActivity() {
             startActivity(intent)
         } else {
             Toast.makeText(this, "Sitio no disponible", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun computeSiteColumns(): Int {
+        val widthPx = resources.displayMetrics.widthPixels
+        val density = resources.displayMetrics.density
+        val widthDp = widthPx / density
+        return when {
+            widthDp >= 960 -> 8
+            widthDp >= 720 -> 6
+            widthDp >= 540 -> 4
+            else -> 3
         }
     }
 

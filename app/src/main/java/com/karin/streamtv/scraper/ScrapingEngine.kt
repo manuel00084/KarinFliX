@@ -23,8 +23,10 @@ object ScrapingEngine {
     var minRequestIntervalMs: Long = 200L
     var maxRetries: Int = 2
     var memCacheMaxSize: Int = 60
-    var memCacheTtlMs: Long = 10 * 60 * 1000L
-    var diskCacheTtlMs: Long = 60 * 60 * 1000L
+    var memCacheTtlMs: Long = 15 * 60 * 1000L
+    var diskCacheTtlMs: Long = 6 * 60 * 60 * 1000L
+    var staleCacheMaxTtlMs: Long = 14L * 24 * 60 * 60 * 1000L
+    var diskCacheMaxBytes: Long = 20L * 1024 * 1024
     var maxConcurrentRequests: Int = 8
     var circuitBreakerThreshold: Int = 3
     var circuitBreakerCooldownMs: Long = 5 * 60 * 1000L
@@ -101,7 +103,7 @@ object ScrapingEngine {
     // region --- Disk Cache ---
     fun init(context: Context) {
         appContext = context.applicationContext
-        cacheDir = File(context.cacheDir, "scraper_cache").also { it.mkdirs() }
+        cacheDir = context.getDir("scraper_cache", Context.MODE_PRIVATE).also { it.mkdirs() }
         Log.i(TAG, "Disk cache at: ${cacheDir?.absolutePath}")
     }
 
@@ -115,15 +117,21 @@ object ScrapingEngine {
         val file = diskCacheFile(key) ?: return
         try {
             file.writeText(html, Charsets.UTF_8)
+            evictIfNeeded()
         } catch (e: Exception) {
             Log.w(TAG, "Disk cache write failed: ${e.message}")
         }
     }
 
-    private fun diskGet(key: String): String? {
+    private fun diskGet(key: String, allowStale: Boolean = false): String? {
         val file = diskCacheFile(key) ?: return null
         if (!file.exists()) return null
-        if (System.currentTimeMillis() - file.lastModified() > diskCacheTtlMs) {
+        val ageMs = System.currentTimeMillis() - file.lastModified()
+        if (!allowStale && ageMs > diskCacheTtlMs) {
+            file.delete()
+            return null
+        }
+        if (allowStale && ageMs > staleCacheMaxTtlMs) {
             file.delete()
             return null
         }
@@ -141,6 +149,22 @@ object ScrapingEngine {
 
     private fun diskClear() {
         cacheDir?.listFiles()?.forEach { it.delete() }
+    }
+
+    private fun evictIfNeeded() {
+        val dir = cacheDir ?: return
+        val files = dir.listFiles()?.toMutableList() ?: return
+        var total = files.sumOf { it.length() }
+        if (total <= diskCacheMaxBytes) return
+        files.sortBy { it.lastModified() }
+        for (f in files) {
+            if (total <= diskCacheMaxBytes) break
+            val len = f.length()
+            if (f.delete()) {
+                total -= len
+                Log.i(TAG, "Disk cache evicted ${f.name}")
+            }
+        }
     }
     // endregion
 
@@ -240,6 +264,12 @@ object ScrapingEngine {
         val metricsStart = System.currentTimeMillis()
 
         if (!checkCircuitBreaker(siteName)) {
+            val staleDoc = staleDocOrNull(key, url)
+            if (staleDoc != null) {
+                Log.w(TAG, "Circuit open, serving stale cache for $url ($siteName)")
+                emitMetrics(siteName, url, true, "circuit_stale", 0, System.currentTimeMillis() - metricsStart, true)
+                return staleDoc
+            }
             emitMetrics(siteName, url, false, "circuit_open", 0, System.currentTimeMillis() - metricsStart, false)
             return null
         }
@@ -267,7 +297,7 @@ object ScrapingEngine {
             }
         }
 
-        return withConcurrencyLimit {
+        val networkResult = withConcurrencyLimit {
             var attempts = 0
             var cfBypassAttempted = false
             while (attempts < maxRetries) {
@@ -351,6 +381,16 @@ object ScrapingEngine {
             emitMetrics(siteName, url, false, "network", attempts, System.currentTimeMillis() - metricsStart, false)
             null
         }
+
+        if (networkResult == null) {
+            val staleDoc = staleDocOrNull(key, url)
+            if (staleDoc != null) {
+                Log.w(TAG, "Network failed, serving stale disk cache for $url ($siteName)")
+                emitMetrics(siteName, url, true, "stale_disk", 0, System.currentTimeMillis() - metricsStart, true)
+                return staleDoc
+            }
+        }
+        return networkResult
     }
 
     fun invalidate(key: String) {
@@ -426,6 +466,12 @@ object ScrapingEngine {
     }
 
     private fun buildCacheKey(url: String): String = url.trimEnd('/')
+
+    /** Read a stale disk entry (past fresh TTL) and parse it, if still within stale max TTL. */
+    private fun staleDocOrNull(key: String, url: String): Document? {
+        val html = diskGet(key, allowStale = true) ?: return null
+        return safeParse(html, url)
+    }
 
     private fun emitMetrics(site: String, url: String, cached: Boolean, source: String, attempts: Int, durationMs: Long, success: Boolean) {
         onMetrics?.invoke(ScrapeMetrics(site, url, cached, source, attempts, durationMs, success))
