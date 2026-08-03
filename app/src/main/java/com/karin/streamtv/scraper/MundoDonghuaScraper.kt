@@ -51,3 +51,7 @@ object MundoDonghuaScraper : GenericScraper() {
         )
     }
 }
+
+class MundoDonghuaScraperProvider : ScraperProvider {
+    override val scraper: BaseScraper = MundoDonghuaScraper
+}

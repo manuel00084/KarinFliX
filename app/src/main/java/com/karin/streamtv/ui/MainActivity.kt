@@ -21,13 +21,13 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.karin.streamtv.R
 import com.karin.streamtv.model.SiteConfig
-import com.karin.streamtv.scraper.ScrapingEngine
 import com.karin.streamtv.scraper.ScraperRegistry
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.onActionKey
 import com.karin.streamtv.util.DiskImageCache
 import com.karin.streamtv.util.SearchManager
+import com.karin.streamtv.util.SiteBranding
 import com.karin.streamtv.util.SiteManager
 import com.karin.streamtv.util.VoiceSearchHelper
 import com.karin.streamtv.util.WatchHistory
@@ -63,31 +63,11 @@ class MainActivity : FragmentActivity() {
     private val historyAdapter = HistoryAdapter()
     private val continueAdapter = ContinueWatchingAdapter()
 
-    private val brandColors = mapOf(
-        "JKAnime" to Color.parseColor("#1E88E5"),
-        "LatAnime" to Color.parseColor("#43A047"),
-        "DoramasYT" to Color.parseColor("#00BCD4"),
-        "MundoDonghua" to Color.parseColor("#8E24AA"),
-        "RetroTVE" to Color.parseColor("#FF9800"),
-        "LaCartoons" to Color.parseColor("#E91E63"),
-        "FrikiSeries" to Color.parseColor("#1B5E20"),
-    )
-
-    private val SITE_LOGOS = mapOf(
-        "JKAnime" to "https://cdn.jkdesa.com/assets3/css/img/jkanimenet.png?v=2.0.184",
-        "LatAnime" to "https://latanime.org/img/logito.png",
-        "DoramasYT" to "https://www.doramasyt.com/img/logo6.png?v=1718135438",
-        "MundoDonghua" to "https://mundodonghua.com/images/favicon.png",
-        "RetroTVE" to "https://retrotve.com/wp-content/uploads/2024/11/cropped-android-chrome-512x512-1-192x192.png",
-        "FrikiSeries" to "https://www.frikiserie.com/assets/icon/favicon.png",
-    )
-
     override fun onCreate(savedInstanceState: Bundle?) {
         try {
             super.onCreate(savedInstanceState)
             setContentView(R.layout.activity_main)
 
-            AppPreferences.init(this)
             siteManager = SiteManager(this)
             rowSites = findViewById(R.id.row_sites)
             scrollSites = findViewById(R.id.scroll_sites)
@@ -101,7 +81,6 @@ class MainActivity : FragmentActivity() {
             if (isTvDevice) {
                 etSearch.isFocusableInTouchMode = false
             }
-            ScrapingEngine.init(this)
 
             rvSearchResults.layoutManager = LinearLayoutManager(this)
             rvSearchResults.adapter = searchAdapter
@@ -142,6 +121,10 @@ class MainActivity : FragmentActivity() {
                 startActivity(Intent(this, com.karin.streamtv.karinlink.KarinLinkActivity::class.java))
             }
             btnKarinLink.onActionKey { btnKarinLink.performClick() }
+
+            val btnFiles = findViewById<TextView>(R.id.btn_files)
+            btnFiles.setOnClickListener { openVideoFilePicker() }
+            btnFiles.onActionKey { btnFiles.performClick() }
 
             historySection = findViewById(R.id.history_section)
             rvHistory = findViewById(R.id.rv_history)
@@ -200,6 +183,30 @@ class MainActivity : FragmentActivity() {
         VoiceSearchHelper.handleResult(requestCode, resultCode, data, etSearch)
         if (requestCode == VoiceSearchHelper.REQUEST_VOICE_SEARCH && etSearch.text.isNotBlank()) {
             performGlobalSearch()
+        }
+        if (requestCode == REQUEST_PICK_VIDEO && resultCode == RESULT_OK && data?.data != null) {
+            val uri = data.data!!
+            try {
+                val intent = Intent(this, com.karin.streamtv.player.ExoPlayerActivity::class.java).apply {
+                    putExtra("video_url", uri.toString())
+                    putExtra("referer", "")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(this, "No se pudo abrir el archivo", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun openVideoFilePicker() {
+        try {
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "video/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            startActivityForResult(Intent.createChooser(intent, "Seleccionar video"), REQUEST_PICK_VIDEO)
+        } catch (e: Exception) {
+            Toast.makeText(this, "No hay selector de archivos disponible", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -335,7 +342,7 @@ class MainActivity : FragmentActivity() {
         val plateH = (36 * density).toInt()
         val bmp = if (cachedBmp != null) cachedBmp else {
             val iconText = site.icon.take(2).padEnd(2).take(2)
-            val color = brandColors[site.name] ?: Color.parseColor("#555555")
+            val color = SiteBranding.brandColors[site.name] ?: Color.parseColor("#555555")
             val size = resources.getDimensionPixelSize(R.dimen.card_icon_size)
             val newBmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { b ->
                 val c = Canvas(b)
@@ -354,7 +361,7 @@ class MainActivity : FragmentActivity() {
         }
         ivLogo.setImageBitmap(DiskImageCache.renderLogoPlate(bmp, plateW, plateH))
 
-        val faviconUrl = SITE_LOGOS[site.name]
+        val faviconUrl = SiteBranding.siteLogos[site.name]
         lifecycleScope.launch {
             val plate = withContext(Dispatchers.IO) {
                 val host = runCatching { java.net.URI(site.url).host }.getOrNull()
@@ -542,5 +549,9 @@ class MainActivity : FragmentActivity() {
             val tvEp: TextView = v.findViewById(R.id.tv_continue_ep)
             val progressBar: android.widget.ProgressBar = v.findViewById(R.id.progress_bar_continue)
         }
+    }
+
+    companion object {
+        private const val REQUEST_PICK_VIDEO = 4101
     }
 }

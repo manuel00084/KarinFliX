@@ -23,3 +23,7 @@ object RetroTVEscraper : GenericScraper() {
         )
     }
 }
+
+class RetroTVEscraperProvider : ScraperProvider {
+    override val scraper: BaseScraper = RetroTVEscraper
+}

@@ -3,6 +3,8 @@ package com.karin.streamtv.ui.tv
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
+import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.leanback.app.BrowseSupportFragment
@@ -17,8 +19,8 @@ import androidx.leanback.widget.RowPresenter
 import com.karin.streamtv.R
 import com.karin.streamtv.model.SiteConfig
 import com.karin.streamtv.model.Episode
-import com.karin.streamtv.scraper.ScrapingEngine
-import com.karin.streamtv.util.AppPreferences
+import com.karin.streamtv.scraper.ScraperRegistry
+import com.karin.streamtv.util.SiteBranding
 import com.karin.streamtv.util.SiteManager
 import com.karin.streamtv.util.WatchHistory
 import com.karin.streamtv.ui.SiteBrowserActivity
@@ -28,47 +30,56 @@ class TvMainActivity : FragmentActivity() {
     private lateinit var siteManager: SiteManager
     private lateinit var rowsAdapter: ArrayObjectAdapter
 
-    private val brandColors = mapOf(
-        "JKAnime" to Color.parseColor("#1E88E5"),
-        "LatAnime" to Color.parseColor("#43A047"),
-        "DoramasYT" to Color.parseColor("#00BCD4"),
-        "MundoDonghua" to Color.parseColor("#8E24AA"),
-        "RetroTVE" to Color.parseColor("#FF9800"),
-        "LaCartoons" to Color.parseColor("#E91E63"),
-        "FrikiSeries" to Color.parseColor("#1B5E20"),
-    )
-
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_tv_main)
+        try {
+            super.onCreate(savedInstanceState)
+            setContentView(R.layout.activity_tv_main)
 
-        ScrapingEngine.init(this)
-        AppPreferences.init(this)
-        siteManager = SiteManager(this)
+            siteManager = SiteManager(this)
 
-        val browseFragment = supportFragmentManager
-            .findFragmentById(R.id.browse_container) as BrowseSupportFragment
+            val browseFragment = supportFragmentManager
+                .findFragmentById(R.id.browse_container) as? BrowseSupportFragment
 
-        browseFragment.apply {
-            title = "KarinFLiX"
-            brandColor = ContextCompat.getColor(this@TvMainActivity, R.color.azul_rey)
-            headersState = BrowseSupportFragment.HEADERS_ENABLED
-            isHeadersTransitionOnBackEnabled = true
-
-            rowsAdapter = ArrayObjectAdapter(ListRowPresenter())
-            adapter = rowsAdapter
-
-            setOnItemViewClickedListener(ItemViewClickedListener())
-            setOnSearchClickedListener {
-                startActivity(Intent(this@TvMainActivity, SiteBrowserActivity::class.java).apply {
-                    putExtra("site_id", "search")
-                    putExtra("site_name", "Buscar")
-                    putExtra("site_url", "")
-                })
+            if (browseFragment == null) {
+                showError("BrowseSupportFragment is null")
+                return
             }
-        }
 
-        loadRows()
+            browseFragment.apply {
+                title = "KarinFLiX"
+                brandColor = ContextCompat.getColor(this@TvMainActivity, R.color.azul_rey)
+                headersState = BrowseSupportFragment.HEADERS_ENABLED
+                isHeadersTransitionOnBackEnabled = true
+
+                rowsAdapter = ArrayObjectAdapter(ListRowPresenter())
+                adapter = rowsAdapter
+
+                setOnItemViewClickedListener(ItemViewClickedListener())
+                setOnSearchClickedListener {
+                    startActivity(Intent(this@TvMainActivity, SiteBrowserActivity::class.java).apply {
+                        putExtra("site_id", "search")
+                        putExtra("site_name", "Buscar")
+                        putExtra("site_url", "")
+                    })
+                }
+            }
+
+            loadRows()
+        } catch (e: Exception) {
+            Log.e("TvMainActivity", "FATAL onCreate: ${e.message}", e)
+            showError("Crash: ${e.message}\n\n${e.stackTraceToString()}")
+        }
+    }
+
+    private fun showError(msg: String) {
+        Log.e("TvMainActivity", msg)
+        val tv = TextView(this)
+        tv.text = msg
+        tv.setTextSize(12f)
+        tv.setTextColor(Color.WHITE)
+        tv.setBackgroundColor(Color.BLACK)
+        tv.setPadding(24, 24, 24, 24)
+        setContentView(tv)
     }
 
     override fun onResume() {
@@ -77,46 +88,50 @@ class TvMainActivity : FragmentActivity() {
     }
 
     private fun loadRows() {
-        rowsAdapter.clear()
+        try {
+            rowsAdapter.clear()
 
-        val sites = siteManager.getSites()
-        if (sites.isNotEmpty()) {
-            val sitePresenter = TvSiteCardPresenter(brandColors)
-            val siteAdapter = ArrayObjectAdapter(sitePresenter)
-            sites.forEach { siteAdapter.add(it) }
-            rowsAdapter.add(ListRow(HeaderItem(0, "Sitios"), siteAdapter))
-        }
-
-        val continueEntries = WatchHistory.getContinueWatching(10)
-        if (continueEntries.isNotEmpty()) {
-            val continuePresenter = TvEpisodeCardPresenter()
-            val continueAdapter = ArrayObjectAdapter(continuePresenter)
-            continueEntries.forEach { entry ->
-                continueAdapter.add(Episode(
-                    title = entry.title,
-                    url = entry.episodeUrl,
-                    thumbnailUrl = entry.thumbnailUrl,
-                    siteName = entry.siteName,
-                    episodeNum = "Ep. ${entry.episodeNumber}"
-                ))
+            val sites = siteManager.getSites()
+            if (sites.isNotEmpty()) {
+                val sitePresenter = TvSiteCardPresenter()
+                val siteAdapter = ArrayObjectAdapter(sitePresenter)
+                sites.forEach { siteAdapter.add(it) }
+                rowsAdapter.add(ListRow(HeaderItem(0, "Sitios"), siteAdapter))
             }
-            rowsAdapter.add(ListRow(HeaderItem(1, "Continue viendo"), continueAdapter))
-        }
 
-        val recentHistory = WatchHistory.getRecentEntries(10)
-        if (recentHistory.isNotEmpty()) {
-            val historyPresenter = TvEpisodeCardPresenter()
-            val historyAdapter = ArrayObjectAdapter(historyPresenter)
-            recentHistory.forEach { entry ->
-                historyAdapter.add(Episode(
-                    title = entry.title,
-                    url = entry.episodeUrl,
-                    thumbnailUrl = entry.thumbnailUrl,
-                    siteName = entry.siteName,
-                    episodeNum = "Ep. ${entry.episodeNumber}"
-                ))
+            val continueEntries = WatchHistory.getContinueWatching(10)
+            if (continueEntries.isNotEmpty()) {
+                val continuePresenter = TvEpisodeCardPresenter()
+                val continueAdapter = ArrayObjectAdapter(continuePresenter)
+                continueEntries.forEach { entry ->
+                    continueAdapter.add(Episode(
+                        title = entry.title,
+                        url = entry.episodeUrl,
+                        thumbnailUrl = entry.thumbnailUrl,
+                        siteName = entry.siteName,
+                        episodeNum = "Ep. ${entry.episodeNumber}"
+                    ))
+                }
+                rowsAdapter.add(ListRow(HeaderItem(1, "Continue viendo"), continueAdapter))
             }
-            rowsAdapter.add(ListRow(HeaderItem(2, "Historial"), historyAdapter))
+
+            val recentHistory = WatchHistory.getRecentEntries(10)
+            if (recentHistory.isNotEmpty()) {
+                val historyPresenter = TvEpisodeCardPresenter()
+                val historyAdapter = ArrayObjectAdapter(historyPresenter)
+                recentHistory.forEach { entry ->
+                    historyAdapter.add(Episode(
+                        title = entry.title,
+                        url = entry.episodeUrl,
+                        thumbnailUrl = entry.thumbnailUrl,
+                        siteName = entry.siteName,
+                        episodeNum = "Ep. ${entry.episodeNumber}"
+                    ))
+                }
+                rowsAdapter.add(ListRow(HeaderItem(2, "Historial"), historyAdapter))
+            }
+        } catch (e: Exception) {
+            Log.e("TvMainActivity", "loadRows error: ${e.message}", e)
         }
     }
 

@@ -9,10 +9,10 @@ import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-class LinkServer {
+class LinkClient {
 
     companion object {
-        private const val TAG = "LinkServer"
+        private const val TAG = "LinkClient"
     }
 
     private var webSocket: WebSocket? = null

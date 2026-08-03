@@ -22,3 +22,7 @@ object DoramaYtScraper : GenericScraper() {
         )
     }
 }
+
+class DoramaYtScraperProvider : ScraperProvider {
+    override val scraper: BaseScraper = DoramaYtScraper
+}

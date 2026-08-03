@@ -1,5 +1,7 @@
 package com.karin.streamtv.scraper
 
+import java.util.ServiceLoader
+
 object ScraperRegistry {
     private val scrapers = mutableMapOf<String, BaseScraper>()
     private var initialized = false
@@ -7,14 +9,12 @@ object ScraperRegistry {
     private fun ensureInitialized() {
         if (initialized) return
         initialized = true
-        register(LatAnimeScraper)
 
-        register(JKAnimeScraper)
-        register(DoramaYtScraper)
-        register(MundoDonghuaScraper)
-        register(RetroTVEscraper)
-        register(LaCartoonsScraper)
-        register(FrikiserieScraper)
+        // Load scrapers dynamically via ServiceLoader
+        ServiceLoader.load(ScraperProvider::class.java).iterator().forEachRemaining { provider ->
+            val scraper = provider.scraper
+            scrapers[scraper.name] = scraper
+        }
     }
 
     fun register(scraper: BaseScraper) {

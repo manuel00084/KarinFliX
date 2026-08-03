@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
+import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
@@ -14,13 +15,17 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.karin.streamtv.R
 import com.karin.streamtv.model.Episode
+import com.karin.streamtv.model.PlaylistItem
 import com.karin.streamtv.model.VideoSource
 import com.karin.streamtv.scraper.DynamicParser
+import com.karin.streamtv.scraper.ScraperRegistry
 import com.karin.streamtv.scraper.ScrapingEngine
 import com.karin.streamtv.scraper.ServerExtractor
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.DiskImageCache
 import com.karin.streamtv.util.GamepadHelper
+import com.karin.streamtv.util.PlaylistQueue
+import com.karin.streamtv.util.ServerHelper
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -41,6 +46,9 @@ class SeriesDetailActivity : AppCompatActivity() {
 
     private var seriesUrl: String = ""
     private var seriesTitle: String = ""
+    private var pendingQueue: List<PlaylistItem>? = null
+    private var selectedCount = 0
+    private lateinit var btnPlaylist: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,8 +98,59 @@ class SeriesDetailActivity : AppCompatActivity() {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
+        btnPlaylist = findViewById(R.id.btn_playlist)
+        btnPlaylist.setOnClickListener { onPlaylistButtonClick() }
+        btnPlaylist.onActionKey { onPlaylistButtonClick() }
+
         val isTv = DeviceUtils.isTvDevice(this)
         rvEpisodes.layoutManager = GridLayoutManager(this, if (isTv) 4 else 3)
+        if (isTv) {
+            // Configurar foco para TV
+            rvEpisodes.isFocusable = true
+            rvEpisodes.isFocusableInTouchMode = true
+            rvEpisodes.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+
+            // DPAD_UP desde grid -> barra superior
+            rvEpisodes.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    val firstVisible = (rvEpisodes.layoutManager as GridLayoutManager).findFirstVisibleItemPosition()
+                    if (firstVisible == 0) {
+                        findViewById<TextView>(R.id.btn_settings).requestFocus()
+                        return@setOnKeyListener true
+                    }
+                }
+                false
+            }
+
+            // Navegación DPAD entre barra superior y grid + horizontal en barra
+            val topBarButtons = listOf(
+                findViewById<TextView>(R.id.btn_home),
+                findViewById<TextView>(R.id.btn_directory),
+                findViewById<TextView>(R.id.btn_settings),
+                btnPlaylist
+            )
+            topBarButtons.forEachIndexed { index, btn ->
+                btn.setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        when (keyCode) {
+                            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                rvEpisodes.requestFocus()
+                                true
+                            }
+                            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                if (index > 0) topBarButtons[index - 1].requestFocus()
+                                true
+                            }
+                            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                if (index < topBarButtons.lastIndex) topBarButtons[index + 1].requestFocus()
+                                true
+                            }
+                            else -> false
+                        }
+                    } else false
+                }
+            }
+        }
 
         loadSeries()
     }
@@ -161,7 +220,13 @@ class SeriesDetailActivity : AppCompatActivity() {
             rvEpisodes.visibility = android.view.View.VISIBLE
             rvEpisodes.adapter = EpisodeAdapter(page.episodes, seriesUrl) { episode ->
                 openEpisode(episode)
+            }.apply {
+                onSelectionCountChanged = { count ->
+                    selectedCount = count
+                    updatePlaylistButton()
+                }
             }
+            if (DeviceUtils.isTvDevice(this)) rvEpisodes.post { rvEpisodes.requestFocus() }
         } else {
             tvEmpty.visibility = android.view.View.VISIBLE
         }
@@ -175,8 +240,9 @@ class SeriesDetailActivity : AppCompatActivity() {
         currentEpisodeUrl = episode.url
         lifecycleScope.launch {
             try {
+                val scraper = ScraperRegistry.getScraper(siteName)
                 val servers = withContext(Dispatchers.IO) {
-                    ServerExtractor.extractServers(episode.url, siteName)
+                    scraper?.extractServers(episode.url) ?: ServerExtractor.extractServers(episode.url, siteName)
                 }
                 loadingOverlay.visibility = android.view.View.GONE
 
@@ -198,6 +264,7 @@ class SeriesDetailActivity : AppCompatActivity() {
             putExtra("embed_url", episode.url)
             putExtra("video_title", episode.title)
         }
+        attachPlaylist(intent)
         startActivity(intent)
     }
 
@@ -207,18 +274,52 @@ class SeriesDetailActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_servers, null)
         val listView = view.findViewById<android.widget.ListView>(R.id.lv_servers)
         val tvCount = view.findViewById<TextView>(R.id.tv_server_count)
+        val btnAddToQueue = view.findViewById<TextView>(R.id.btn_add_to_queue)
+        val tvQueueCount = view.findViewById<TextView>(R.id.btn_queue_count)
         tvCount.text = "${sorted.size} servidores"
+
+        fun updateQueueBadge() {
+            val qSize = com.karin.streamtv.util.VideoQueue.size()
+            if (qSize > 0) {
+                tvQueueCount.visibility = android.view.View.VISIBLE
+                tvQueueCount.text = "Cola: $qSize"
+            } else {
+                tvQueueCount.visibility = android.view.View.GONE
+            }
+        }
+        updateQueueBadge()
+
         listView.adapter = ServerAdapter(sorted, title)
+
+        btnAddToQueue.setOnClickListener {
+            val best = sorted.firstOrNull()
+            val embedUrl = best?.serverUrl ?: episodeUrl
+            val item = com.karin.streamtv.model.PlaylistItem(
+                title = title,
+                url = episodeUrl,
+                embedUrl = embedUrl,
+                serverName = best?.name ?: siteName,
+                episodeNumber = ServerHelper.extractEpisodeNumber(title)
+            )
+            com.karin.streamtv.util.VideoQueue.add(item)
+            updateQueueBadge()
+            Toast.makeText(this, "Agregado a la cola (${com.karin.streamtv.util.VideoQueue.size()})", Toast.LENGTH_SHORT).show()
+        }
+        btnAddToQueue.onActionKey { btnAddToQueue.performClick() }
 
         val dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
             .setView(view)
             .setNegativeButton("Cancelar", null)
-            .show()
+            .create()
 
         dialog.window?.setLayout(
             (resources.displayMetrics.widthPixels * 0.85).toInt(),
             android.view.WindowManager.LayoutParams.WRAP_CONTENT
         )
+
+        com.karin.streamtv.util.TvDialogHelper.makeListTvReady(dialog, listView, this)
+
+        dialog.show()
 
         listView.setOnItemClickListener { _, _, which, _ ->
             dialog.dismiss()
@@ -240,14 +341,94 @@ class SeriesDetailActivity : AppCompatActivity() {
             }
             putExtra("video_title", title)
             putExtra("episode_url", currentEpisodeUrl)
-            putExtra("episode_number", extractEpisodeNumber(title))
+            putExtra("episode_number", ServerHelper.extractEpisodeNumber(title))
             if (allServers.isNotEmpty()) {
                 putExtra("all_server_urls", allServers.map { it.serverUrl }.toTypedArray())
                 putExtra("all_server_names", allServers.map { it.name }.toTypedArray())
                 putExtra("current_server_index", allServers.indexOfFirst { it.serverUrl == server.serverUrl }.coerceAtLeast(0))
             }
         }
+        attachPlaylist(intent)
         startActivity(intent)
+    }
+
+    private fun onPlaylistButtonClick() {
+        val adapter = rvEpisodes.adapter as? EpisodeAdapter ?: return
+        if (!adapter.isSelectionMode()) {
+            adapter.setSelectionMode(true)
+            updatePlaylistButton()
+            Toast.makeText(this, "Selecciona los episodios y pulsa ▶ para reproducir", Toast.LENGTH_SHORT).show()
+        } else if (adapter.selectedCount() > 0) {
+            startPlaylist()
+        } else {
+            adapter.setSelectionMode(false)
+            updatePlaylistButton()
+        }
+    }
+
+    private fun updatePlaylistButton() {
+        val adapter = rvEpisodes.adapter as? EpisodeAdapter ?: return
+        btnPlaylist.text = when {
+            !adapter.isSelectionMode() -> "📋"
+            selectedCount > 0 -> "▶ $selectedCount"
+            else -> "📋 ✕"
+        }
+    }
+
+    private fun startPlaylist() {
+        val adapter = rvEpisodes.adapter as? EpisodeAdapter ?: return
+        val selected = adapter.getSelectedEpisodes()
+        if (selected.isEmpty()) return
+        adapter.setSelectionMode(false)
+        updatePlaylistButton()
+        showLoading("Preparando lista de reproducción...")
+        lifecycleScope.launch {
+            val queue = withContext(Dispatchers.IO) { buildQueue(selected) }
+            loadingOverlay.visibility = android.view.View.GONE
+            if (queue.isEmpty()) {
+                Toast.makeText(this@SeriesDetailActivity, "No se pudieron resolver los episodios", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            pendingQueue = queue
+            val first = queue.first()
+            openEpisode(Episode(title = first.title, url = first.url))
+        }
+    }
+
+    private suspend fun buildQueue(episodes: List<Episode>): List<PlaylistItem> {
+        val scraper = ScraperRegistry.getScraper(siteName)
+        return episodes.mapNotNull { ep ->
+            try {
+                val servers = scraper?.extractServers(ep.url) ?: ServerExtractor.extractServers(ep.url, siteName)
+                val best = servers.maxByOrNull { it.speedRating }
+                if (best != null) {
+                    PlaylistItem(
+                        title = ep.title,
+                        url = ep.url,
+                        embedUrl = if (best.serverUrl.contains("?server=")) best.serverUrl.substringBefore("?server=") else best.serverUrl,
+                        serverName = if (best.serverUrl.contains("?server=")) best.serverUrl.substringAfter("?server=") else "",
+                        episodeNumber = ServerHelper.extractEpisodeNumber(ep.title)
+                    )
+                } else {
+                    PlaylistItem(
+                        title = ep.title,
+                        url = ep.url,
+                        embedUrl = ep.url,
+                        episodeNumber = ServerHelper.extractEpisodeNumber(ep.title)
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("SeriesDetail", "buildQueue error: ${e.message}")
+                null
+            }
+        }
+    }
+
+    private fun attachPlaylist(intent: Intent) {
+        val queue = pendingQueue ?: return
+        intent.putExtra("playlist_json", PlaylistQueue.toJson(queue))
+        intent.putExtra("playlist_index", 0)
+        pendingQueue = null
     }
 
     private inner class ServerAdapter(
@@ -289,10 +470,10 @@ class SeriesDetailActivity : AppCompatActivity() {
             row.setOnClickListener { openEmbedWebView(server, title, servers) }
 
             btnFb.setOnClickListener {
-                shareUrl(server.serverUrl, server.name, "com.facebook.katana")
+                ServerHelper.shareUrl(this@SeriesDetailActivity, server.serverUrl, server.name, "com.facebook.katana")
             }
             btnWa.setOnClickListener {
-                shareUrl(server.serverUrl, server.name, "com.whatsapp")
+                ServerHelper.shareUrl(this@SeriesDetailActivity, server.serverUrl, server.name, "com.whatsapp")
             }
             btnExt.setOnClickListener {
                 val isTabServer = server.serverUrl.contains("?server=")
@@ -307,54 +488,25 @@ class SeriesDetailActivity : AppCompatActivity() {
                     }
                     putExtra("video_title", title)
                     putExtra("episode_url", currentEpisodeUrl)
-                    putExtra("episode_number", extractEpisodeNumber(title))
+                    putExtra("episode_number", ServerHelper.extractEpisodeNumber(title))
                     putExtra("open_external", true)
                 }
                 startActivity(intent)
+            }
+
+            if (DeviceUtils.isTvDevice(this@SeriesDetailActivity)) {
+                btnFb.isFocusable = false
+                btnWa.isFocusable = false
+                btnExt.isFocusable = false
             }
 
             return row
         }
     }
 
-    private fun shareUrl(url: String, label: String, targetPackage: String) {
-        try {
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, "$label - $url")
-                `package` = targetPackage
-            }
-            startActivity(intent)
-        } catch (_: Exception) {
-            try {
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, "$label - $url")
-                }
-                startActivity(Intent.createChooser(intent, "Compartir"))
-            } catch (_: Exception) {
-                Toast.makeText(this, "App no disponible", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     private fun showLoading(text: String) {
         tvLoadingText.text = text
         loadingOverlay.visibility = android.view.View.VISIBLE
-    }
-
-    private fun extractEpisodeNumber(title: String): Int {
-        val patterns = listOf(
-            Regex("""(?i)(?:episodio|episode|capitulo|cap|ep\.?|#)\s*(\d+)"""),
-            Regex("""(\d+)""")
-        )
-        for (pattern in patterns) {
-            val match = pattern.find(title)
-            if (match != null) {
-                return match.groupValues[1].toIntOrNull() ?: 0
-            }
-        }
-        return 0
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

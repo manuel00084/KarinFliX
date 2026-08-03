@@ -32,3 +32,7 @@ object LatAnimeScraper : GenericScraper() {
         )
     }
 }
+
+class LatAnimeScraperProvider : ScraperProvider {
+    override val scraper: BaseScraper = LatAnimeScraper
+}

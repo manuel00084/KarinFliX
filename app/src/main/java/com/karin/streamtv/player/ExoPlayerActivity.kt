@@ -1,9 +1,7 @@
 package com.karin.streamtv.player
 
-import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
-import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -31,7 +29,6 @@ import com.karin.streamtv.util.EpisodeProgress
 import com.karin.streamtv.util.GamepadHelper
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -45,17 +42,21 @@ class ExoPlayerActivity : AppCompatActivity() {
     private lateinit var loadingText: TextView
     private lateinit var btnBack: TextView
     private lateinit var fpsBadge: TextView
+    private lateinit var tvQueueBadge: TextView
     private lateinit var playStateOverlay: TextView
     private lateinit var controllerPanel: View
     private lateinit var seekBar: SeekBar
     private lateinit var btnPlayPause: ImageButton
+    private lateinit var btnPrev: TextView
+    private lateinit var btnNext: TextView
     private lateinit var tvPosition: TextView
     private lateinit var tvDuration: TextView
     private lateinit var btnQuality: TextView
-    private lateinit var btnVolume: TextView
+    private lateinit var btnVolume: ImageButton
     private lateinit var btnDsp: TextView
-    private lateinit var btnDebug: TextView
-    private lateinit var btnDownload: ImageButton
+    private lateinit var btnInterp: TextView
+    private lateinit var btnVideoProfile: TextView
+    private lateinit var btnUpscaler: TextView
     private var seekDragging = false
     private var selectedHeight = -1
     private val controllerHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -76,6 +77,12 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var useEnhancedMode = false
     private var referer: String = ""
     private var fallbackTriggered = false
+    private var isPlainFallback = false
+    private var playlist: List<com.karin.streamtv.model.PlaylistItem> = emptyList()
+    private var playlistIndex: Int = 0
+    private var currentVideoUrl: String = ""
+    private var currentMegaResolved: com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo? = null
+    private var pendingResumeMs = -1L
     private val fallbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private lateinit var glSurface: android.opengl.GLSurfaceView
@@ -98,17 +105,21 @@ class ExoPlayerActivity : AppCompatActivity() {
         loadingText = findViewById(R.id.tv_loading)
         btnBack = findViewById(R.id.btn_back)
         fpsBadge = findViewById(R.id.tv_fps_badge)
+        tvQueueBadge = findViewById(R.id.tv_queue_badge)
         playStateOverlay = findViewById(R.id.tv_play_state)
         controllerPanel = findViewById(R.id.controller_panel)
         seekBar = findViewById(R.id.seek_bar)
         btnPlayPause = findViewById(R.id.btn_play_pause)
+        btnPrev = findViewById(R.id.btn_prev)
+        btnNext = findViewById(R.id.btn_next)
         tvPosition = findViewById(R.id.tv_position)
         tvDuration = findViewById(R.id.tv_duration)
         btnQuality = findViewById(R.id.btn_quality)
         btnVolume = findViewById(R.id.btn_volume)
         btnDsp = findViewById(R.id.btn_dsp)
-        btnDebug = findViewById(R.id.btn_debug)
-        btnDownload = findViewById(R.id.btn_download)
+        btnInterp = findViewById(R.id.btn_interp)
+        btnVideoProfile = findViewById(R.id.btn_video_profile)
+        btnUpscaler = findViewById(R.id.btn_upscaler)
 
         trackSelector = DefaultTrackSelector(this)
 
@@ -118,6 +129,9 @@ class ExoPlayerActivity : AppCompatActivity() {
         val serverName = intent.getStringExtra("server_name") ?: ""
         val episodeUrl = intent.getStringExtra("episode_url") ?: ""
         val epNum = intent.getIntExtra("episode_number", 0)
+
+        playlist = com.karin.streamtv.util.PlaylistQueue.fromJson(intent.getStringExtra("playlist_json"))
+        playlistIndex = intent.getIntExtra("playlist_index", 0)
 
         currentEpisodeUrl = episodeUrl
         if (episodeUrl.isNotBlank()) {
@@ -163,12 +177,23 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnBack.onActionKey { finish() }
         playerContainer.setOnClickListener { showController() }
         btnPlayPause.setOnClickListener { togglePlayPause() }
+        if (playlist.isEmpty()) {
+            btnPrev.visibility = View.GONE
+            btnNext.visibility = View.GONE
+        } else {
+            btnPrev.setOnClickListener { skipToPlaylist(-1) }
+            btnNext.setOnClickListener { skipToPlaylist(1) }
+        }
         updateDspButton()
         btnQuality.setOnClickListener { showQualityDialog() }
         btnVolume.setOnClickListener { showVolumeDialog() }
         btnDsp.setOnClickListener { showDspDialog() }
-        btnDebug.setOnClickListener { showDebugDialog() }
-        btnDownload.setOnClickListener { startDownload() }
+        btnVideoProfile.setOnClickListener { showVideoProfileDialog() }
+        updateVideoProfileButton()
+        btnInterp.setOnClickListener { toggleInterpolation() }
+        updateInterpButton()
+        btnUpscaler.setOnClickListener { showUpscalerDialog() }
+        updateUpscalerButton()
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
             override fun onStartTrackingTouch(seekBar: SeekBar?) { seekDragging = true }
@@ -264,38 +289,35 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun showVolumeDialog() {
         val p = player ?: return
         val seek = android.widget.SeekBar(this)
-        seek.max = 100
-        seek.progress = (p.volume * 100).toInt().coerceIn(0, 100)
+        seek.max = 300
+        seek.progress = (p.volume * 100).toInt().coerceIn(10, 300)
         AlertDialog.Builder(this)
-            .setTitle("Volumen")
+            .setTitle("Volumen (100% = normal, hasta 300% para videos bajos)")
             .setView(seek)
             .setPositiveButton("Aceptar", null)
             .setOnDismissListener {
                 p.volume = seek.progress / 100f
-                btnVolume.text = "Vol ${seek.progress}%"
+                com.karin.streamtv.util.AppPreferences.setPlayerVolume(p.volume)
             }
             .show()
     }
 
     private fun showDspDialog() {
-        val presets = com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.values()
+        val presets = com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.entries
         val labels = ArrayList<String>()
-        labels.add("Sin efectos")
         presets.forEach { labels.add(it.label) }
         val current = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
         val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
-        val selectedIdx = if (!enabled) 0 else presets.indexOf(current) + 1
+        val selectedIdx = if (!enabled || current == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
+            presets.indexOf(com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
+        else presets.indexOf(current)
         AlertDialog.Builder(this)
             .setTitle("Sonido (DSP)")
             .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
-                if (which == 0) {
-                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.setEnabled(false)
-                } else {
-                    val preset = presets[which - 1]
-                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.applyParams(
-                        com.karin.streamtv.player.dsp.AudioEnhanceConfig.Params().withPreset(preset)
-                    )
-                }
+                val preset = presets[which]
+                com.karin.streamtv.player.dsp.AudioEnhanceConfig.applyParams(
+                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.Params().withPreset(preset)
+                )
                 updateDspButton()
                 showController()
             }
@@ -304,83 +326,122 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun updateDspButton() {
+        val preset = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
         val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
-        btnDsp.text = if (!enabled) "Sonido: OFF" else "Sonido: ${com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset().label}"
+        btnDsp.text = if (!enabled || preset == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
+            "Sonido: OFF"
+        else "Sonido: ${preset.label}"
     }
 
-    private fun showDebugDialog() {
-        val labels = arrayOf("OFF", "PREV", "CURR", "UV", "FACTOR", "MOTION", "V0V1", "VISUAL")
-        val current = VideoEnhanceConfig.getDebugMode()
+    private fun showVideoProfileDialog() {
+        val presets = VideoEnhanceConfig.Preset.entries
+        val labels = ArrayList<String>()
+        presets.forEach { labels.add(it.label) }
+        val current = VideoEnhanceConfig.preset()
+        val enabled = VideoEnhanceConfig.isEnabled()
+        val selectedIdx = if (!enabled || current == VideoEnhanceConfig.Preset.OFF)
+            presets.indexOf(VideoEnhanceConfig.Preset.OFF)
+        else presets.indexOf(current)
         AlertDialog.Builder(this)
-            .setTitle("Debug de interpolación")
-            .setSingleChoiceItems(labels, current) { _, which ->
-                VideoEnhanceConfig.setDebugMode(which)
-                processor?.renderer?.setDebugModeValue(which)
-                btnDebug.text = labels[which]
+            .setTitle("Perfil de Video")
+            .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
+                VideoEnhanceConfig.applyPreset(presets[which])
+                updateVideoProfileButton()
                 showController()
             }
             .setNegativeButton("Cerrar", null)
             .show()
     }
 
-    private fun startDownload() {
-        val url = getCurrentVideoUrl() ?: run {
-            Toast.makeText(this, "No hay URL de video disponible", Toast.LENGTH_SHORT).show()
+    private fun updateVideoProfileButton() {
+        val preset = VideoEnhanceConfig.preset()
+        val enabled = VideoEnhanceConfig.isEnabled()
+        btnVideoProfile.text = if (!enabled || preset == VideoEnhanceConfig.Preset.OFF)
+            "Video: OFF"
+        else "Video: ${preset.label}"
+    }
+
+    private fun skipToPlaylist(delta: Int) {
+        if (playlist.isEmpty()) {
+            Toast.makeText(this, "No hay lista de reproducción activa", Toast.LENGTH_SHORT).show()
             return
         }
-
-        val title = intent.getStringExtra("episode_title") ?: "video"
-        val safeTitle = title.replace(Regex("[^\\w\\-. ]"), "_").take(100)
-        val extension = if (url.contains(".m3u8")) ".mp4" else if (url.contains(".mp4")) ".mp4" else ".mp4"
-        val fileName = "${safeTitle}${extension}"
-
-        val request = DownloadManager.Request(Uri.parse(url)).apply {
-            setTitle(fileName)
-            setDescription("Descargando $fileName")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "KarinFLiX/$fileName")
-            setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
-            allowScanningByMediaScanner()
+        val target = playlistIndex + delta
+        if (target < 0 || target >= playlist.size) {
+            Toast.makeText(this, if (delta > 0) "Fin de la lista" else "Inicio de la lista", Toast.LENGTH_SHORT).show()
+            return
         }
+        autoPlayTriggered = false
+        val siteName = intent.getStringExtra("site_name") ?: ""
+        startActivity(com.karin.streamtv.util.PlaylistQueue.buildIntent(this, playlist, target, siteName))
+        finish()
+    }
 
-        referer?.let { request.addRequestHeader("Referer", it) }
-
-        val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = downloadManager.enqueue(request)
-
-        Toast.makeText(this, "Descarga iniciada: $fileName", Toast.LENGTH_LONG).show()
-
-        // Optional: show notification with progress (could be enhanced with a foreground service)
-        lifecycleScope.launch {
-            var downloading = true
-            while (downloading) {
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor = downloadManager.query(query)
-                if (cursor.moveToFirst()) {
-                    val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                    val bytesDownloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                    val totalBytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        Toast.makeText(this@ExoPlayerActivity, "Descarga completada: $fileName", Toast.LENGTH_LONG).show()
-                        downloading = false
-                    } else if (status == DownloadManager.STATUS_FAILED) {
-                        val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                        Toast.makeText(this@ExoPlayerActivity, "Descarga fallida (código: $reason)", Toast.LENGTH_LONG).show()
-                        downloading = false
-                    }
-                }
-                cursor.close()
-                if (downloading) delay(2000)
-            }
+    private fun toggleInterpolation() {
+        val enabling = !VideoEnhanceConfig.isInterpolationEnabled()
+        VideoEnhanceConfig.setInterpolationEnabled(enabling)
+        updateInterpButton()
+        Toast.makeText(this, "MotionX2 60p: ${if (enabling) "Activado" else "Desactivado"}", Toast.LENGTH_SHORT).show()
+        if (enabling && !useEnhancedMode) {
+            useEnhancedMode = true
+            restartWithEnhanced()
         }
     }
 
-    private fun getCurrentVideoUrl(): String? {
-        return when {
-            intent.getStringExtra("video_url")?.isNotBlank() == true -> intent.getStringExtra("video_url")
-            player?.currentMediaItem?.mediaId?.isNotBlank() == true -> player?.currentMediaItem?.mediaId
-            else -> null
+    private fun updateInterpButton() {
+        btnInterp.text = "MotionX2 60p: ${if (VideoEnhanceConfig.isInterpolationEnabled()) "ON" else "OFF"}"
+    }
+
+    private fun restartWithEnhanced() {
+        val p = player
+        pendingResumeMs = if (p != null && p.duration > 0) p.currentPosition else -1
+        p?.release()
+        player = null
+        processor?.release()
+        processor = null
+        playerContainer.removeAllViews()
+        if (currentMegaResolved != null) {
+            playVideoMega(currentMegaResolved!!)
+        } else if (currentVideoUrl.isNotBlank()) {
+            playVideo(currentVideoUrl)
+        } else {
+            pendingResumeMs = -1
+            Toast.makeText(this, "MotionX2 60p se aplicará al próximo video", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun applyPendingResume(exoPlayer: androidx.media3.exoplayer.ExoPlayer) {
+        if (pendingResumeMs > 0) {
+            exoPlayer.seekTo(pendingResumeMs)
+            pendingResumeMs = -1
+        }
+    }
+
+    private fun showUpscalerDialog() {
+        val modes = VideoEnhanceConfig.UpscalerMode.entries
+        val labels = modes.map { it.label }.toTypedArray()
+        val current = VideoEnhanceConfig.getUpscalerMode()
+        val selectedIdx = modes.indexOf(current)
+        AlertDialog.Builder(this)
+            .setTitle("Escalado de Video")
+            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
+                VideoEnhanceConfig.setUpscalerMode(modes[which])
+                updateUpscalerButton()
+                showController()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun updateUpscalerButton() {
+        val mode = VideoEnhanceConfig.getUpscalerMode()
+        btnUpscaler.text = "Escala: ${mode.label}"
+    }
+
+    private fun applySavedVolume() {
+        val p = player ?: return
+        val v = com.karin.streamtv.util.AppPreferences.getPlayerVolume()
+        p.volume = v
     }
 
     private fun extractAndPlay(embedUrl: String, serverName: String) {
@@ -422,6 +483,8 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun playVideoMega(resolved: com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo) {
+        currentMegaResolved = resolved
+        currentVideoUrl = resolved.url
         val key = resolved.megaKey ?: run {
             Toast.makeText(this, "MEGA key no disponible", Toast.LENGTH_SHORT).show()
             finish()
@@ -429,6 +492,10 @@ class ExoPlayerActivity : AppCompatActivity() {
         }
         val megaFactory = androidx.media3.datasource.DataSource.Factory {
             com.karin.streamtv.player.MegaDecryptingDataSource(key, resolved.megaCtrStart, resolved.extraHeaders)
+        }
+        if (useEnhancedMode && !isPlainFallback) {
+            playWithEnhancedPipeline(resolved.url, megaFactory)
+            return
         }
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, com.karin.streamtv.player.dsp.DspRenderersFactory(this))
             .setTrackSelector(trackSelector!!)
@@ -440,6 +507,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             .setWakeMode(android.os.PowerManager.PARTIAL_WAKE_LOCK)
             .build()
         player = exoPlayer
+        applySavedVolume()
 
         val playerView = androidx.media3.ui.PlayerView(this).apply {
             useController = false
@@ -454,6 +522,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         exoPlayer.setMediaItem(MediaItem.fromUri(resolved.url))
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
+        applyPendingResume(exoPlayer)
 
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -474,14 +543,18 @@ class ExoPlayerActivity : AppCompatActivity() {
         url.startsWith("content://") || url.startsWith("file://")
 
     private fun playVideo(url: String) {
-        if (useEnhancedMode && !isLocalUrl(url)) {
-            playWithEnhancedPipeline(url)
+        currentVideoUrl = url
+        if (useEnhancedMode && !isPlainFallback) {
+            playWithEnhancedPipeline(
+                url,
+                if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(this) else null
+            )
         } else {
             playStandard(url)
         }
     }
 
-    private fun playWithEnhancedPipeline(url: String) {
+    private fun playWithEnhancedPipeline(url: String, dataSourceFactory: androidx.media3.datasource.DataSource.Factory? = null) {
         glSurface = android.opengl.GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
@@ -495,16 +568,17 @@ class ExoPlayerActivity : AppCompatActivity() {
         processor = Media3SixtyFpsProcessor(this, glSurface, referer)
         processor!!.setupGlPipeline()
         processor!!.renderer?.setDebugModeValue(VideoEnhanceConfig.getDebugMode())
-        btnDebug.text = VideoEnhanceConfig.debugModeLabel(VideoEnhanceConfig.getDebugMode())
         processor!!.onGlFailure = {
             runOnUiThread { triggerFallback(url) }
         }
 
-        val exoPlayer = processor!!.createPlayer(trackSelector)
+        val exoPlayer = processor!!.createPlayer(trackSelector, dataSourceFactory)
         player = exoPlayer
+        applySavedVolume()
 
         processor!!.connectPlayer(exoPlayer)
         processor!!.play(url)
+        applyPendingResume(exoPlayer)
         startFpsPolling()
 
         fallbackHandler.postDelayed({
@@ -539,6 +613,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun triggerFallback(url: String) {
         if (fallbackTriggered) return
         fallbackTriggered = true
+        useEnhancedMode = false
         Log.w(TAG, "Falling back to standard playback")
         fpsBadge.visibility = View.GONE
         processor?.release()
@@ -546,6 +621,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         player?.release()
         player = null
         playerContainer.removeAllViews()
+        isPlainFallback = true
         playStandard(url)
     }
 
@@ -560,6 +636,18 @@ class ExoPlayerActivity : AppCompatActivity() {
                     } else {
                         fpsBadge.visibility = View.GONE
                     }
+                    val p = player
+                    if (p != null && p.isPlaying && p.playbackState == Player.STATE_READY) {
+                        val lastNs = r.lastRenderedFrameNs
+                        if (lastNs > 0) {
+                            val stallMs = (System.nanoTime() - lastNs) / 1_000_000
+                            if (stallMs > 2500) {
+                                Log.w(TAG, "Video congelado ${stallMs}ms mientras el audio avanza - resincronizando")
+                                processor?.resyncSurface()
+                                r.markResync()
+                            }
+                        }
+                    }
                     fallbackHandler.postDelayed(this, 1000)
                 } else {
                     fpsBadge.visibility = View.GONE
@@ -570,6 +658,14 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun playStandard(url: String) {
+        currentVideoUrl = url
+        if (useEnhancedMode && !isPlainFallback) {
+            playWithEnhancedPipeline(
+                url,
+                if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(this) else null
+            )
+            return
+        }
         if (url.startsWith("content://")) {
             try {
                 contentResolver.takePersistableUriPermission(
@@ -594,6 +690,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             .setWakeMode(android.os.PowerManager.PARTIAL_WAKE_LOCK)
             .build()
         player = exoPlayer
+        applySavedVolume()
 
         val playerView = androidx.media3.ui.PlayerView(this).apply {
             useController = false
@@ -608,6 +705,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         exoPlayer.setMediaItem(MediaItem.fromUri(url))
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
+        applyPendingResume(exoPlayer)
 
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -628,9 +726,52 @@ class ExoPlayerActivity : AppCompatActivity() {
         if (animeId.isNotBlank() && episodeNumber > 0) {
             EpisodeProgress.markWatched(animeId, episodeNumber)
         }
-        if (!autoPlayTriggered && AutoPlayManager.isAutoPlayEnabled()
-            && currentEpisodeUrl.isNotBlank() && episodeNumber > 0) {
-            autoPlayTriggered = true
+        if (autoPlayTriggered || !AutoPlayManager.isAutoPlayEnabled()) return
+        autoPlayTriggered = true
+
+        val nextFromQueue = com.karin.streamtv.util.VideoQueue.peek()
+        if (nextFromQueue != null) {
+            com.karin.streamtv.util.VideoQueue.poll()
+            val siteName = intent.getStringExtra("site_name") ?: ""
+            AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
+                override fun onCountdownTick(sec: Int) {
+                    loadingText.visibility = View.VISIBLE
+                    loadingText.text = "Siguiente: ${nextFromQueue.title} en ${sec}s"
+                }
+                override fun onCountdownFinish() {
+                    val intent = Intent(this@ExoPlayerActivity, com.karin.streamtv.ui.SiteBrowserActivity::class.java).apply {
+                        putExtra("autoplay_url", nextFromQueue.embedUrl)
+                        putExtra("autoplay_title", nextFromQueue.title)
+                        putExtra("site_name", nextFromQueue.serverName)
+                    }
+                    startActivity(intent)
+                    finish()
+                }
+                override fun onAutoPlayCancelled() {}
+            })
+            return
+        }
+
+        if (playlist.isNotEmpty()) {
+            val nextIndex = playlistIndex + 1
+            if (nextIndex >= playlist.size) return
+            val next = playlist[nextIndex]
+            val siteName = intent.getStringExtra("site_name") ?: ""
+            AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
+                override fun onCountdownTick(sec: Int) {
+                    loadingText.visibility = View.VISIBLE
+                    loadingText.text = "Siguiente: ${next.title} en ${sec}s"
+                }
+                override fun onCountdownFinish() {
+                    startActivity(com.karin.streamtv.util.PlaylistQueue.buildIntent(this@ExoPlayerActivity, playlist, nextIndex, siteName))
+                    finish()
+                }
+                override fun onAutoPlayCancelled() {}
+            })
+            return
+        }
+
+        if (currentEpisodeUrl.isNotBlank() && episodeNumber > 0) {
             val nextUrl = AutoPlayManager.findNextEpisodeUrl(currentEpisodeUrl, episodeNumber)
             if (nextUrl != null) {
                 AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
@@ -677,7 +818,18 @@ class ExoPlayerActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (useEnhancedMode && ::glSurface.isInitialized) glSurface.onResume()
+        updateQueueBadge()
         player?.play()
+    }
+
+    private fun updateQueueBadge() {
+        val qSize = com.karin.streamtv.util.VideoQueue.size()
+        if (qSize > 0) {
+            tvQueueBadge.visibility = View.VISIBLE
+            tvQueueBadge.text = "Cola: $qSize"
+        } else {
+            tvQueueBadge.visibility = View.GONE
+        }
     }
 
     override fun onPause() {

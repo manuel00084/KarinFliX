@@ -77,5 +77,8 @@ object FrikiserieScraper : GenericScraper() {
         return episodes
     }
 
+}
 
+class FrikiserieScraperProvider : ScraperProvider {
+    override val scraper: BaseScraper = FrikiserieScraper
 }

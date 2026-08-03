@@ -49,3 +49,7 @@ object LaCartoonsScraper : GenericScraper() {
         return episodes
     }
 }
+
+class LaCartoonsScraperProvider : ScraperProvider {
+    override val scraper: BaseScraper = LaCartoonsScraper
+}

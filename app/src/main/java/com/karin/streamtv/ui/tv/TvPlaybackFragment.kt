@@ -5,16 +5,19 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
-import androidx.leanback.app.PlaybackSupportFragment
-import androidx.leanback.app.PlaybackSupportFragmentGlueHost
-import androidx.leanback.media.PlaybackTransportControlGlue
+import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -22,8 +25,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
-import androidx.media3.ui.leanback.LeanbackPlayerAdapter
 import com.karin.streamtv.R
 import com.karin.streamtv.player.Media3SixtyFpsProcessor
 import com.karin.streamtv.player.MegaDecryptingDataSource
@@ -33,25 +36,59 @@ import com.karin.streamtv.player.VideoExtractorHelper
 import com.karin.streamtv.scraper.ServerDirectResolver
 import com.karin.streamtv.util.AutoPlayManager
 import com.karin.streamtv.util.EpisodeProgress
+import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @UnstableApi
-class TvPlaybackFragment : PlaybackSupportFragment() {
+class TvPlaybackFragment : Fragment() {
 
     private var player: ExoPlayer? = null
     private var processor: Media3SixtyFpsProcessor? = null
-    private var glue: PlaybackTransportControlGlue<LeanbackPlayerAdapter>? = null
+    private var trackSelector: DefaultTrackSelector? = null
     private lateinit var playerContainer: FrameLayout
     private lateinit var loadingText: TextView
+    private lateinit var btnBack: TextView
     private lateinit var fpsBadge: TextView
+    private lateinit var tvQueueBadge: TextView
+    private lateinit var playStateOverlay: TextView
+    private lateinit var controllerPanel: LinearLayout
+    private lateinit var seekBar: SeekBar
+    private lateinit var btnPrev: TextView
+    private lateinit var btnPlayPause: ImageButton
+    private lateinit var btnNext: TextView
+    private lateinit var tvPosition: TextView
+    private lateinit var tvDuration: TextView
+    private lateinit var btnVolume: ImageButton
+    private lateinit var btnDsp: TextView
+    private lateinit var btnUpscaler: TextView
+    private lateinit var btnInterp: TextView
+    private lateinit var btnVideoProfile: TextView
+    private lateinit var btnQuality: TextView
+    private var seekDragging = false
+    private var selectedHeight = -1
+    private var playlist: List<com.karin.streamtv.model.PlaylistItem> = emptyList()
+    private var playlistIndex = 0
+    private val controllerHandler = Handler(Looper.getMainLooper())
+    private val progressRunnable = object : Runnable {
+        override fun run() {
+            updateProgress()
+            controllerHandler.postDelayed(this, 500)
+        }
+    }
+    private val hideController = Runnable {
+        controllerPanel.visibility = View.GONE
+        btnBack.visibility = View.GONE
+    }
+    private val hidePlayState = Runnable { playStateOverlay.visibility = View.GONE }
     private lateinit var glSurface: android.opengl.GLSurfaceView
     private var glActive = false
 
     private var animeId = ""
     private var episodeNumber = 0
     private var currentEpisodeUrl = ""
+    private var currentVideoUrl = ""
     private var autoPlayTriggered = false
     private var useEnhancedMode = false
     private var referer = ""
@@ -60,7 +97,6 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setBackgroundType(BG_NONE)
 
         val args = arguments
         val videoUrl = args?.getString("video_url")
@@ -74,23 +110,346 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
             episodeNumber = epNum
         }
 
+        playlist = com.karin.streamtv.util.PlaylistQueue.fromJson(args?.getString("playlist_json"))
+        playlistIndex = args?.getInt("playlist_index", 0) ?: 0
+
         referer = args?.getString("referer") ?: embedUrl ?: ""
         if (referer.startsWith("http://")) referer = "https://" + referer.substringAfter("http://")
 
+        val dbgExtra = args?.getInt("debug_mode", -1) ?: -1
+        if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
+
+        trackSelector = DefaultTrackSelector(requireContext())
         useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled()
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
-        val root = super.onCreateView(inflater, container, savedInstanceState) as ViewGroup
-        val content = inflater.inflate(R.layout.fragment_tv_playback, root, false)
-        root.addView(content, 1, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        ))
+        val content = inflater.inflate(R.layout.fragment_tv_playback, container, false)
         playerContainer = content.findViewById(R.id.tv_player_container)
         loadingText = content.findViewById(R.id.tv_loading)
+        btnBack = content.findViewById(R.id.btn_back)
         fpsBadge = content.findViewById(R.id.tv_fps_badge)
-        return root
+        tvQueueBadge = content.findViewById(R.id.tv_queue_badge)
+        playStateOverlay = content.findViewById(R.id.tv_play_state)
+        controllerPanel = content.findViewById(R.id.controller_panel)
+        seekBar = content.findViewById(R.id.seek_bar)
+        btnPlayPause = content.findViewById(R.id.btn_play_pause)
+        btnPrev = content.findViewById(R.id.btn_prev)
+        btnNext = content.findViewById(R.id.btn_next)
+        tvPosition = content.findViewById(R.id.tv_position)
+        tvDuration = content.findViewById(R.id.tv_duration)
+        btnVolume = content.findViewById(R.id.btn_volume)
+        btnDsp = content.findViewById(R.id.btn_dsp)
+        btnUpscaler = content.findViewById(R.id.btn_upscaler)
+        btnInterp = content.findViewById(R.id.btn_interp)
+        btnVideoProfile = content.findViewById(R.id.btn_video_profile)
+        btnQuality = content.findViewById(R.id.btn_quality)
+
+        setupController()
+        return content
+    }
+
+    private fun setupController() {
+        btnBack.setOnClickListener { requireActivity().finish() }
+        btnBack.onActionKey { requireActivity().finish() }
+        playerContainer.setOnClickListener { showController() }
+        playerContainer.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        toggleController()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        showController()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        hideController()
+                        true
+                    }
+                    else -> false
+                }
+            } else false
+        }
+        btnPlayPause.setOnClickListener { togglePlayPause() }
+        if (playlist.isEmpty()) {
+            btnPrev.visibility = View.GONE
+            btnNext.visibility = View.GONE
+        } else {
+            btnPrev.setOnClickListener { skipToPlaylist(-1) }
+            btnNext.setOnClickListener { skipToPlaylist(1) }
+        }
+        updateDspButton()
+        btnQuality.setOnClickListener { showQualityDialog() }
+        btnVolume.setOnClickListener { showVolumeDialog() }
+        btnDsp.setOnClickListener { showDspDialog() }
+        btnVideoProfile.setOnClickListener { showVideoProfileDialog() }
+        updateVideoProfileButton()
+        btnInterp.setOnClickListener { toggleInterpolation() }
+        updateInterpButton()
+        btnUpscaler.setOnClickListener { showUpscalerDialog() }
+        updateUpscalerButton()
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
+            override fun onStartTrackingTouch(seekBar: SeekBar?) { seekDragging = true }
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                seekDragging = false
+                player?.seekTo(seekBar?.progress?.toLong() ?: 0L)
+            }
+        })
+        listOf(btnBack, btnPrev, btnPlayPause, btnNext, btnVolume, btnDsp, btnUpscaler, btnInterp, btnVideoProfile, btnQuality)
+            .forEach { btn ->
+                btn.setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                        hideController()
+                        true
+                    } else false
+                }
+            }
+        controllerHandler.post(progressRunnable)
+    }
+
+    fun showController() {
+        controllerPanel.visibility = View.VISIBLE
+        btnBack.visibility = View.VISIBLE
+        updateProgress()
+        btnPlayPause.requestFocus()
+        controllerHandler.removeCallbacks(hideController)
+        controllerHandler.postDelayed(hideController, 3000)
+    }
+
+    fun hideController() {
+        controllerPanel.visibility = View.GONE
+        btnBack.visibility = View.GONE
+        controllerHandler.removeCallbacks(hideController)
+        playerContainer.requestFocus()
+    }
+
+    fun toggleController() {
+        if (controllerPanel.visibility == View.VISIBLE) hideController() else showController()
+    }
+
+    fun isControllerVisible(): Boolean = controllerPanel.visibility == View.VISIBLE
+
+    private fun togglePlayPause() {
+        val p = player ?: return
+        p.playWhenReady = !p.playWhenReady
+        playStateOverlay.text = if (p.playWhenReady) "Reproduciendo" else "Pausa"
+        playStateOverlay.visibility = View.VISIBLE
+        playStateOverlay.removeCallbacks(hidePlayState)
+        playStateOverlay.postDelayed(hidePlayState, 800)
+        updateProgress()
+        showController()
+    }
+
+    private fun updateProgress() {
+        val p = player ?: return
+        val dur = p.duration.coerceAtLeast(0)
+        val pos = p.currentPosition.coerceAtLeast(0)
+        if (dur > 0) {
+            seekBar.max = dur.toInt().coerceAtLeast(1)
+            if (!seekDragging) seekBar.progress = pos.toInt()
+            tvPosition.text = formatTime(pos)
+            tvDuration.text = formatTime(dur)
+        }
+        btnPlayPause.setImageResource(
+            if (p.playWhenReady && p.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+        )
+    }
+
+    private fun formatTime(ms: Long): String {
+        val s = ms / 1000
+        return String.format("%d:%02d", s / 60, s % 60)
+    }
+
+    private fun showQualityDialog() {
+        val p = player ?: return
+        val heights = LinkedHashSet<Int>()
+        p.currentTracks.groups.forEach { g ->
+            if (g.type == C.TRACK_TYPE_VIDEO) {
+                for (i in 0 until g.length) {
+                    val f = g.getTrackFormat(i)
+                    if (f.height > 0) heights.add(f.height)
+                }
+            }
+        }
+        val sorted = heights.sortedDescending()
+        val items = ArrayList<String>()
+        items.add("Auto")
+        sorted.forEach { items.add("${it}p") }
+        val selectedIdx = if (selectedHeight > 0) sorted.indexOf(selectedHeight) + 1 else 0
+        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
+            .setTitle("Calidad")
+            .setSingleChoiceItems(items.toTypedArray(), selectedIdx) { _, which ->
+                val ts = trackSelector
+                if (ts != null) {
+                    if (which == 0) {
+                        selectedHeight = -1
+                        ts.setParameters(ts.buildUponParameters().setMaxVideoSize(C.LENGTH_UNSET, C.LENGTH_UNSET))
+                    } else {
+                        val h = sorted[which - 1]
+                        selectedHeight = h
+                        ts.setParameters(ts.buildUponParameters().setMaxVideoSize(h, C.LENGTH_UNSET))
+                    }
+                }
+                updateQualityButton()
+                showController()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun updateQualityButton() {
+        btnQuality.text = if (selectedHeight > 0) "${selectedHeight}p" else "Auto"
+    }
+
+    private fun showVolumeDialog() {
+        val p = player ?: return
+        val seek = android.widget.SeekBar(requireContext())
+        seek.max = 300
+        seek.progress = (p.volume * 100).toInt().coerceIn(10, 300)
+        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
+            .setTitle("Volumen (100% = normal, hasta 300% para videos bajos)")
+            .setView(seek)
+            .setPositiveButton("Aceptar", null)
+            .setOnDismissListener {
+                p.volume = seek.progress / 100f
+                com.karin.streamtv.util.AppPreferences.setPlayerVolume(p.volume)
+            }
+            .show()
+    }
+
+    private fun showDspDialog() {
+        val presets = com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.entries
+        val labels = ArrayList<String>()
+        presets.forEach { labels.add(it.label) }
+        val current = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
+        val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
+        val selectedIdx = if (!enabled || current == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
+            presets.indexOf(com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
+        else presets.indexOf(current)
+        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
+            .setTitle("Sonido (DSP)")
+            .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
+                val preset = presets[which]
+                com.karin.streamtv.player.dsp.AudioEnhanceConfig.applyParams(
+                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.Params().withPreset(preset)
+                )
+                updateDspButton()
+                showController()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun updateDspButton() {
+        val preset = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
+        val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
+        btnDsp.text = if (!enabled || preset == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
+            "Sonido: OFF"
+        else "Sonido: ${preset.label}"
+    }
+
+    private fun showVideoProfileDialog() {
+        val presets = VideoEnhanceConfig.Preset.entries
+        val labels = ArrayList<String>()
+        presets.forEach { labels.add(it.label) }
+        val current = VideoEnhanceConfig.preset()
+        val enabled = VideoEnhanceConfig.isEnabled()
+        val selectedIdx = if (!enabled || current == VideoEnhanceConfig.Preset.OFF)
+            presets.indexOf(VideoEnhanceConfig.Preset.OFF)
+        else presets.indexOf(current)
+        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
+            .setTitle("Perfil de Video")
+            .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
+                VideoEnhanceConfig.applyPreset(presets[which])
+                updateVideoProfileButton()
+                showController()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun updateVideoProfileButton() {
+        val preset = VideoEnhanceConfig.preset()
+        val enabled = VideoEnhanceConfig.isEnabled()
+        btnVideoProfile.text = if (!enabled || preset == VideoEnhanceConfig.Preset.OFF)
+            "Video: OFF"
+        else "Video: ${preset.label}"
+    }
+
+    private fun skipToPlaylist(delta: Int) {
+        if (playlist.isEmpty()) {
+            Toast.makeText(requireContext(), "No hay lista de reproducción activa", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val target = playlistIndex + delta
+        if (target < 0 || target >= playlist.size) {
+            Toast.makeText(requireContext(), if (delta > 0) "Fin de la lista" else "Inicio de la lista", Toast.LENGTH_SHORT).show()
+            return
+        }
+        autoPlayTriggered = false
+        val siteName = arguments?.getString("site_name") ?: ""
+        startActivity(com.karin.streamtv.util.PlaylistQueue.buildIntent(requireContext(), playlist, target, siteName))
+        requireActivity().finish()
+    }
+
+    private fun toggleInterpolation() {
+        val enabling = !VideoEnhanceConfig.isInterpolationEnabled()
+        VideoEnhanceConfig.setInterpolationEnabled(enabling)
+        updateInterpButton()
+        Toast.makeText(requireContext(), "MotionX2 60p: ${if (enabling) "Activado" else "Desactivado"}", Toast.LENGTH_SHORT).show()
+        if (enabling && !useEnhancedMode) {
+            useEnhancedMode = true
+            restartWithEnhanced()
+        }
+    }
+
+    private fun restartWithEnhanced() {
+        if (currentVideoUrl.isBlank()) {
+            Toast.makeText(requireContext(), "MotionX2 60p se aplicará al próximo video", Toast.LENGTH_SHORT).show()
+            return
+        }
+        player?.release()
+        player = null
+        processor?.release()
+        processor = null
+        playerContainer.removeAllViews()
+        glActive = false
+        fallbackTriggered = false
+        fpsBadge.visibility = View.GONE
+        playVideo(currentVideoUrl)
+    }
+
+    private fun updateInterpButton() {
+        btnInterp.text = "MotionX2 60p: ${if (VideoEnhanceConfig.isInterpolationEnabled()) "ON" else "OFF"}"
+    }
+
+    private fun showUpscalerDialog() {
+        val modes = VideoEnhanceConfig.UpscalerMode.entries
+        val labels = modes.map { it.label }.toTypedArray()
+        val current = VideoEnhanceConfig.getUpscalerMode()
+        val selectedIdx = modes.indexOf(current)
+        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
+            .setTitle("Escalado de Video")
+            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
+                VideoEnhanceConfig.setUpscalerMode(modes[which])
+                updateUpscalerButton()
+                showController()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun updateUpscalerButton() {
+        val mode = VideoEnhanceConfig.getUpscalerMode()
+        btnUpscaler.text = "Escala: ${mode.label}"
+    }
+
+    private fun applySavedVolume() {
+        val p = player ?: return
+        p.volume = com.karin.streamtv.util.AppPreferences.getPlayerVolume()
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -185,9 +544,9 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
             .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
             .build()
         player = exoPlayer
+        applySavedVolume()
 
         addPlayerView(exoPlayer)
-        setupGlue(exoPlayer)
         exoPlayer.setMediaItem(MediaItem.fromUri(resolved.url))
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -195,6 +554,7 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
     }
 
     private fun playVideo(url: String) {
+        currentVideoUrl = url
         if (useEnhancedMode) {
             playWithEnhancedPipeline(url)
         } else {
@@ -202,18 +562,24 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
         }
     }
 
+    private fun isLocalUrl(url: String): Boolean =
+        url.startsWith("content://") || url.startsWith("file://")
+
     private fun playStandard(url: String) {
         val exoPlayer = ExoPlayer.Builder(requireContext(), com.karin.streamtv.player.dsp.DspRenderersFactory(requireContext()))
             .setMediaSourceFactory(
-                DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(VideoDataSource.factory(referer))
+                DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(
+                    if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
+                    else VideoDataSource.factory(referer)
+                )
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
             .build()
         player = exoPlayer
+        applySavedVolume()
 
         addPlayerView(exoPlayer)
-        setupGlue(exoPlayer)
         exoPlayer.setMediaItem(MediaItem.fromUri(url))
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -224,6 +590,7 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
         glSurface = android.opengl.GLSurfaceView(requireContext()).apply {
             setEGLContextClientVersion(2)
             preserveEGLContextOnPause = true
+            isFocusable = false
         }
         playerContainer.addView(glSurface, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -233,13 +600,19 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
 
         processor = Media3SixtyFpsProcessor(requireContext(), glSurface, referer)
         processor!!.setupGlPipeline()
+        processor!!.renderer?.setDebugModeValue(VideoEnhanceConfig.getDebugMode())
         processor!!.onGlFailure = { requireActivity().runOnUiThread { triggerGlFallback() } }
 
-        val exoPlayer = processor!!.createPlayer()
+        val exoPlayer = processor!!.createPlayer(
+            trackSelector = trackSelector,
+            dataSourceFactory = if (isLocalUrl(url))
+                androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
+            else null
+        )
         player = exoPlayer
+        applySavedVolume()
 
         processor!!.connectPlayer(exoPlayer)
-        setupGlue(exoPlayer)
         processor!!.play(url)
         attachListener(exoPlayer)
         startFpsPolling()
@@ -290,6 +663,18 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
                     } else {
                         fpsBadge.visibility = View.GONE
                     }
+                    val p = player
+                    if (p != null && p.isPlaying && p.playbackState == Player.STATE_READY) {
+                        val lastNs = r.lastRenderedFrameNs
+                        if (lastNs > 0) {
+                            val stallMs = (System.nanoTime() - lastNs) / 1_000_000
+                            if (stallMs > 2500) {
+                                Log.w(TAG, "Video congelado ${stallMs}ms mientras el audio avanza - resincronizando")
+                                processor?.resyncSurface()
+                                r.markResync()
+                            }
+                        }
+                    }
                     fallbackHandler.postDelayed(this, 1000)
                 } else {
                     fpsBadge.visibility = View.GONE
@@ -297,15 +682,6 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
             }
         }
         fallbackHandler.postDelayed(poll, 1000)
-    }
-
-    private fun setupGlue(exoPlayer: ExoPlayer) {
-        val adapter = LeanbackPlayerAdapter(requireContext(), exoPlayer, 500)
-        val g = PlaybackTransportControlGlue(requireContext(), adapter)
-        g.title = arguments?.getString("video_title") ?: "KarinFLiX"
-        g.isSeekEnabled = true
-        glue = g
-        g.setHost(PlaybackSupportFragmentGlueHost(this))
     }
 
     private fun attachListener(exoPlayer: ExoPlayer) {
@@ -331,30 +707,57 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
         if (animeId.isNotBlank() && episodeNumber > 0) {
             EpisodeProgress.markWatched(animeId, episodeNumber)
         }
-        if (!autoPlayTriggered && AutoPlayManager.isAutoPlayEnabled()
-            && currentEpisodeUrl.isNotBlank() && episodeNumber > 0) {
+        if (!autoPlayTriggered && AutoPlayManager.isAutoPlayEnabled()) {
             autoPlayTriggered = true
-            val nextUrl = AutoPlayManager.findNextEpisodeUrl(currentEpisodeUrl, episodeNumber)
-            if (nextUrl != null) {
+
+            val nextFromQueue = com.karin.streamtv.util.VideoQueue.peek()
+            if (nextFromQueue != null) {
+                com.karin.streamtv.util.VideoQueue.poll()
                 AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
                     override fun onCountdownTick(sec: Int) {
                         loadingText.visibility = View.VISIBLE
-                        loadingText.text = "Siguiente episodio en ${sec}s"
+                        loadingText.text = "Siguiente: ${nextFromQueue.title} en ${sec}s"
                     }
                     override fun onCountdownFinish() {
                         val intent = android.content.Intent(
                             requireContext(),
                             com.karin.streamtv.ui.SiteBrowserActivity::class.java
                         ).apply {
-                            putExtra("autoplay_url", nextUrl)
-                            putExtra("autoplay_title", "Episodio ${episodeNumber + 1}")
-                            putExtra("site_name", arguments?.getString("site_name") ?: "")
+                            putExtra("autoplay_url", nextFromQueue.embedUrl)
+                            putExtra("autoplay_title", nextFromQueue.title)
+                            putExtra("site_name", nextFromQueue.serverName)
                         }
                         startActivity(intent)
                         requireActivity().finish()
                     }
                     override fun onAutoPlayCancelled() {}
                 })
+                return
+            }
+
+            if (currentEpisodeUrl.isNotBlank() && episodeNumber > 0) {
+                val nextUrl = AutoPlayManager.findNextEpisodeUrl(currentEpisodeUrl, episodeNumber)
+                if (nextUrl != null) {
+                    AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
+                        override fun onCountdownTick(sec: Int) {
+                            loadingText.visibility = View.VISIBLE
+                            loadingText.text = "Siguiente episodio en ${sec}s"
+                        }
+                        override fun onCountdownFinish() {
+                            val intent = android.content.Intent(
+                                requireContext(),
+                                com.karin.streamtv.ui.SiteBrowserActivity::class.java
+                            ).apply {
+                                putExtra("autoplay_url", nextUrl)
+                                putExtra("autoplay_title", "Episodio ${episodeNumber + 1}")
+                                putExtra("site_name", arguments?.getString("site_name") ?: "")
+                            }
+                            startActivity(intent)
+                            requireActivity().finish()
+                        }
+                        override fun onAutoPlayCancelled() {}
+                    })
+                }
             }
         }
     }
@@ -371,7 +774,18 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
 
     override fun onResume() {
         super.onResume()
+        updateQueueBadge()
         player?.play()
+    }
+
+    private fun updateQueueBadge() {
+        val qSize = com.karin.streamtv.util.VideoQueue.size()
+        if (qSize > 0) {
+            tvQueueBadge.visibility = View.VISIBLE
+            tvQueueBadge.text = "Cola: $qSize"
+        } else {
+            tvQueueBadge.visibility = View.GONE
+        }
     }
 
     override fun onPause() {
@@ -381,6 +795,7 @@ class TvPlaybackFragment : PlaybackSupportFragment() {
     }
 
     override fun onDestroy() {
+        controllerHandler.removeCallbacksAndMessages(null)
         fallbackHandler.removeCallbacksAndMessages(null)
         processor?.release()
         processor = null

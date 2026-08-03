@@ -13,6 +13,8 @@ object AppPreferences {
     private const val KEY_PLAYNOW = "playnow_enabled"
     private const val KEY_SKIP_OPENING = "skip_opening_enabled"
     private const val KEY_SKIP_ENDING = "skip_ending_enabled"
+    private const val KEY_VIDEO_PLAYER_MODE = "video_player_mode_enabled"
+    private const val KEY_PLAYER_VOLUME = "player_volume"
 
     private var prefs: SharedPreferences? = null
 
@@ -70,12 +72,20 @@ object AppPreferences {
         prefs?.edit()?.putBoolean(KEY_SKIP_ENDING, enabled)?.apply()
     }
 
-    fun isVideoEnhanceEnabled(): Boolean {
-        return prefs?.getBoolean("video_enhance_enabled", true) ?: true
+    fun isVideoPlayerModeEnabled(): Boolean {
+        return prefs?.getBoolean(KEY_VIDEO_PLAYER_MODE, false) ?: false
     }
 
-    fun setVideoEnhanceEnabled(enabled: Boolean) {
-        prefs?.edit()?.putBoolean("video_enhance_enabled", enabled)?.apply()
+    fun setVideoPlayerModeEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_VIDEO_PLAYER_MODE, enabled)?.apply()
+    }
+
+    fun getPlayerVolume(): Float {
+        return prefs?.getFloat(KEY_PLAYER_VOLUME, 1.0f) ?: 1.0f
+    }
+
+    fun setPlayerVolume(v: Float) {
+        prefs?.edit()?.putFloat(KEY_PLAYER_VOLUME, v.coerceIn(0.1f, 3.0f))?.apply()
     }
 
 }

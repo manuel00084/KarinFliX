@@ -24,6 +24,21 @@ class TvExoPlayerActivity : FragmentActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val mapped = GamepadHelper.mapGamepadToDpad(keyCode)
         if (mapped != keyCode) return onKeyDown(mapped, event)
-        return super.onKeyDown(keyCode, event)
+        if (event?.action != KeyEvent.ACTION_DOWN) return super.onKeyDown(keyCode, event)
+        val frag = supportFragmentManager.findFragmentById(R.id.tv_player_root) as? TvPlaybackFragment
+            ?: return super.onKeyDown(keyCode, event)
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                frag.toggleController()
+                true
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                if (frag.isControllerVisible()) super.onKeyDown(keyCode, event) else {
+                    frag.showController()
+                    true
+                }
+            }
+            else -> super.onKeyDown(keyCode, event)
+        }
     }
 }

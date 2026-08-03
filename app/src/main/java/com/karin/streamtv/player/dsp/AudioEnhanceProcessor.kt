@@ -32,6 +32,8 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
 
     private var compLp = BiquadFilter()
     private var compHp = BiquadFilter()
+    private var compLpR = BiquadFilter()
+    private var compHpR = BiquadFilter()
     private val compEnv = DoubleArray(3)
     private val compSm = DoubleArray(3) { 1.0 }
     private var compAttack = 0.0
@@ -70,7 +72,7 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
             bypass(inputBuffer)
             return
         }
-        if (!params.enabled) {
+        if (!params.enabled || params.preset == AudioEnhanceConfig.Preset.OFF) {
             bypass(inputBuffer)
             return
         }
@@ -115,8 +117,8 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
                     val aR = abs(bassR)
                     bassEnvL = if (aL > bassEnvL) bassEnvL + (aL - bassEnvL) * 0.35 else bassEnvL + (aL - bassEnvL) * 0.012
                     bassEnvR = if (aR > bassEnvR) bassEnvR + (aR - bassEnvR) * 0.35 else bassEnvR + (aR - bassEnvR) * 0.012
-                    l += params.harmonicBass * harmonic(bassL)
-                    r += params.harmonicBass * harmonic(bassR)
+                    l += bassBoost(params.harmonicBass, bassL)
+                    r += bassBoost(params.harmonicBass, bassR)
 
                     l = excite(l, exciteLpL, params.exciterAmount)
                     r = excite(r, exciteLpR, params.exciterAmount)
@@ -139,7 +141,7 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
                     val bass = bassLpL.process(x)
                     val aB = abs(bass)
                     bassEnvL = if (aB > bassEnvL) bassEnvL + (aB - bassEnvL) * 0.35 else bassEnvL + (aB - bassEnvL) * 0.012
-                    x += params.harmonicBass * harmonic(bass)
+                    x += bassBoost(params.harmonicBass, bass)
 
                     x = excite(x, exciteLpL, params.exciterAmount)
 
@@ -166,7 +168,16 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         out.flip()
     }
 
-    private fun harmonic(b: Double): Double = 0.5 * (b * abs(b) + b * b * b)
+    private fun harmonic(b: Double): Double = 0.45 * tanh(b * abs(b))
+
+    private fun bassBoost(amt: Float, bass: Double): Double {
+        val boost = amt * harmonic(bass)
+        val a = abs(boost)
+        return if (a > 0.35) {
+            val s = if (boost > 0) 1.0 else -1.0
+            s * (0.35 + (a - 0.35) / (1.0 + (a - 0.35)))
+        } else boost
+    }
 
     private fun excite(x: Double, lp: BiquadFilter, amt: Float): Double {
         if (amt <= 0.0f) return x
@@ -180,8 +191,8 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         val ll = compLp.process(l)
         val lh = compHp.process(l)
         val lm = l - ll - lh
-        val rl = compLp.process(r)
-        val rh = compHp.process(r)
+        val rl = compLpR.process(r)
+        val rh = compHpR.process(r)
         val rm = r - rl - rh
         var ol = 0.0
         var or = 0.0
@@ -245,6 +256,8 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         if (stereo) exciteLpR.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 1400f, 0f, 0.707f)
         compLp.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 220f, 0f, 0.707f)
         compHp.configure(BiquadFilter.Kind.HIGHPASS, sampleRate, 3200f, 0f, 0.707f)
+        compLpR.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 220f, 0f, 0.707f)
+        compHpR.configure(BiquadFilter.Kind.HIGHPASS, sampleRate, 3200f, 0f, 0.707f)
     }
 
     private fun readSample(buf: ByteBuffer): Float {
@@ -284,6 +297,8 @@ class AudioEnhanceProcessor : BaseAudioProcessor() {
         reverbR?.reset()
         compLp.reset()
         compHp.reset()
+        compLpR.reset()
+        compHpR.reset()
         compEnv.fill(0.0)
         compSm.fill(1.0)
         xfBufL.fill(0.0)

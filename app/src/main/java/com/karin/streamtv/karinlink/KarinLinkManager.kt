@@ -32,7 +32,7 @@ class KarinLinkManager(private val context: Context) {
 
     val discoveryManager = DiscoveryManager(context)
     val roomManager = RoomManager()
-    val linkServer = LinkServer()
+    val linkClient = LinkClient()
 
     private val _isEnabled = MutableStateFlow(false)
     val isEnabled: StateFlow<Boolean> = _isEnabled
@@ -47,7 +47,7 @@ class KarinLinkManager(private val context: Context) {
 
         discoveryManager.startDiscovery()
 
-        linkServer.setHandler(object : LinkServer.MessageHandler {
+        linkClient.setHandler(object : LinkClient.MessageHandler {
             override fun onPeerConnected(deviceId: String, deviceName: String) {
                 Log.i(TAG, "Peer connected: $deviceName")
                 _status.value = "Conectado a $deviceName"
@@ -126,13 +126,13 @@ class KarinLinkManager(private val context: Context) {
         _isEnabled.value = false
         _status.value = "Desconectado"
         discoveryManager.destroy()
-        linkServer.shutdown()
+        linkClient.shutdown()
         roomManager.leaveRoom()
     }
 
     fun connectToDevice(device: DiscoveryManager.DiscoveredDevice) {
         _status.value = "Conectando a ${device.displayName}..."
-        linkServer.connect(device.host, device.port, deviceId, deviceName)
+        linkClient.connect(device.host, device.port, deviceId, deviceName)
     }
 
     fun createRoom(name: String): RoomManager.Room {
@@ -140,7 +140,7 @@ class KarinLinkManager(private val context: Context) {
     }
 
     fun shareEpisode(title: String, episodeTitle: String, episodeUrl: String, siteName: String) {
-        linkServer.sendJson("sync", org.json.JSONObject().apply {
+        linkClient.sendJson("sync", org.json.JSONObject().apply {
             put("deviceId", deviceId)
             put("episodeTitle", episodeTitle)
             put("episodeUrl", episodeUrl)
@@ -150,15 +150,15 @@ class KarinLinkManager(private val context: Context) {
     }
 
     fun broadcastPlay(episodeUrl: String, positionMs: Long) {
-        linkServer.broadcastPlay(episodeUrl, positionMs, deviceId)
+        linkClient.broadcastPlay(episodeUrl, positionMs, deviceId)
     }
 
     fun broadcastPause(positionMs: Long) {
-        linkServer.broadcastPause(positionMs, deviceId)
+        linkClient.broadcastPause(positionMs, deviceId)
     }
 
     fun broadcastSeek(positionMs: Long) {
-        linkServer.broadcastSeek(positionMs, deviceId)
+        linkClient.broadcastSeek(positionMs, deviceId)
     }
 
     fun shareHistory() {
@@ -177,6 +177,6 @@ class KarinLinkManager(private val context: Context) {
                 put("timestamp", entry.timestamp)
             })
         }
-        linkServer.sendHistory(array.toString())
+        linkClient.sendHistory(array.toString())
     }
 }

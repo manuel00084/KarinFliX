@@ -35,6 +35,36 @@ class EpisodeAdapter(
     private val pendingJobs = mutableMapOf<String, Job>()
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
+    private val selectedUrls = LinkedHashSet<String>()
+    private var selectionMode = false
+    var onSelectionCountChanged: ((Int) -> Unit)? = null
+
+    fun setSelectionMode(enabled: Boolean) {
+        if (selectionMode == enabled) return
+        selectionMode = enabled
+        if (!enabled) selectedUrls.clear()
+        notifyDataSetChanged()
+        onSelectionCountChanged?.invoke(selectedUrls.size)
+    }
+
+    fun isSelectionMode(): Boolean = selectionMode
+
+    fun selectedCount(): Int = selectedUrls.size
+
+    fun toggleSelection(episode: Episode) {
+        if (!selectedUrls.add(episode.url)) selectedUrls.remove(episode.url)
+        notifyDataSetChanged()
+        onSelectionCountChanged?.invoke(selectedUrls.size)
+    }
+
+    fun getSelectedEpisodes(): List<Episode> = episodes.filter { selectedUrls.contains(it.url) }
+
+    fun clearSelection() {
+        selectedUrls.clear()
+        notifyDataSetChanged()
+        onSelectionCountChanged?.invoke(0)
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val layoutRes = if (isGrid) R.layout.item_episode_grid else R.layout.item_episode_card
         val view = LayoutInflater.from(parent.context)
@@ -104,6 +134,12 @@ class EpisodeAdapter(
 
         holder.itemView.setOnClickListener { onEpisodeClick(episode) }
         holder.itemView.onActionKey { onEpisodeClick(episode) }
+
+        val isSelected = selectionMode && selectedUrls.contains(episode.url)
+        holder.selectedCheck?.visibility = if (isSelected) View.VISIBLE else View.GONE
+        holder.itemView.setBackgroundResource(if (isSelected) R.drawable.bg_selected else R.drawable.bg_card)
+        holder.itemView.setOnClickListener { if (selectionMode) toggleSelection(episode) else onEpisodeClick(episode) }
+        holder.itemView.onActionKey { if (selectionMode) toggleSelection(episode) else onEpisodeClick(episode) }
     }
 
     override fun getItemCount() = episodes.size
@@ -136,6 +172,7 @@ class EpisodeAdapter(
         val partialBadge: LinearLayout = view.findViewById(R.id.partial_badge)
         val partialProgress: TextView = view.findViewById(R.id.tv_partial_progress)
         val tvEpisodeNumber: TextView = view.findViewById(R.id.tv_episode_number)
+        val selectedCheck: TextView? = view.findViewById(R.id.tv_selected_check)
     }
 
     private suspend fun loadImage(url: String): Bitmap? = withContext(Dispatchers.IO) {

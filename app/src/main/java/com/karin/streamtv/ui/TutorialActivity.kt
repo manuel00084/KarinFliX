@@ -2,10 +2,12 @@ package com.karin.streamtv.ui
 
 import android.graphics.Color
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityManager
 import android.widget.TextView
 import androidx.fragment.app.FragmentActivity
 import com.karin.streamtv.R
+import com.karin.streamtv.util.GamepadHelper
 import com.karin.streamtv.util.onActionKey
 
 class TutorialActivity : FragmentActivity() {
@@ -33,8 +35,12 @@ class TutorialActivity : FragmentActivity() {
         } catch (_: Exception) { }
     }
 
-    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        if (keyCode == android.view.KeyEvent.KEYCODE_BACK || keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        val mapped = GamepadHelper.mapGamepadToDpad(keyCode)
+        if (mapped != keyCode) {
+            return onKeyDown(mapped, event)
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
             finish()
             return true
         }

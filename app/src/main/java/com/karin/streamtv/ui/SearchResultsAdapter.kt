@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.karin.streamtv.R
 import com.karin.streamtv.util.DiskImageCache
 import com.karin.streamtv.util.SearchManager
+import com.karin.streamtv.util.SiteBranding
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,16 +34,6 @@ class SearchResultsAdapter(
     }
     private val pendingJobs = mutableMapOf<String, Job>()
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-
-    private val siteColors = mapOf(
-        "JKAnime" to Color.parseColor("#1E88E5"),
-        "LatAnime" to Color.parseColor("#43A047"),
-        "DoramasYT" to Color.parseColor("#00BCD4"),
-        "MundoDonghua" to Color.parseColor("#8E24AA"),
-        "RetroTVE" to Color.parseColor("#FF9800"),
-        "LaCartoons" to Color.parseColor("#E91E63"),
-        "FrikiSeries" to Color.parseColor("#1B5E20"),
-    )
 
     private val placeholderCache = LruCache<String, Bitmap>(8)
 
@@ -95,7 +86,7 @@ class SearchResultsAdapter(
 
             val siteName = result.site
             siteBadge.text = siteName
-            val color = siteColors[siteName] ?: Color.parseColor("#555555")
+            val color = SiteBranding.brandColors[siteName] ?: Color.parseColor("#555555")
             siteBadge.setBackgroundColor(color)
 
             if (result.episodeNum.isNotBlank()) {
@@ -152,7 +143,7 @@ class SearchResultsAdapter(
         val size = 80
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val color = siteColors[siteName] ?: Color.parseColor("#555555")
+        val color = SiteBranding.brandColors[siteName] ?: Color.parseColor("#555555")
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
         c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), p)
         p.color = Color.WHITE

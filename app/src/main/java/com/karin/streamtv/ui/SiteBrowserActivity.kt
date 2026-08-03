@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -16,7 +17,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
-import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import android.util.Log
 import com.karin.streamtv.R
@@ -29,6 +29,7 @@ import com.karin.streamtv.scraper.ScraperRegistry
 import com.karin.streamtv.scraper.ServerExtractor
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.model.VideoSource
+import com.karin.streamtv.util.ServerHelper
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.Dispatchers
 
@@ -39,7 +40,6 @@ import kotlinx.coroutines.withContext
 class SiteBrowserActivity : AppCompatActivity() {
 
     private lateinit var rvEpisodes: RecyclerView
-    private lateinit var rvMenu: RecyclerView
     private lateinit var tvTitle: TextView
     private lateinit var etSearch: EditText
     private lateinit var btnSearch: TextView
@@ -86,7 +86,6 @@ class SiteBrowserActivity : AppCompatActivity() {
         siteUrl = intent.getStringExtra("site_url") ?: ""
 
         rvEpisodes = findViewById(R.id.rv_episodes)
-        rvMenu = findViewById(R.id.rv_menu)
         tvTitle = findViewById(R.id.tv_site_title)
         etSearch = findViewById(R.id.et_search)
         btnSearch = findViewById(R.id.btn_search)
@@ -134,12 +133,83 @@ class SiteBrowserActivity : AppCompatActivity() {
 
         val isTv = DeviceUtils.isTvDevice(this)
         rvEpisodes.layoutManager = GridLayoutManager(this, 3)
-        rvEpisodes.setHasFixedSize(true)
         if (isTv) {
             etSearch.isFocusableInTouchMode = false
+            // Configurar foco para TV
+            rvEpisodes.isFocusable = true
+            rvEpisodes.isFocusableInTouchMode = true
+            rvEpisodes.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            // Solicitar foco inicial al RecyclerView cuando se carguen los datos
+            rvEpisodes.setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    rvEpisodes.post {
+                        val firstChild = rvEpisodes.getChildAt(0)
+                        firstChild?.requestFocus()
+                    }
+                }
+            }
+            // DPAD_UP desde grid -> barra superior (último botón enfocado)
+            rvEpisodes.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    val firstVisible = (rvEpisodes.layoutManager as GridLayoutManager).findFirstVisibleItemPosition()
+                    if (firstVisible == 0) {
+                        btnSettings.requestFocus()
+                        return@setOnKeyListener true
+                    }
+                }
+                false
+            }
+            // Navegación DPAD entre barra superior y grid + horizontal en barra
+            val topBarButtons = listOf(btnHome, btnDirectory, btnSettings)
+            topBarButtons.forEachIndexed { index, btn ->
+                btn.setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        when (keyCode) {
+                            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                rvEpisodes.requestFocus()
+                                true
+                            }
+                            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                if (index > 0) topBarButtons[index - 1].requestFocus()
+                                true
+                            }
+                            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                if (index < topBarButtons.lastIndex) topBarButtons[index + 1].requestFocus()
+                                true
+                            }
+                            else -> false
+                        }
+                    } else false
+                }
+            }
+            // Spinners navegables con DPAD
+            listOf(spinnerYear, spinnerGenre, spinnerLetter, spinnerCategory).forEach { spinner ->
+                spinner.setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        when (keyCode) {
+                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                                spinner.performClick()
+                                true
+                            }
+                            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                rvEpisodes.requestFocus()
+                                true
+                            }
+                            else -> false
+                        }
+                    } else false
+                }
+            }
+            btnFilterApply.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_DOWN -> { rvEpisodes.requestFocus(); true }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> { spinnerCategory.requestFocus(); true }
+                        else -> false
+                    }
+                } else false
+            }
         }
-
-        rvMenu.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
 
         btnSearch.setOnClickListener { toggleSearchBar() }
         etSearch.setOnEditorActionListener { _, actionId, _ ->
@@ -250,6 +320,10 @@ class SiteBrowserActivity : AppCompatActivity() {
                 rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
                     openEpisode(episode)
                 }
+                // TV: solicitar foco en grid tras cargar datos
+                if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) {
+                    rvEpisodes.post { rvEpisodes.requestFocus() }
+                }
                 tvEmpty.visibility = android.view.View.GONE
             } catch (e: Exception) {
                 Log.e("SiteBrowser", "loadHomepage error: ${e.message}", e)
@@ -315,9 +389,10 @@ class SiteBrowserActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
+rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
                     openEpisode(episode)
                 }
+                if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
             } catch (e: Exception) {
                 Log.e("SiteBrowser", "performSearch error: ${e.message}", e)
                 loadingOverlay.visibility = android.view.View.GONE
@@ -358,6 +433,7 @@ class SiteBrowserActivity : AppCompatActivity() {
                 rvEpisodes.adapter = EpisodeAdapter(currentEpisodes, siteUrl) { episode ->
                     openEpisode(episode)
                 }
+                if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
                 rvEpisodes.scrollToPosition(0)
 
                 currentPageNum++
@@ -408,6 +484,7 @@ class SiteBrowserActivity : AppCompatActivity() {
                 rvEpisodes.adapter = EpisodeAdapter(currentEpisodes, siteUrl) { episode ->
                     openEpisode(episode)
                 }
+                if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
                 rvEpisodes.scrollToPosition(0)
 
                 currentPageNum = (currentPageNum - 1).coerceAtLeast(1)
@@ -537,6 +614,7 @@ class SiteBrowserActivity : AppCompatActivity() {
                     }
                     startActivity(intent)
                 }
+                if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
                 rvEpisodes.scrollToPosition(0)
 
                 if (doc != null) {
@@ -602,6 +680,7 @@ class SiteBrowserActivity : AppCompatActivity() {
                     }
                     startActivity(intent)
                 }
+                if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
                 rvEpisodes.scrollToPosition(0)
 
                 if (doc != null) {
@@ -628,54 +707,6 @@ class SiteBrowserActivity : AppCompatActivity() {
         else -> "$siteUrl/animes"
     }
 
-    private fun onCategoryClick(item: SiteMenuItem) {
-        hideSearchBar()
-        filterBar.visibility = View.GONE
-        paginationBar.visibility = View.GONE
-        currentPageNum = 1
-        showingSearchResults = false
-        lastSearchQuery = ""
-        showLoading("Cargando ${item.name}...")
-        tvEmpty.visibility = android.view.View.GONE
-
-        lifecycleScope.launch {
-            try {
-                val (episodes, doc) = withContext(Dispatchers.IO) {
-                    val doc = ScrapingEngine.fetch(item.url, siteName, "${siteName}::${item.name}")
-                    val eps = if (doc != null) DynamicParser.parseDynamic(doc, siteName) else emptyList()
-                    Pair(eps, doc)
-                }
-
-                loadingOverlay.visibility = android.view.View.GONE
-
-                if (episodes.isEmpty()) {
-                    tvEmpty.visibility = android.view.View.VISIBLE
-                    tvEmpty.text = "No hay contenido en '${item.name}'"
-                    return@launch
-                }
-
-                currentSeriesName = item.name
-                currentPageUrl = item.url
-                currentEpisodes = ArrayList(episodes)
-                rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
-                    openEpisode(episode)
-                }
-
-                if (doc != null) {
-                    nextPageUrl = DynamicParser.findNextPageUrl(doc, item.url)
-                    btnNextPage.visibility = if (nextPageUrl != null) android.view.View.VISIBLE else android.view.View.GONE
-                    prevPageUrl = DynamicParser.findPrevPageUrl(doc, item.url)
-                    btnPrevPage.visibility = if (prevPageUrl != null) android.view.View.VISIBLE else android.view.View.GONE
-                }
-            } catch (e: Exception) {
-                Log.e("SiteBrowser", "Category error: ${e.message}", e)
-                loadingOverlay.visibility = android.view.View.GONE
-                tvEmpty.visibility = android.view.View.VISIBLE
-                tvEmpty.text = "Error al cargar '${item.name}'"
-            }
-        }
-    }
-
     private fun toggleSearchBar() {
         if (etSearch.visibility == android.view.View.VISIBLE) {
             hideSearchBar()
@@ -696,8 +727,9 @@ class SiteBrowserActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 Log.d("SiteBrowser", "Starting server extraction for: ${episode.url}")
+                val scraper = ScraperRegistry.getScraper(siteName)
                 val servers = withContext(Dispatchers.IO) {
-                    ServerExtractor.extractServers(episode.url, siteName)
+                    scraper?.extractServers(episode.url) ?: ServerExtractor.extractServers(episode.url, siteName)
                 }
                 Log.d("SiteBrowser", "Server extraction complete: found ${servers.size} servers for ${episode.url}")
                 servers.forEach { Log.d("SiteBrowser", "  Server: ${it.name} -> ${it.serverUrl}") }
@@ -732,19 +764,52 @@ class SiteBrowserActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_servers, null)
         val listView = view.findViewById<android.widget.ListView>(R.id.lv_servers)
         val tvCount = view.findViewById<TextView>(R.id.tv_server_count)
+        val btnAddToQueue = view.findViewById<TextView>(R.id.btn_add_to_queue)
+        val tvQueueCount = view.findViewById<TextView>(R.id.btn_queue_count)
         tvCount.text = "${sorted.size} servidores"
 
+        fun updateQueueBadge() {
+            val qSize = com.karin.streamtv.util.VideoQueue.size()
+            if (qSize > 0) {
+                tvQueueCount.visibility = android.view.View.VISIBLE
+                tvQueueCount.text = "Cola: $qSize"
+            } else {
+                tvQueueCount.visibility = android.view.View.GONE
+            }
+        }
+        updateQueueBadge()
+
         listView.adapter = ServerAdapter(sorted, title)
+
+        btnAddToQueue.setOnClickListener {
+            val best = sorted.firstOrNull()
+            val embedUrl = best?.serverUrl ?: episodeUrl
+            val item = com.karin.streamtv.model.PlaylistItem(
+                title = title,
+                url = episodeUrl,
+                embedUrl = embedUrl,
+                serverName = best?.name ?: siteName,
+                episodeNumber = ServerHelper.extractEpisodeNumber(title)
+            )
+            com.karin.streamtv.util.VideoQueue.add(item)
+            updateQueueBadge()
+            Toast.makeText(this, "Agregado a la cola (${com.karin.streamtv.util.VideoQueue.size()})", Toast.LENGTH_SHORT).show()
+        }
+        btnAddToQueue.onActionKey { btnAddToQueue.performClick() }
 
         val dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
             .setView(view)
             .setNegativeButton("Cancelar", null)
-            .show()
+            .create()
 
         dialog.window?.setLayout(
             (resources.displayMetrics.widthPixels * 0.85).toInt(),
             android.view.WindowManager.LayoutParams.WRAP_CONTENT
         )
+
+        com.karin.streamtv.util.TvDialogHelper.makeListTvReady(dialog, listView, this)
+
+        dialog.show()
 
         listView.setOnItemClickListener { _, _, which, _ ->
             dialog.dismiss()
@@ -766,7 +831,7 @@ class SiteBrowserActivity : AppCompatActivity() {
             }
             putExtra("video_title", title)
             putExtra("episode_url", currentEpisodeUrl)
-            putExtra("episode_number", extractEpisodeNumber(title))
+            putExtra("episode_number", ServerHelper.extractEpisodeNumber(title))
             if (allServers.isNotEmpty()) {
                 val serverUrls = allServers.map { it.serverUrl }.toTypedArray()
                 val serverNames = allServers.map { it.name }.toTypedArray()
@@ -791,7 +856,7 @@ class SiteBrowserActivity : AppCompatActivity() {
             }
             putExtra("video_title", server.name)
             putExtra("episode_url", currentEpisodeUrl)
-            putExtra("episode_number", extractEpisodeNumber(server.name))
+            putExtra("episode_number", ServerHelper.extractEpisodeNumber(server.name))
             putExtra("open_external", true)
         }
         startActivity(intent)
@@ -837,35 +902,20 @@ class SiteBrowserActivity : AppCompatActivity() {
             row.setOnClickListener { openEmbedWebView(server, title, servers) }
 
             btnFb.setOnClickListener {
-                shareUrl(server.serverUrl, server.name, "com.facebook.katana")
+                ServerHelper.shareUrl(this@SiteBrowserActivity, server.serverUrl, server.name, "com.facebook.katana")
             }
             btnWa.setOnClickListener {
-                shareUrl(server.serverUrl, server.name, "com.whatsapp")
+                ServerHelper.shareUrl(this@SiteBrowserActivity, server.serverUrl, server.name, "com.whatsapp")
             }
             btnExt.setOnClickListener { openExternalPlayer(server) }
 
-            return row
-        }
-    }
+            if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) {
+                btnFb.isFocusable = false
+                btnWa.isFocusable = false
+                btnExt.isFocusable = false
+            }
 
-    private fun shareUrl(url: String, label: String, targetPackage: String) {
-        try {
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, "$label - $url")
-                `package` = targetPackage
-            }
-            startActivity(intent)
-        } catch (_: Exception) {
-            try {
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, "$label - $url")
-                }
-                startActivity(Intent.createChooser(intent, "Compartir"))
-            } catch (_: Exception) {
-                Toast.makeText(this, "App no disponible", Toast.LENGTH_SHORT).show()
-            }
+            return row
         }
     }
 
@@ -911,19 +961,5 @@ class SiteBrowserActivity : AppCompatActivity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
-    }
-
-    private fun extractEpisodeNumber(title: String): Int {
-        val patterns = listOf(
-            Regex("""(?i)(?:episodio|episode|capitulo|cap|ep\.?|#)\s*(\d+)"""),
-            Regex("""(\d+)""")
-        )
-        for (pattern in patterns) {
-            val match = pattern.find(title)
-            if (match != null) {
-                return match.groupValues[1].toIntOrNull() ?: 0
-            }
-        }
-        return 0
     }
 }

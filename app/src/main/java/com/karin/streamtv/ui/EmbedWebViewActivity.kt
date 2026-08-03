@@ -51,6 +51,8 @@ class EmbedWebViewActivity : AppCompatActivity() {
     private var currentServerIndex: Int = 0
     private var videoFound: Boolean = false
     private var nextEpisodeUrlFromDom: String? = null
+    private var playlist: List<com.karin.streamtv.model.PlaylistItem> = emptyList()
+    private var playlistIndex: Int = 0
     
     private var skipInterval: AniSkipService.SkipInterval? = null
     private var isShowingSkipButton: Boolean = false
@@ -1214,8 +1216,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_embed_webview)
 
-        AppPreferences.init(this)
-        com.karin.streamtv.player.VideoEnhanceConfig.init(this)
         webView = findViewById(R.id.webview)
         loadingLayout = findViewById(R.id.webview_loading)
         skipButtonContainer = findViewById(R.id.skip_button_container)
@@ -1232,6 +1232,8 @@ class EmbedWebViewActivity : AppCompatActivity() {
         allServerUrls = intent.getStringArrayExtra("all_server_urls") ?: emptyArray()
         allServerNames = intent.getStringArrayExtra("all_server_names") ?: emptyArray()
         currentServerIndex = intent.getIntExtra("current_server_index", 0)
+        playlist = com.karin.streamtv.util.PlaylistQueue.fromJson(intent.getStringExtra("playlist_json"))
+        playlistIndex = intent.getIntExtra("playlist_index", 0)
 
         if (episodeUrl.isNotBlank()) {
             animeId = EpisodeProgress.generateAnimeId(episodeUrl)
@@ -1379,6 +1381,7 @@ class EmbedWebViewActivity : AppCompatActivity() {
                                         if(h&&h.indexOf('http')===0&&h.indexOf('doubleclick')===-1&&h.indexOf(window.location.hostname)===-1){
                                             window.location.href=h;return;
                                         }
+                                    }
                                 }
                             },15000);
                         })();
@@ -1551,6 +1554,10 @@ class EmbedWebViewActivity : AppCompatActivity() {
                     putExtra("episode_number", episodeNumber)
                     putExtra("referer", resolved.referer)
                     putExtra("site_name", intent.getStringExtra("site_name") ?: "")
+                    if (playlist.isNotEmpty()) {
+                        putExtra("playlist_json", com.karin.streamtv.util.PlaylistQueue.toJson(playlist))
+                        putExtra("playlist_index", playlistIndex)
+                    }
                     if (resolved.needsMegaDecrypt && resolved.megaKey != null) {
                         putExtra("mega_key", android.util.Base64.encodeToString(resolved.megaKey, android.util.Base64.NO_WRAP))
                         putExtra("mega_ctr", resolved.megaCtrStart)
@@ -1645,6 +1652,10 @@ class EmbedWebViewActivity : AppCompatActivity() {
                         putExtra("episode_number", episodeNumber)
                         putExtra("referer", ref)
                         putExtra("site_name", intent.getStringExtra("site_name") ?: "")
+                        if (playlist.isNotEmpty()) {
+                            putExtra("playlist_json", com.karin.streamtv.util.PlaylistQueue.toJson(playlist))
+                            putExtra("playlist_index", playlistIndex)
+                        }
                     }
                     startActivity(intent)
                     finish()
@@ -1681,6 +1692,50 @@ class EmbedWebViewActivity : AppCompatActivity() {
             autoPlayTriggered = true
             mainHandler.post {
                 if (!com.karin.streamtv.util.AutoPlayManager.isAutoPlayEnabled()) return@post
+
+                val nextFromQueue = com.karin.streamtv.util.VideoQueue.peek()
+                if (nextFromQueue != null) {
+                    com.karin.streamtv.util.VideoQueue.poll()
+                    Log.d(TAG, "Auto-play from queue: ${nextFromQueue.title}")
+                    Toast.makeText(this@EmbedWebViewActivity, "Siguiente: ${nextFromQueue.title}", Toast.LENGTH_SHORT).show()
+                    com.karin.streamtv.util.AutoPlayManager.startCountdown(object : com.karin.streamtv.util.AutoPlayManager.AutoPlayCallback {
+                        override fun onCountdownTick(secondsRemaining: Int) {
+                            Toast.makeText(this@EmbedWebViewActivity, "Siguiente: ${nextFromQueue.title} en ${secondsRemaining}s", Toast.LENGTH_SHORT).show()
+                        }
+                        override fun onCountdownFinish() {
+                            val intent = android.content.Intent(this@EmbedWebViewActivity, SiteBrowserActivity::class.java).apply {
+                                putExtra("autoplay_url", nextFromQueue.embedUrl)
+                                putExtra("autoplay_title", nextFromQueue.title)
+                                putExtra("site_name", nextFromQueue.serverName)
+                            }
+                            startActivity(intent)
+                            finish()
+                        }
+                        override fun onAutoPlayCancelled() {}
+                    })
+                    return@post
+                }
+
+                if (playlist.isNotEmpty()) {
+                    val nextIndex = playlistIndex + 1
+                    if (nextIndex >= playlist.size) return@post
+                    val next = playlist[nextIndex]
+                    val siteName = intent.getStringExtra("site_name") ?: ""
+                    Log.d(TAG, "Auto-play next playlist item: ${next.title}")
+                    Toast.makeText(this@EmbedWebViewActivity, "Siguiente: ${next.title}", Toast.LENGTH_SHORT).show()
+                    com.karin.streamtv.util.AutoPlayManager.startCountdown(object : com.karin.streamtv.util.AutoPlayManager.AutoPlayCallback {
+                        override fun onCountdownTick(secondsRemaining: Int) {
+                            Toast.makeText(this@EmbedWebViewActivity, "Siguiente: ${next.title} en ${secondsRemaining}s", Toast.LENGTH_SHORT).show()
+                        }
+                        override fun onCountdownFinish() {
+                            startActivity(com.karin.streamtv.util.PlaylistQueue.buildIntent(this@EmbedWebViewActivity, playlist, nextIndex, siteName))
+                            finish()
+                        }
+                        override fun onAutoPlayCancelled() {}
+                    })
+                    return@post
+                }
+
                 if (currentEpisodeUrl.isBlank() || episodeNumber <= 0) return@post
 
                 val domUrl = nextEpisodeUrlFromDom

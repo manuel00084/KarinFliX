@@ -6,15 +6,13 @@ import android.content.SharedPreferences
 object AudioEnhanceConfig {
 
     enum class Preset(val label: String) {
-        OFF("Apagado"),
-        ANIME("Anime/Shonen"),
+        OFF("Apagado (sin DSP)"),
+        ANIME("Anime"),
         CINEMA("Cine/Películas"),
         BASS_BOOST("Bass Boost"),
         SURROUND("3D Surround"),
         DIALOGUE("Diálogos/Noticias"),
-        GAMING("Gaming"),
-        MUSIC("Música"),
-        LATE_NIGHT("Noche (bajo volumen)")
+        MUSIC("Música")
     }
 
     data class Params(
@@ -61,14 +59,14 @@ object AudioEnhanceConfig {
             )
             Preset.BASS_BOOST -> Params(
                 Preset.BASS_BOOST, true,
-                bassGain = +6.0f,
+                bassGain = +5.0f,
                 trebleGain = -1.0f,
-                subBassGain = +8.0f,   // sub-bass extremo
+                subBassGain = +4.0f,   // sub-bass potente pero sin recortar
                 presenceGain = -1.0f,
                 surroundWidth = 0.1f,
                 exciterAmount = 0.05f,
-                harmonicBass = 0.8f,   // saturación armónica fuerte
-                compression = 0.5f,
+                harmonicBass = 0.45f,  // saturación armónica suave (tanh acotada)
+                compression = 0.35f,
                 reverbMix = 0.02f,
                 masterGain = 1.0f
             )
@@ -98,19 +96,6 @@ object AudioEnhanceConfig {
                 reverbMix = 0.0f,
                 masterGain = 1.2f
             )
-            Preset.GAMING -> Params(
-                Preset.GAMING, true,
-                bassGain = +4.0f,      // explosiones, pasos
-                trebleGain = +3.5f,    // footsteps, reload sounds
-                subBassGain = +3.0f,
-                presenceGain = +4.0f,  // posicionamiento direccional
-                surroundWidth = 0.8f,  // soundstage ancho
-                exciterAmount = 0.3f,
-                harmonicBass = 0.25f,
-                compression = 0.55f,   // normaliza volumen armas/ambiente
-                reverbMix = 0.1f,
-                masterGain = 1.1f
-            )
             Preset.MUSIC -> Params(
                 Preset.MUSIC, true,
                 bassGain = +2.5f,
@@ -123,19 +108,6 @@ object AudioEnhanceConfig {
                 compression = 0.25f,   // preserva dinámica
                 reverbMix = 0.05f,
                 masterGain = 1.08f
-            )
-            Preset.LATE_NIGHT -> Params(
-                Preset.LATE_NIGHT, true,
-                bassGain = -2.0f,      // evita molestar vecinos
-                trebleGain = +1.5f,    // claridad a bajo volumen
-                subBassGain = -6.0f,
-                presenceGain = +4.0f,  // inteligibilidad
-                surroundWidth = 0.1f,
-                exciterAmount = 0.15f,
-                harmonicBass = 0.05f,
-                compression = 0.8f,    // compresión fuerte = todo audible
-                reverbMix = 0.0f,
-                masterGain = 1.3f      // compensación volumen bajo
             )
         }
     }
@@ -165,7 +137,7 @@ object AudioEnhanceConfig {
 
     fun preset(): Preset {
         val idx = prefs?.getInt(KEY_PRESET, 1) ?: 1 // default ANIME
-        return Preset.values().getOrElse(idx.coerceIn(0, Preset.values().size - 1)) { Preset.ANIME }
+        return Preset.entries.getOrElse(idx.coerceIn(0, Preset.entries.size - 1)) { Preset.ANIME }
     }
     fun setPreset(p: Preset) { prefs?.edit()?.putInt(KEY_PRESET, p.ordinal)?.apply() }
 

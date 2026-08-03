@@ -231,15 +231,6 @@ class VideoExtractorHelper(private val container: ViewGroup) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
 
-    fun extract(embedUrl: String, serverName: String = "", onResult: (String?) -> Unit) {
-        val deferred = CompletableDeferred<String?>()
-        mainHandler.post {
-            doExtract(embedUrl, serverName) { url ->
-                deferred.complete(url)
-            }
-        }
-    }
-
     suspend fun extractSuspend(embedUrl: String, serverName: String = ""): String? {
         val deferred = CompletableDeferred<String?>()
         mainHandler.post {

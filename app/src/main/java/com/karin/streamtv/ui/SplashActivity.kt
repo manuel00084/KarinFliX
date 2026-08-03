@@ -10,7 +10,6 @@ import com.karin.streamtv.R
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.AutoPlayManager
 import com.karin.streamtv.util.CrashLogger
-import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.DiskImageCache
 import com.karin.streamtv.util.EpisodeProgress
 import com.karin.streamtv.util.Http
@@ -29,7 +28,6 @@ class SplashActivity : AppCompatActivity() {
             CrashLogger.log(this, "Splash", "onCreate started")
             setContentView(R.layout.activity_splash)
 
-            AppPreferences.init(this)
             Http.initCache(cacheDir)
             WatchHistory.init(this)
             EpisodeProgress.init(this)
@@ -50,12 +48,7 @@ class SplashActivity : AppCompatActivity() {
                     try {
                         progressBar.progress = 100
                         CrashLogger.log(this@SplashActivity, "Splash", "navigating")
-                        val target = if (DeviceUtils.isTvDevice(this@SplashActivity)) {
-                            com.karin.streamtv.ui.tv.TvMainActivity::class.java
-                        } else {
-                            MainActivity::class.java
-                        }
-                        startActivity(Intent(this@SplashActivity, target))
+                        startActivity(Intent(this@SplashActivity, MainActivity::class.java))
                     } catch (e: Exception) {
                         CrashLogger.log(this@SplashActivity, "Splash", "onFinish error: ${e.message}")
                     }
