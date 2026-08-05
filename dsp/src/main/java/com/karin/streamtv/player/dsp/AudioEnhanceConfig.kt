@@ -60,6 +60,7 @@ object AudioEnhanceConfig {
         val surfaceResonance: Boolean = true, // resonancia de caja/superficie (TV en rack)
         val speechClarity: Boolean = true, // realce dinámico de voz (diálogos claros)
         val subharmonicMix: Float = 0f,  // 0..1.0 (sintetizador subarmónico para bocinas TV)
+        val deBoxing: Float = 0f,        // 0..1.0 (corte de resonancia de caja 250-400 Hz)
         val parametricEq: List<ParamBand>? = null, // curvas AutoEQ paramétricas
         val userIrName: String? = null, // nombre del IR de usuario cargado
         val eq10: FloatArray? = null    // 10 bandas ISO dB (31..16k); null = derivar del preset
@@ -90,6 +91,7 @@ object AudioEnhanceConfig {
                 surfaceResonance == other.surfaceResonance &&
                  speechClarity == other.speechClarity &&
                  subharmonicMix == other.subharmonicMix &&
+                 deBoxing == other.deBoxing &&
                  parametricEq == other.parametricEq &&
                 userIrName == other.userIrName &&
                 eq10.contentEquals(other.eq10)
@@ -119,30 +121,32 @@ object AudioEnhanceConfig {
             h = 31 * h + surfaceResonance.hashCode()
              h = 31 * h + speechClarity.hashCode()
             h = 31 * h + subharmonicMix.hashCode()
+            h = 31 * h + deBoxing.hashCode()
             h = 31 * h + (parametricEq?.hashCode() ?: 0)
             h = 31 * h + (userIrName?.hashCode() ?: 0)
             h = 31 * h + (eq10?.contentHashCode() ?: 0)
             return h
         }
         fun withPreset(p: Preset): Params = when (p) {
-            Preset.OFF -> Params(Preset.OFF, false, autoDevice = false, subharmonicMix = 0f)
-            // ANIME — TV speakers: diálogos nítidos, OST con cuerpo, sub-bass virtual
-            Preset.ANIME -> Params(
-                Preset.ANIME, true, autoDevice = false,
-                bassGain = +2.0f,       // medio-bajo: peso a efectos/OST sin embarrar
-                trebleGain = +0.8f,     // brillo suave, evita sibilancia en voces JP
-                subBassGain = -1.5f,    // corta sub real; VirtualBass (harmonicBass) lo reconstruye
-                presenceGain = +2.5f,   // 2-4 kHz: claridad máxima en voces/anime
-                surroundWidth = 0.3f,   // ancho moderado para estéreo TV
-                fieldSurround = 0.15f,  // Haas sutil: sensación de "delante"
-                exciterAmount = 0.1f,   // armónicos agudos: detalle en OST
-                harmonicBass = 0.4f,    // TruBass fuerte: sub virtual convincente
-                compression = 0.45f,    // nivelación anime (susurros ↔ gritos)
-                reverbMix = 0.02f,      // casi seco: TV pequeña no necesita sala
-                masterGain = 1.0f,
+             Preset.OFF -> Params(Preset.OFF, false, autoDevice = false, subharmonicMix = 0f, deBoxing = 0f)
+             // ANIME — TV speakers: diálogos nítidos, OST con cuerpo, sub-bass virtual
+             Preset.ANIME -> Params(
+                 Preset.ANIME, true, autoDevice = false,
+                 bassGain = +2.0f,       // medio-bajo: peso a efectos/OST sin embarrar
+                 trebleGain = +0.8f,     // brillo suave, evita sibilancia en voces JP
+                 subBassGain = -1.5f,    // corta sub real; VirtualBass (harmonicBass) lo reconstruye
+                 presenceGain = +2.5f,   // 2-4 kHz: claridad máxima en voces/anime
+                 surroundWidth = 0.3f,   // ancho moderado para estéreo TV
+                 fieldSurround = 0.15f,  // Haas sutil: sensación de "delante"
+                 exciterAmount = 0.1f,   // armónicos agudos: detalle en OST
+                 harmonicBass = 0.4f,    // TruBass fuerte: sub virtual convincente
+                 compression = 0.45f,    // nivelación anime (susurros ↔ gritos)
+                 reverbMix = 0.02f,      // casi seco: TV pequeña no necesita sala
+                 masterGain = 1.0f,
                  irType = IrPreset.SPEAKER_CAB,
                  irMix = 0.25f,
-                 subharmonicMix = 0.5f
+                 subharmonicMix = 0.5f,
+                 deBoxing = 0.4f
              )
              // CINEMA — Soundbar/TV/5.1: experiencia cinematográfica real
              Preset.CINEMA -> Params(
@@ -160,7 +164,8 @@ object AudioEnhanceConfig {
                  masterGain = 0.98f,     // headroom para picos de LFE
                  irType = IrPreset.HALL,
                  irMix = 0.18f,
-                 subharmonicMix = 0.4f
+                 subharmonicMix = 0.4f,
+                 deBoxing = 0.2f
              )
              // BASS_BOOST — Musical: graves ajustados, rápidos, armónicamente ricos
              Preset.BASS_BOOST -> Params(
@@ -178,7 +183,8 @@ object AudioEnhanceConfig {
                  masterGain = 0.95f,     // headroom para boost
                  irType = IrPreset.ROOM,
                  irMix = 0.08f,
-                 subharmonicMix = 0.2f
+                 subharmonicMix = 0.2f,
+                 deBoxing = 0.1f
              )
              // SURROUND — Inmersivo: crossfeed binaural + Haas + reflexiones
              Preset.SURROUND -> Params(
@@ -196,7 +202,8 @@ object AudioEnhanceConfig {
                  masterGain = 1.0f,
                  irType = IrPreset.CROSSFEED,
                  irMix = 0.2f,           // crossfeed binaural real
-                 subharmonicMix = 0.1f
+                 subharmonicMix = 0.1f,
+                 deBoxing = 0.05f
              )
              // DIALOGUE — Noticias/podcasts/audiolibros: inteligibilidad absoluta
              Preset.DIALOGUE -> Params(
@@ -214,7 +221,8 @@ object AudioEnhanceConfig {
                  masterGain = 1.05f,     // compensación corte graves
                  irType = IrPreset.NONE,
                  irMix = 0.0f,
-                 subharmonicMix = 0.3f
+                 subharmonicMix = 0.3f,
+                 deBoxing = 0.3f
              )
              // MUSIC — Audiófilo: respuesta plana + micro-mejora
              Preset.MUSIC -> Params(
@@ -232,7 +240,8 @@ object AudioEnhanceConfig {
                  masterGain = 1.0f,
                  irType = IrPreset.ROOM,
                  irMix = 0.12f,
-                 subharmonicMix = 0.1f
+                 subharmonicMix = 0.1f,
+                 deBoxing = 0.05f
              )
              // SPEAKER / TRUE MAXBASS — Bocina chica: máximo grave percibido
              Preset.SPEAKER -> Params(
@@ -250,7 +259,8 @@ object AudioEnhanceConfig {
                  masterGain = 1.0f,
                  irType = IrPreset.SPEAKER_CAB,
                  irMix = 0.35f,          // máximo cuerpo de cabina
-                 subharmonicMix = 0.6f
+                 subharmonicMix = 0.6f,
+                 deBoxing = 0.5f
              )
         }
     }
@@ -499,6 +509,9 @@ object AudioEnhanceConfig {
     private const val KEY_SUBHARMONIC = "dsp_subharmonic"
     fun getSubharmonicMix(): Float = prefs?.getFloat(KEY_SUBHARMONIC, 0f) ?: 0f
     fun setSubharmonicMix(v: Float) { prefs?.edit()?.putFloat(KEY_SUBHARMONIC, v.coerceIn(0f, 1f))?.apply() }
+    private const val KEY_DEBOXING = "dsp_deboxing"
+    fun getDeBoxing(): Float = prefs?.getFloat(KEY_DEBOXING, 0f) ?: 0f
+    fun setDeBoxing(v: Float) { prefs?.edit()?.putFloat(KEY_DEBOXING, v.coerceIn(0f, 1f))?.apply() }
 
     fun getParametric(): List<ParamBand>? {
         val s = prefs?.getString(KEY_PARAMETRIC, null) ?: return null
@@ -582,6 +595,7 @@ object AudioEnhanceConfig {
             surfaceResonance = getSurfaceResonance(),
              speechClarity = getSpeechClarity(),
              subharmonicMix = getSubharmonicMix(),
+             deBoxing = getDeBoxing(),
              parametricEq = getParametric(),
             userIrName = userIrName(),
             eq10 = getEq10()
@@ -613,6 +627,7 @@ object AudioEnhanceConfig {
         setSurfaceResonance(p.surfaceResonance)
         setSpeechClarity(p.speechClarity)
         setSubharmonicMix(p.subharmonicMix)
+        setDeBoxing(p.deBoxing)
         setAutoDevice(p.autoDevice)
         setParametric(p.parametricEq)
         setEq10(p.eq10)

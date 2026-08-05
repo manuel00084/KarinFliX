@@ -43,6 +43,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
 
     private var lastParams: AudioEnhanceConfig.Params? = null
     private var lastVolume = Float.NaN
+    private var currentVolume = 0f
 
     // Cache del parámetro efectivo cuando autoDevice está activo:
     // solo se reconstruye si cambia el objeto de prefs o el tipo de salida.
@@ -155,6 +156,13 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     private var compRelease = 0.0
     private var compSmooth = 0.0
 
+    // Bass tightening: compresor dedicado a la banda de graves (< 150 Hz)
+    // con ataque rápido y ratio alto para controlar el "boom" de bocinas baratas.
+    private var bassTightLp = BiquadFilter()
+    private var bassTightRp = BiquadFilter()
+    private var bassTightEnv = 0.0
+    private var bassTightGain = 1.0
+
     private var masterGain = 1.0
 
     // Tubo (saturación analógica): DC-block por canal para eliminar el offset
@@ -185,6 +193,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     // y se retira en silencios/explosiones; incluye de-esser (7 kHz) anti-sibilancia.
     private var scL = SpeechClarity()
     private var scR = SpeechClarity()
+
+    // De-boxing: corte de resonancia de caja en 250-400 Hz para eliminar el sonido
+    // "plástico/cajoso" de las bocinas baratas de TV montadas en chasis de plástico.
+    private var deBoxL = BiquadFilter()
+    private var deBoxR = BiquadFilter()
 
     // Limiter maestro con lookahead (~2 ms) y detección linkeada estéreo.
     // Reemplaza al softLimit: anticipa los picos gracias al buffer de retardo.
@@ -349,6 +362,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             }
             lastParams = params
             lastVolume = volume
+            currentVolume = volume
             Log.i("AudioEnhance", "dsp activo preset=${params.preset} bass=${params.bassGain} treble=${params.trebleGain} subbass=${params.subBassGain} presence=${params.presenceGain} surround=${params.surroundWidth} field=${params.fieldSurround} exciter=${params.exciterAmount} harmbass=${params.harmonicBass} compression=${params.compression} reverb=${params.reverbMix} master=${params.masterGain} tube=${params.tubeDrive} dynbass=${params.dynamicBass} peq=${params.parametricEq?.size ?: 0} ir=${params.irType} userIr=${params.userIrName} eq10=${params.eq10 != null} ruta=$route vol=$volume")
         }
         masterGain = params.masterGain.toDouble()
@@ -515,7 +529,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             ro += bassBoost(params.harmonicBass * vbR.gainFactor(), hr)
         }
         if (subSynth != null && params.subharmonicMix > 0f) {
-            subSynth!!.setMix(params.subharmonicMix)
+            // A volumen bajo el oído percibe menos graves (Fletcher-Munson):
+            // el subarmónico compensa aumentando su nivel proporcionalmente.
+            val volFactor = (1.0f - currentVolume.coerceIn(0.05f, 1f)).coerceIn(0f, 1f)
+            val adaptiveMix = params.subharmonicMix * (1.0f + volFactor * 0.6f)
+            subSynth!!.setMix(adaptiveMix)
             lo = subSynth!!.process(lo)
             ro = subSynth!!.process(ro)
         }
@@ -524,6 +542,10 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         for (i in eqL.indices) {
             lo = eqL[i].process(lo)
             ro = eqR[i].process(ro)
+        }
+        if (params.deBoxing > 0f) {
+            lo = deBoxL.process(lo)
+            ro = deBoxR.process(ro)
         }
         if (params.tubeDrive > 0f) {
             lo = tubeDrive(lo, tubeDcL, params.tubeDrive)
@@ -552,6 +574,27 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             ro += dl * 0.30 * fk
         }
         compressStereo(lo, ro, params.compression, res)
+        // Bass tightening: compresor multibanda dedicado a graves (< 150 Hz).
+        // Ataque rápido (2 ms) y ratio alto (6:1) controlan el boom de
+        // bocinas baratas sin afectar el resto del espectro.
+        if (isSpeakerLike(activeDevice)) {
+            val bL = bassTightLp.process(res[0])
+            val bR = bassTightRp.process(res[1])
+            val aL = abs(bL)
+            val aR = abs(bR)
+            val a = max(aL, aR)
+            bassTightEnv = if (a > bassTightEnv) bassTightEnv * 0.9 + 0.1 * a else bassTightEnv * 0.99 + 0.01 * a
+            val threshold = 0.08
+            if (bassTightEnv > threshold) {
+                val over = bassTightEnv / threshold
+                val gr = 1.0 / (1.0 + (over - 1.0) * 5.0) // ratio ~6:1
+                bassTightGain += (gr - bassTightGain) * 0.1
+            } else {
+                bassTightGain += (1.0 - bassTightGain) * 0.05
+            }
+            res[0] = res[0] * bassTightGain + bL * (1.0 - bassTightGain)
+            res[1] = res[1] * bassTightGain + bR * (1.0 - bassTightGain)
+        }
         if (params.loudnessComp) {
             res[0] = loudHpL.process(loudLpL.process(res[0]))
             res[1] = loudHpR.process(loudLpR.process(res[1]))
@@ -728,6 +771,12 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         }
         scL.configure(sampleRate, scAmt)
         scR.configure(sampleRate, scAmt)
+        // De-boxing: corte de resonancia de caja en 300 Hz para eliminar el sonido
+        // "plástico/cajoso" de las bocinas baratas de TV. La cantidad escala con
+        // el preset deBoxing (0 = sin filtro, 1 = corte máximo de -6 dB).
+        val deBoxGain = -6f * params.deBoxing
+        deBoxL.configure(BiquadFilter.Kind.PEAKING, sampleRate, 300f, deBoxGain, 1.2f)
+        deBoxR.configure(BiquadFilter.Kind.PEAKING, sampleRate, 300f, deBoxGain, 1.2f)
         val eqFreqs = AudioEnhanceConfig.EQ_FREQS
         val maxFreq = 0.45f * sampleRate
         for (i in 0 until 10) {
@@ -753,6 +802,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         compHp.configure(BiquadFilter.Kind.HIGHPASS, sampleRate, 3200f, 0f, 0.707f)
         compLpR.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 220f, 0f, 0.707f)
         compHpR.configure(BiquadFilter.Kind.HIGHPASS, sampleRate, 3200f, 0f, 0.707f)
+        // Bass tightening: LPF a 150 Hz para extraer la banda de graves y
+        // comprimirla con ataque rápido (2 ms) y ratio alto (6:1) para
+        // controlar el boom de bocinas baratas de TV.
+        bassTightLp.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 150f, 0f, 0.707f)
+        bassTightRp.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 150f, 0f, 0.707f)
 
         // EQ paramétrica (curvas AutoEQ importadas)
         val peq = params.parametricEq
@@ -849,6 +903,12 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         compHp.reset()
         compLpR.reset()
         compHpR.reset()
+        bassTightLp.reset()
+        bassTightRp.reset()
+        bassTightEnv = 0.0
+        bassTightGain = 1.0
+        deBoxL.reset()
+        deBoxR.reset()
         compEnv.fill(0.0)
         compSm.fill(1.0)
         fieldLp.reset()
@@ -1073,12 +1133,19 @@ private fun tubeDrive(x: Double, dc: BiquadFilter, drive: Float): Double {
     return dc.process(y) * makeup
 }
 
+// Emulación de excitador armónico para bocinas TV: aplica saturación suave
+// al componente de graves (LPF < 1400 Hz) para generar armónicos de calidez,
+// y una saturación más contenida a los agudos para presencia sin agresividad.
+// El resultado es un sonido más "lleno" y "profesional" sin distorsión escuchable.
 private fun excite(x: Double, lp: BiquadFilter, amt: Float): Double {
     if (amt <= 0.0f) return x
     val lpOut = lp.process(x)
     val high = x - lpOut
-    val shaped = tanh(high * 4.0) * 0.4
-    return x + amt * 0.7 * shaped
+    // Armónicos de graves (calidez, cuerpo): tanh suave en la banda de graves
+    val bassHarm = tanh(lpOut * 2.5) * 0.35
+    // Armónicos de agudos (presencia): tanh más suave para evitar agresividad
+    val highHarm = tanh(high * 2.0) * 0.2
+    return x + amt * 0.6 * (bassHarm + highHarm)
 }
 
 private class MonoChain {
