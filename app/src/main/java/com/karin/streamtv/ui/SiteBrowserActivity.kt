@@ -826,6 +826,7 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
         "jkanime" -> "https://jkanime.net/directorio"
         "mundodonghua" -> "https://www.mundodonghua.com/lista-donghuas"
         "lacartoons" -> "https://lacartoons.com/lista/"
+        "doramasyt" -> "https://www.doramasyt.com"
         else -> "$siteUrl/animes"
     }
 

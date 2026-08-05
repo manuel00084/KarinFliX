@@ -7,60 +7,52 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.nodes.Document
 
-object LaCartoonsScraper : GenericScraper() {
-    override val name = "LaCartoons"
-    override val baseUrl = "https://www.lacartoons.com"
+object DoramaYtScraper : GenericScraper() {
+    override val name = "DoramasYT"
+    override val baseUrl = "https://www.doramasyt.com"
 
     override fun buildSearchUrl(query: String): String =
-        "${baseUrl}/?Titulo=${java.net.URLEncoder.encode(query, "UTF-8")}"
+        "${baseUrl}/buscar?q=${java.net.URLEncoder.encode(query, "UTF-8")}"
 
     override suspend fun getLatestEpisodes(): List<Episode> {
-        val doc = fetchDocument("https://www.lacartoons.com/lista/") ?: return emptyList()
-        return parseSeriesCards(doc)
+        val doc = fetchDocument() ?: return emptyList()
+        return parseEpisodeCards(
+            doc = doc,
+            cardSel = listOf("li.col", "div.col", "article", ".card", "li"),
+            titleSel = listOf("h3", "h4", ".title", "[class*='title']"),
+            thumbSel = listOf("img[data-src]", "img[src]", "img[data-lazy]"),
+            thumbAttrs = listOf("data-src", "abs:src", "data-lazy-src", "abs:data-lazy-src", "data-lazy", "abs:data-lazy"),
+            dateSel = listOf("span.text-muted", ".date", "[class*='date']", "time"),
+            epNumSelector = listOf("span.badge")
+        )
     }
 
     override suspend fun search(query: String): List<Episode> {
         if (query.isBlank()) return emptyList()
         val searchUrl = buildSearchUrl(query)
-        Log.d("LaCartoons", "Searching: $searchUrl")
+        Log.d("DoramasYT", "Searching: $searchUrl")
         val doc = withContext(Dispatchers.IO) {
             engine.fetch(searchUrl, name, "${name}::search::${query.lowercase().take(50)}")
         } ?: return emptyList()
-        return parseSeriesCards(doc)
-    }
-
-    private fun parseSeriesCards(doc: Document): List<Episode> {
-        val episodes = mutableListOf<Episode>()
-        doc.select("div.conjuntos-series > a").forEach { link ->
-            try {
-                val url = link.attr("abs:href").ifBlank { return@forEach }
-                val title = link.selectFirst("p.nombre-serie")?.text()?.trim() ?: return@forEach
-                val poster = link.selectFirst("img")?.let { img ->
-                    listOf("data-src", "data-lazy-src", "data-original", "abs:src", "src").firstNotNullOfOrNull { attr ->
-                        img.attr(attr).ifBlank { null }
-                    }
-                } ?: ""
-                val year = link.selectFirst("span.marcador-ano")?.text()?.trim() ?: ""
-                episodes.add(Episode(title, url, poster, year, name))
-            } catch (e: Exception) {
-                Log.w("LaCartoons", "Error parsing card: ${e.message}")
-            }
-        }
-        if (episodes.isEmpty()) {
-            Log.w("LaCartoons", "No cards with div.conjuntos-series > a, trying dynamic parser")
-            return DynamicParser.parseDynamic(doc, name)
-        }
-        return episodes
+        return parseEpisodeCards(
+            doc = doc,
+            cardSel = listOf("li.col", "div.col", "article", ".card", "li"),
+            titleSel = listOf("h3", "h4", ".title", "[class*='title']"),
+            thumbSel = listOf("img[data-src]", "img[src]", "img[data-lazy]"),
+            thumbAttrs = listOf("data-src", "abs:src", "data-lazy-src", "abs:data-lazy-src", "data-lazy", "abs:data-lazy"),
+            dateSel = listOf("span.text-muted", ".date", "[class*='date']", "time"),
+            epNumSelector = listOf("span.badge")
+        )
     }
 
     override suspend fun extractServers(episodeUrl: String): List<VideoSource> {
         val doc = withContext(Dispatchers.IO) {
             ScrapingEngine.fetch(episodeUrl, name, "${name}::episode::${episodeUrl.hashCode()}")
         } ?: return emptyList()
-        return extractLaCartoonsServers(doc, episodeUrl)
+        return extractDoramaYtServers(doc, episodeUrl)
     }
 
-    private fun extractLaCartoonsServers(doc: Document, episodeUrl: String): List<VideoSource> {
+    private fun extractDoramaYtServers(doc: Document, episodeUrl: String): List<VideoSource> {
         val servers = mutableListOf<VideoSource>()
         val seen = mutableSetOf<String>()
 
@@ -122,11 +114,11 @@ object LaCartoonsScraper : GenericScraper() {
             }
         }
 
-        Log.d("LaCartoons", "Extracted ${servers.size} server(s) from episode page")
+        Log.d("DoramasYT", "Extracted ${servers.size} server(s) from episode page")
         return servers.distinctBy { it.serverUrl }
     }
 }
 
-class LaCartoonsScraperProvider : ScraperProvider {
-    override val scraper: BaseScraper = LaCartoonsScraper
+class DoramaYtScraperProvider : ScraperProvider {
+    override val scraper: BaseScraper = DoramaYtScraper
 }

@@ -13,10 +13,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.video.VideoFrameMetadataListener
-import com.karin.streamtv.player.dsp.DspRenderersFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -39,9 +37,8 @@ class Media3SixtyFpsProcessor(
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     fun createPlayer(trackSelector: DefaultTrackSelector? = null, dataSourceFactory: androidx.media3.datasource.DataSource.Factory? = null): ExoPlayer {
-        val renderersFactory = DspRenderersFactory(context)
+        val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            .setMediaCodecSelector(CodecSelectorFactory.selector())
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
@@ -821,17 +818,26 @@ class Media3SixtyFpsProcessor(
 
             vec3 applyHdr(vec3 color, float strength) {
                 float luma = lumaOf(color);
-                float shadows = smoothstep(0.3, 0.0, luma) * strength;
-                float highlights = smoothstep(0.7, 1.0, luma) * strength;
-                vec3 lifted = color - shadows * 0.15;
-                vec3 brightened = lifted + highlights * 0.1;
-                float localCont = (luma - 0.5) * strength * 0.6;
-                vec3 result = mix(brightened, brightened * (1.0 + localCont), abs(localCont));
-                float satBoost = 1.0 + strength * 0.3 * (1.0 - smoothstep(0.1, 0.5, luma));
-                vec3 satResult = mix(vec3(lumaOf(result)), result, satBoost);
-                result = mix(result, satResult, strength);
-                float gamma = 1.0 - strength * 0.15;
+                float a = 2.51;
+                float b = 0.03;
+                float c = 2.43;
+                float d = 0.59;
+                float e = 0.14;
+                vec3 toneMapped = clamp((color * (a * color + b)) / (color * (c * color + d) + e), 0.0, 1.0);
+                float shadowMask = smoothstep(0.4, 0.0, luma) * strength;
+                vec3 lifted = toneMapped + shadowMask * 0.25;
+                float highlightMask = smoothstep(0.6, 1.0, luma) * strength;
+                vec3 highlightTint = vec3(0.95, 1.0, 1.1);
+                vec3 brightened = lifted + highlightMask * 0.15 * highlightTint;
+                float localCont = (luma - 0.5) * strength * 0.8;
+                vec3 contrastResult = brightened * (1.0 + localCont);
+                float satBoost = 1.0 + strength * 0.4 * (1.0 - smoothstep(0.1, 0.5, luma));
+                vec3 satResult = mix(vec3(lumaOf(contrastResult)), contrastResult, satBoost);
+                vec3 result = mix(contrastResult, satResult, strength * 0.5);
+                float gamma = 1.0 - strength * 0.1;
                 result = pow(clamp(result, 0.0, 1.0), vec3(gamma));
+                float bloom = smoothstep(0.7, 1.0, luma) * strength * 0.1;
+                result += bloom * 0.05;
                 return clamp(result, 0.0, 1.0);
             }
 
@@ -843,8 +849,8 @@ class Media3SixtyFpsProcessor(
                 float bDev = color.b - luma;
                 float colorDetail = sqrt(rDev * rDev + gDev * gDev + bDev * bDev);
                 float detailMask = smoothstep(0.005, 0.05, colorDetail);
-                vec3 enhanced = color + vec3(rDev, gDev, bDev) * detailMask * strength * 3.0;
-                float micro = 1.0 + strength * 0.4 * detailMask;
+                vec3 enhanced = color + vec3(rDev, gDev, bDev) * detailMask * strength * 0.8;
+                float micro = 1.0 + strength * 0.15 * detailMask;
                 enhanced = mix(vec3(0.5), enhanced, micro);
                 float hl = smoothstep(0.8, 1.0, luma);
                 enhanced = mix(enhanced, color, hl * strength * 0.5);

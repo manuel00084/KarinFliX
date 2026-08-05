@@ -28,7 +28,6 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
 import com.karin.streamtv.R
-import com.karin.streamtv.player.CodecSelectorFactory
 import com.karin.streamtv.player.Media3SixtyFpsProcessor
 import com.karin.streamtv.player.MegaDecryptingDataSource
 import com.karin.streamtv.player.TvSurfaceCompat
@@ -77,6 +76,7 @@ class TvPlaybackFragment : Fragment() {
     private lateinit var btnQuality: TextView
     private lateinit var btnRewind: ImageButton
     private lateinit var btnForward: ImageButton
+    private lateinit var btnLocalFile: ImageButton
     private var seekDragging = false
     private var selectedHeight = -1
     private var playlist: List<com.karin.streamtv.model.PlaylistItem> = emptyList()
@@ -111,6 +111,23 @@ class TvPlaybackFragment : Fragment() {
             }
         } catch (t: Throwable) {
             android.widget.Toast.makeText(requireContext(), "Error al leer el archivo", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val videoFilePicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            val scheme = uri.scheme
+            if (scheme == "content" || scheme == "file") {
+                val displayName = uri.lastPathSegment ?: "video.mp4"
+                playVideo(uri.toString(), displayName)
+            } else {
+                android.widget.Toast.makeText(requireContext(), "URI no soportada: $scheme", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        } catch (t: Throwable) {
+            android.widget.Toast.makeText(requireContext(), "Error al abrir el archivo", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
     private val hidePlayState = Runnable { playStateOverlay.visibility = View.GONE }
@@ -152,7 +169,13 @@ class TvPlaybackFragment : Fragment() {
         val dbgExtra = args?.getInt("debug_mode", -1) ?: -1
         if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
 
-        trackSelector = DefaultTrackSelector(requireContext())
+        trackSelector = DefaultTrackSelector(requireContext()).apply {
+            setParameters(buildUponParameters()
+                .setMaxVideoSize(C.LENGTH_UNSET, C.LENGTH_UNSET)
+                .setMaxVideoBitrate(Int.MAX_VALUE)
+                .setMaxAudioBitrate(Int.MAX_VALUE)
+            )
+        }
         useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled()
     }
 
@@ -184,6 +207,7 @@ class TvPlaybackFragment : Fragment() {
         btnVideoProfile = content.findViewById(R.id.btn_video_profile)
         btnColorProfile = content.findViewById(R.id.btn_color_profile)
         btnQuality = content.findViewById(R.id.btn_quality)
+        btnLocalFile = content.findViewById(R.id.btn_local_file)
 
         setupController()
 
@@ -198,10 +222,12 @@ class TvPlaybackFragment : Fragment() {
         return content
     }
 
-    private fun setupController() {
-        btnBack.setOnClickListener { requireActivity().finish() }
-        btnBack.onActionKey { requireActivity().finish() }
-        playerContainer.setOnClickListener { showController() }
+     private fun setupController() {
+         btnBack.setOnClickListener { requireActivity().finish() }
+         btnBack.onActionKey { requireActivity().finish() }
+         btnLocalFile.setOnClickListener { pickVideoFile() }
+         btnLocalFile.onActionKey { pickVideoFile() }
+         playerContainer.setOnClickListener { showController() }
         playerContainer.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (keyCode) {
@@ -659,13 +685,13 @@ class TvPlaybackFragment : Fragment() {
         val megaFactory = DataSource.Factory {
             MegaDecryptingDataSource(key, resolved.megaCtrStart, resolved.extraHeaders)
         }
-        val exoPlayer = ExoPlayer.Builder(requireContext(), CodecSelectorFactory.renderersFactory(requireContext()))
-            .setMediaSourceFactory(
-                DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(megaFactory)
-            )
-            .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
-            .build()
+         val exoPlayer = ExoPlayer.Builder(requireContext())
+             .setMediaSourceFactory(
+                 DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(megaFactory)
+             )
+             .setHandleAudioBecomingNoisy(true)
+             .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
+             .build()
         player = exoPlayer
         applySavedVolume()
 
@@ -674,31 +700,38 @@ class TvPlaybackFragment : Fragment() {
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         attachListener(exoPlayer)
-    }
+     }
 
-    private fun playVideo(url: String) {
-        currentVideoUrl = url
-        if (useEnhancedMode) {
-            playWithEnhancedPipeline(url)
-        } else {
-            playStandard(url)
-        }
-    }
+     private fun pickVideoFile() {
+         videoFilePicker.launch(arrayOf("video/*"))
+     }
+
+     private fun playVideo(url: String, title: String = "") {
+         currentVideoUrl = url
+         if (title.isNotBlank()) {
+             tvVideoTitle.text = title
+         }
+         if (useEnhancedMode) {
+             playWithEnhancedPipeline(url)
+         } else {
+             playStandard(url)
+         }
+     }
 
     private fun isLocalUrl(url: String): Boolean =
         url.startsWith("content://") || url.startsWith("file://")
 
     private fun playStandard(url: String) {
-        val exoPlayer = ExoPlayer.Builder(requireContext(), CodecSelectorFactory.renderersFactory(requireContext()))
-            .setMediaSourceFactory(
-                DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(
-                    if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
-                    else VideoDataSource.factory(referer)
-                )
-            )
-            .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
-            .build()
+         val exoPlayer = ExoPlayer.Builder(requireContext())
+             .setMediaSourceFactory(
+                 DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(
+                     if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
+                     else VideoDataSource.factory(referer)
+                 )
+             )
+             .setHandleAudioBecomingNoisy(true)
+             .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
+             .build()
         player = exoPlayer
         applySavedVolume()
 
@@ -726,12 +759,12 @@ class TvPlaybackFragment : Fragment() {
         processor!!.renderer?.setDebugModeValue(VideoEnhanceConfig.getDebugMode())
         processor!!.onGlFailure = { requireActivity().runOnUiThread { triggerGlFallback() } }
 
-        val exoPlayer = processor!!.createPlayer(
-            trackSelector = trackSelector,
-            dataSourceFactory = if (isLocalUrl(url))
-                androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
-            else null
-        )
+         val exoPlayer = processor!!.createPlayer(
+             trackSelector = trackSelector,
+             dataSourceFactory = if (isLocalUrl(url))
+                 androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
+             else null
+         )
         player = exoPlayer
         applySavedVolume()
 
@@ -748,19 +781,20 @@ class TvPlaybackFragment : Fragment() {
         }, 5000)
     }
 
-    private fun addPlayerView(exoPlayer: ExoPlayer): androidx.media3.ui.PlayerView {
-        val playerView = PlayerView(requireContext()).apply {
-            useController = false
-            keepScreenOn = true
-            player = exoPlayer
-        }
-        playerContainer.addView(playerView, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        ))
-        standardPlayerView = playerView
-        return playerView
-    }
+     private fun addPlayerView(exoPlayer: ExoPlayer): androidx.media3.ui.PlayerView {
+         val playerView = PlayerView(requireContext()).apply {
+             useController = false
+             keepScreenOn = true
+             player = exoPlayer
+             resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+         }
+         playerContainer.addView(playerView, FrameLayout.LayoutParams(
+             FrameLayout.LayoutParams.MATCH_PARENT,
+             FrameLayout.LayoutParams.MATCH_PARENT
+         ))
+         standardPlayerView = playerView
+         return playerView
+     }
 
     private fun triggerGlFallback() {
         if (fallbackTriggered) return

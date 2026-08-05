@@ -14,6 +14,7 @@ object SiteBranding {
         "MundoDonghua" to Color.parseColor("#8E24AA"),
         "RetroTVE" to Color.parseColor("#FF9800"),
         "LaCartoons" to Color.parseColor("#E91E63"),
+        "DoramasYT" to Color.parseColor("#00BCD4"),
         "FrikiSeries" to Color.parseColor("#1B5E20"),
     )
 
@@ -22,6 +23,8 @@ object SiteBranding {
         "LatAnime" to "https://latanime.org/img/logito.png",
         "MundoDonghua" to "https://mundodonghua.com/images/favicon.png",
         "RetroTVE" to "https://retrotve.com/wp-content/uploads/2024/11/cropped-android-chrome-512x512-1-192x192.png",
+        "LaCartoons" to "https://www.lacartoons.com/wp-content/uploads/2024/01/cropped-lacartoons-favicon-32x32.png",
+        "DoramasYT" to "https://www.doramasyt.com/wp-content/uploads/2024/01/cropped-doramasyt-favicon-32x32.png",
         "FrikiSeries" to "https://www.frikiserie.com/assets/icon/favicon.png",
     )
 

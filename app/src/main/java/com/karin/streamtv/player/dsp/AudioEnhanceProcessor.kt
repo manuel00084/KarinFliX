@@ -12,6 +12,8 @@ import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.tanh
@@ -188,7 +190,10 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     // Reemplaza al softLimit: anticipa los picos gracias al buffer de retardo.
     private val limStereo = LookaheadLimiterPair()
 
-    // Rutas multicanal / virtual
+    // Sintetizador subarmónico: genera graves una octava debajo de lo que
+    // la bocina puede reproducir físicamente. Esencial para TVs con bocinas
+    // baratas que carecen de extensión bajo 100 Hz.
+    private var subSynth: SubharmonicSynth? = null
     private var mcCenter = MonoChain()
     private var mcRearL = MonoChain()
     private var mcRearR = MonoChain()
@@ -282,6 +287,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         }
         reverbL = SimpleReverb(sampleRate, 0)
         reverbR = SimpleReverb(sampleRate, 8)
+        subSynth = SubharmonicSynth(sampleRate)
         compAttack = Math.exp(-1.0 / (0.010 * sampleRate))
         compRelease = Math.exp(-1.0 / (0.150 * sampleRate))
         compSmooth = Math.exp(-1.0 / (0.025 * sampleRate))
@@ -507,6 +513,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             lo += bassBoost(params.harmonicBass * vbL.gainFactor(), hl)
             val hr = vbR.process(ro)
             ro += bassBoost(params.harmonicBass * vbR.gainFactor(), hr)
+        }
+        if (subSynth != null && params.subharmonicMix > 0f) {
+            subSynth!!.setMix(params.subharmonicMix)
+            lo = subSynth!!.process(lo)
+            ro = subSynth!!.process(ro)
         }
         lo = excite(lo, exciteLpL, params.exciterAmount)
         ro = excite(ro, exciteLpR, params.exciterAmount)
@@ -861,6 +872,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         rearDelayL.reset()
         rearDelayR.reset()
         virtual.reset()
+        subSynth?.reset()
     }
 
     override fun onReset() {
@@ -1490,6 +1502,105 @@ private class VirtualSurround {
     fun reset() {
         for (e in earsL) e.reset()
         for (e in earsR) e.reset()
+    }
+}
+
+// Sintetizador subarmónico: detecta el fundamental de la banda de graves
+// y genera una onda sinusoidal a la mitad de frecuencia (una octava abajo).
+// Esto hace que bocinas pequeñas de TV "sientan" graves que físicamente
+// no pueden reproducir, simulando un subwoofer real.
+//
+// Algoritmo: autocorrelación en buffer circular sobre señal filtrada a
+// < 180 Hz → estima periodo fundamental → oscilador a f/2 con mezcla
+// controlada. Actualización cada 256 muestras (~5.3 ms a 48 kHz).
+private class SubharmonicSynth(fs: Int) {
+    private val fs = fs
+    private val blockSize = 256
+    private val histSize = fs * 4 / 1000  // ~4 ms de historial mínimo para 25 Hz
+    private val buf = DoubleArray(histSize)
+    private var bufIdx = 0
+    private var bufCount = 0
+
+    // LPF que aisla la banda de graves para la detección de pitch
+    private val bassLp = BiquadFilter().apply {
+        configure(BiquadFilter.Kind.LOWPASS, fs, 180f, 0f, 0.707f)
+    }
+
+    // Oscilador sinusoidal del subarmónico
+    private var oscPhase = 0.0
+    private var currentFreq = 60.0
+
+    // Ganancia del sub mezclada (0..1), actualizada suavemente
+    private var smoothMix = 0.0
+
+    fun setMix(m: Float) {
+        smoothMix += (m.toDouble() - smoothMix) * 0.01
+    }
+
+    fun process(x: Double): Double {
+        val bass = bassLp.process(x)
+        buf[bufIdx] = bass
+        bufIdx = (bufIdx + 1) % buf.size
+        if (bufCount < buf.size) bufCount++
+
+        // Actualizar pitch cada blockSize muestras
+        if (bufCount % blockSize == 0 && bufCount > histSize) {
+            currentFreq = detectFundamental()
+        }
+
+        // Generar subarmónico (f/2)
+        val subFreq = (currentFreq / 2.0).coerceIn(15.0, 60.0)
+        val phaseInc = 2.0 * PI * subFreq / fs
+        oscPhase += phaseInc
+        if (oscPhase >= 2.0 * PI) oscPhase -= 2.0 * PI
+        val sub = sin(oscPhase)
+
+        return x + sub * smoothMix * 0.5
+    }
+
+    // Autocorrelación sobre el buffer de graves para estimar el periodo
+    // fundamental. Retorna la frecuencia en Hz (0 si no se detecta).
+    private fun detectFundamental(): Double {
+        val n = buf.size
+        // Ventana efectiva: desde bufIdx (más antiguo) hacia atrás
+        val maxLag = n / 2
+        val minLag = (fs / 120.0).toInt().coerceAtLeast(1)   // 120 Hz máx
+        val maxLagClamped = (fs / 25.0).toInt().coerceAtMost(maxLag) // 25 Hz mín
+
+        if (minLag >= maxLagClamped) return 0.0
+
+        // Autocorrelación parcial (solo buscamos el primer pico después de minLag)
+        var bestLag = minLag
+        var bestVal = -1.0
+        val center = buf[(bufIdx - 1 + n) % n] // sample más reciente
+
+        for (lag in minLag..maxLagClamped) {
+            var sum = 0.0
+            val start = (bufIdx - lag + n) % n
+            for (i in 0 until minOf(lag, n - start)) {
+                sum += buf[start + i] * buf[(start + i + lag) % n]
+            }
+            if (sum > bestVal) {
+                bestVal = sum
+                bestLag = lag
+            }
+        }
+
+        // Normalizar respecto a la energía (0 = silencio, 1 = tono puro)
+        val energy = buf.sumOf { it * it } / n
+        val confidence = if (energy < 1e-12) 0.0 else bestVal / (energy * minLag)
+
+        return if (confidence > 0.1) fs.toDouble() / bestLag else 0.0
+    }
+
+    fun reset() {
+        buf.fill(0.0)
+        bufIdx = 0
+        bufCount = 0
+        oscPhase = 0.0
+        currentFreq = 60.0
+        smoothMix = 0.0
+        bassLp.reset()
     }
 }
 

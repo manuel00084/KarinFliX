@@ -13,9 +13,14 @@ class TvExoPlayerActivity : FragmentActivity() {
         setContentView(R.layout.activity_tv_exo_player)
 
         if (savedInstanceState == null) {
+            val args = Bundle()
+            intent?.data?.let { uri ->
+                args.putString("video_url", uri.toString())
+            }
+            intent?.extras?.let { args.putAll(it) }
             supportFragmentManager.beginTransaction()
                 .replace(R.id.tv_player_root, TvPlaybackFragment().apply {
-                    arguments = intent.extras
+                    arguments = args
                 })
                 .commit()
         }

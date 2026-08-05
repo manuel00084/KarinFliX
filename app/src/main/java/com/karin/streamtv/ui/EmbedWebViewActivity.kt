@@ -27,7 +27,6 @@ import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.CloudflareInterceptor
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.EpisodeProgress
-import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,8 +37,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var loadingLayout: LinearLayout
     private lateinit var mainHandler: Handler
-    private lateinit var skipButtonContainer: LinearLayout
-    private lateinit var btnSkip: TextView
     private var bridge: VideoBridge? = null
     private var animeId: String = ""
     private var episodeNumber: Int = 0
@@ -61,9 +58,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
     private var hiddenContainer: FrameLayout? = null
     
     private var skipInterval: AniSkipService.SkipInterval? = null
-    private var isShowingSkipButton: Boolean = false
-    private var skipType: String = ""
-
     companion object {
         private const val TAG = "EmbedWebView"
 
@@ -242,8 +236,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
         [class*="preroll"],[class*="pre-roll"],[class*="midroll"],[class*="mid-roll"],[class*="postroll"],[class*="post-roll"],[class*="vast"],[class*="ima-"],[id*="preroll"],[id*="midroll"],[id*="postroll"],[id*="vast"],[id*="ima-"]{display:none!important;visibility:hidden!important;pointer-events:none!important;z-index:-1!important;position:absolute!important;width:0!important;height:0!important}
         [class*="ad-container"],[id*="ad-container"],[class*="ad-wrapper"],[id*="ad-wrapper"],[class*="ad-overlay"],[id*="ad-overlay"],[class*="player-ad"],[id*="player-ad"]{display:none!important;visibility:hidden!important;pointer-events:none!important;z-index:-1!important}
         [class*="countdown"],[id*="countdown"]{display:none!important;visibility:hidden!important;pointer-events:none!important}
-        .skip-btn:not([href*="voe"]),.skip-ad:not([href*="voe"]),[class*="skip-ad"]:not(button){display:none!important;visibility:hidden!important;pointer-events:none!important}
-        [class*="skip-intro"],.skip-btn,[class*="btn-skip"],[class*="saltar"]{pointer-events:auto!important;cursor:pointer!important}
         [style*="position: fixed"][style*="z-index"]{pointer-events:none!important;display:none!important;visibility:hidden!important;z-index:-1!important}
         [class*="float"],[class*="sticky"],[id*="float"],[id*="sticky"]{display:none!important;visibility:hidden!important;pointer-events:none!important}
         [class*="minimize"],[class*="pip"],[class*="fullscreen"],[class*="expand"],[class*="min"]{display:none!important;visibility:hidden!important;pointer-events:none!important}
@@ -698,11 +690,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
             v.controls=true;
             try{v.play().catch(function(){});}catch(e){}
         });
-        document.querySelectorAll('[class*="skip"],[id*="skip"],button[aria-label*="skip"],button[aria-label*="saltar"]').forEach(function(el){
-            el.style.pointerEvents='auto';el.style.display='block';el.style.visibility='visible';
-            el.style.zIndex='9999999';
-            if(el.offsetParent!==null&&el.offsetWidth>20&&el.offsetHeight>20){try{el.click();}catch(e){}}
-        });
     }
     kfFixVoe();
     var mo=new MutationObserver(function(){kfFixVoe();});
@@ -971,35 +958,29 @@ class EmbedWebViewActivity : AppCompatActivity() {
 })();
 """
 
-        private const val VIDEO_AD_SKIP_JS = """
-(function(){
-    if(window.__kf_ad_skip__)return;window.__kf_ad_skip__=1;
-    function kfSkipAds(){
-        var skipWords=['skip ad','skip ads','saltar anuncio','saltar publicidad','skip intro','cerrar anuncio','close ad','saltar en','skip in','anuncios en','ads in','omits','omitir','omitir anuncio'];
-        var voeDomains=['voe.sx','voe'];
-        var isVoePage=voeDomains.some(function(d){return window.location.hostname.indexOf(d)>=0||document.referrer.indexOf(d)>=0;});
-        if(isVoePage){return;}
-        document.querySelectorAll('button,a,span,div').forEach(function(el){
-            var txt=(el.textContent||'').trim().toLowerCase();
-            var cls=(el.className||'').toLowerCase();
-            var id=(el.id||'').toLowerCase();
-            if(cls.indexOf('voe')>=0||cls.indexOf('sx')>=0){return;}
-            skipWords.forEach(function(w){
-                if(txt===w||txt.indexOf(w)>=0||(cls.indexOf('skip')>=0&&cls.indexOf('btn')>=0)||cls.indexOf('saltar')>=0||(id.indexOf('skip')>=0&&id.indexOf('btn')>=0)||id.indexOf('saltar')>=0){
-                    try{
-                        if(el.offsetParent!==null&&el.offsetWidth>0&&el.offsetHeight>0){
-                            el.click();
-                            console.log('KF:SKIP-AD',txt||cls||id);
-                        }
-                    }catch(e){}
-                }
-            });
-        });
-        document.querySelectorAll('[class*="ima-ad"],[class*="ad-container"],[class*="preroll"],[class*="pre-roll"],[id*="ima-ad"],[id*="ad-container"],[id*="preroll"]').forEach(function(el){
-            el.style.display='none';el.style.visibility='hidden';el.style.opacity='0';
-            el.style.pointerEvents='none';el.style.position='absolute';el.style.width='0';el.style.height='0';el.style.zIndex='-1';
-            el.remove();
-        });
+         private const val VIDEO_AD_SKIP_JS = """
+ (function(){
+     if(window.__kf_ad_skip__)return;window.__kf_ad_skip__=1;
+     function kfSkipAds(){
+         document.querySelectorAll('button,a,span,div').forEach(function(el){
+             var txt=(el.textContent||'').trim().toLowerCase();
+             var cls=(el.className||'').toLowerCase();
+             var id=(el.id||'').toLowerCase();
+             if(cls.indexOf('voe')>=0||cls.indexOf('sx')>=0){return;}
+             if(txt.indexOf('skip')>=0||txt.indexOf('saltar')>=0||txt.indexOf('omitir')>=0||txt.indexOf('close')>=0||txt.indexOf('cerrar')>=0||txt.indexOf('ad')>=0||txt.indexOf('anuncio')>=0||txt.indexOf('publicidad')>=0){
+                 try{
+                     if(el.offsetParent!==null&&el.offsetWidth>0&&el.offsetHeight>0){
+                         el.click();
+                         console.log('KF:SKIP-AD',txt||cls||id);
+                     }
+                 }catch(e){}
+             }
+         });
+         document.querySelectorAll('[class*="ima-ad"],[class*="ad-container"],[class*="preroll"],[class*="pre-roll"],[id*="ima-ad"],[id*="ad-container"],[id*="preroll"]').forEach(function(el){
+             el.style.display='none';el.style.visibility='hidden';el.style.opacity='0';
+             el.style.pointerEvents='none';el.style.position='absolute';el.style.width='0';el.style.height='0';el.style.zIndex='-1';
+             el.remove();
+         });
         document.querySelectorAll('video').forEach(function(v){
             v.style.pointerEvents='auto';v.style.zIndex='9999998';v.controls=true;
         });
@@ -1227,8 +1208,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
         setContentView(R.layout.activity_embed_webview)
 
         loadingLayout = findViewById(R.id.webview_loading)
-        skipButtonContainer = findViewById(R.id.skip_button_container)
-        btnSkip = findViewById(R.id.btn_skip)
         mainHandler = Handler(Looper.getMainLooper())
 
         hiddenContainer = FrameLayout(this).apply {
@@ -1269,14 +1248,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
             episodeNumber = epNum
         }
 
-        btnSkip.setOnClickListener {
-            skipCurrentInterval()
-        }
-
-        if (title.isNotBlank() && episodeNumber > 0) {
-            fetchSkipTimes()
-        }
-
         Log.d(TAG, "Opening WebView for: $title | URL: ${embedUrl.takeLast(80)}")
 
         webView.settings.apply {
@@ -1295,11 +1266,11 @@ class EmbedWebViewActivity : AppCompatActivity() {
             allowContentAccess = false
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = true
-            val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
-                "Mozilla/5.0 (Linux; Android 12; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-            } else {
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            }
+val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
+                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+             } else {
+                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+             }
             userAgentString = ua
         }
 
@@ -1512,9 +1483,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
         }
 
         webView.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-            }
-
             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                 consoleMessage?.let {
                     val msg = it.message()
@@ -1739,22 +1707,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
         fun onNextEpisodeFound(url: String) {
             Log.i(TAG, "Next episode URL from DOM: ${url.takeLast(80)}")
             nextEpisodeUrlFromDom = url
-        }
-
-        @JavascriptInterface
-        fun onSkipIntervalReached(type: String) {
-            Log.i(TAG, "Skip interval reached: $type")
-            mainHandler.post {
-                showSkipButton(type)
-            }
-        }
-
-        @JavascriptInterface
-        fun onSkipIntervalLeft() {
-            Log.i(TAG, "Skip interval left")
-            mainHandler.post {
-                hideSkipButton()
-            }
         }
 
         @JavascriptInterface
@@ -2015,23 +1967,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
                 return true
             }
             finish()
-            return true
-        }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-            webView.evaluateJavascript("""
-                (function(){
-                    var focused=document.activeElement;
-                    if(focused&&focused.tagName!=='BODY'&&focused.tagName!=='HTML'){
-                        focused.click();
-                        return 'clicked:'+focused.tagName;
-                    }
-                    var play=document.querySelector('[class*="play"],[id*="play"],button,[role="button"]');
-                    if(play){play.click();return 'clicked-play';}
-                    return 'no-focus';
-                })();
-            """.trimIndent()) { result ->
-                Log.d(TAG, "DPAD_CENTER: $result")
-            }
             return true
         }
         return super.onKeyDown(keyCode, event)

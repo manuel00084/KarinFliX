@@ -59,6 +59,7 @@ object AudioEnhanceConfig {
         val loudnessComp: Boolean = true, // compensación de sonoridad (sube graves/agudos a volumen bajo)
         val surfaceResonance: Boolean = true, // resonancia de caja/superficie (TV en rack)
         val speechClarity: Boolean = true, // realce dinámico de voz (diálogos claros)
+        val subharmonicMix: Float = 0f,  // 0..1.0 (sintetizador subarmónico para bocinas TV)
         val parametricEq: List<ParamBand>? = null, // curvas AutoEQ paramétricas
         val userIrName: String? = null, // nombre del IR de usuario cargado
         val eq10: FloatArray? = null    // 10 bandas ISO dB (31..16k); null = derivar del preset
@@ -87,8 +88,9 @@ object AudioEnhanceConfig {
                 dynamicBass == other.dynamicBass &&
                 loudnessComp == other.loudnessComp &&
                 surfaceResonance == other.surfaceResonance &&
-                speechClarity == other.speechClarity &&
-                parametricEq == other.parametricEq &&
+                 speechClarity == other.speechClarity &&
+                 subharmonicMix == other.subharmonicMix &&
+                 parametricEq == other.parametricEq &&
                 userIrName == other.userIrName &&
                 eq10.contentEquals(other.eq10)
         }
@@ -115,14 +117,15 @@ object AudioEnhanceConfig {
             h = 31 * h + dynamicBass.hashCode()
             h = 31 * h + loudnessComp.hashCode()
             h = 31 * h + surfaceResonance.hashCode()
-            h = 31 * h + speechClarity.hashCode()
+             h = 31 * h + speechClarity.hashCode()
+            h = 31 * h + subharmonicMix.hashCode()
             h = 31 * h + (parametricEq?.hashCode() ?: 0)
             h = 31 * h + (userIrName?.hashCode() ?: 0)
             h = 31 * h + (eq10?.contentHashCode() ?: 0)
             return h
         }
         fun withPreset(p: Preset): Params = when (p) {
-            Preset.OFF -> Params(Preset.OFF, false, autoDevice = false)
+            Preset.OFF -> Params(Preset.OFF, false, autoDevice = false, subharmonicMix = 0f)
             // ANIME — TV speakers: diálogos nítidos, OST con cuerpo, sub-bass virtual
             Preset.ANIME -> Params(
                 Preset.ANIME, true, autoDevice = false,
@@ -137,111 +140,118 @@ object AudioEnhanceConfig {
                 compression = 0.45f,    // nivelación anime (susurros ↔ gritos)
                 reverbMix = 0.02f,      // casi seco: TV pequeña no necesita sala
                 masterGain = 1.0f,
-                irType = IrPreset.SPEAKER_CAB,
-                irMix = 0.25f           // cuerpo de cabina para driver chico
-            )
-            // CINEMA — Soundbar/TV/5.1: experiencia cinematográfica real
-            Preset.CINEMA -> Params(
-                Preset.CINEMA, true, autoDevice = false,
-                bassGain = +1.0f,       // soporte, no boom
-                trebleGain = +0.3f,     // aire sutil
-                subBassGain = +3.0f,    // LFE real (explosiones, banda sonora)
-                presenceGain = +1.2f,   // diálogos inteligibles sin dureza
-                surroundWidth = 0.4f,   // ancho cinematográfico
-                fieldSurround = 0.35f,  // campo V4A: Haas + bass centrado = 5.1 fantasma
-                exciterAmount = 0.04f,  // casi transparente
-                harmonicBass = 0.1f,    // ligero refuerzo armónico
-                compression = 0.35f,    // rango dinámico cine (respeta DR original)
-                reverbMix = 0.08f,      // sala de cine leve
-                masterGain = 0.98f,     // headroom para picos de LFE
-                irType = IrPreset.HALL,
-                irMix = 0.18f
-            )
-            // BASS_BOOST — Musical: graves ajustados, rápidos, armónicamente ricos
-            Preset.BASS_BOOST -> Params(
-                Preset.BASS_BOOST, true, autoDevice = false,
-                bassGain = +3.0f,       // 80-150 Hz: "punch" musical
-                trebleGain = +0.5f,     // compensa masking de graves
-                subBassGain = +1.5f,    // sub controlado (no retumba)
-                presenceGain = 0.0f,
-                surroundWidth = 0.15f,
-                fieldSurround = 0.05f,
-                exciterAmount = 0.06f,  // claridad en ataque de bombo/bajo
-                harmonicBass = 0.3f,    // síntesis armónica: graves "más grandes"
-                compression = 0.25f,    // dinámica musical preservada
-                reverbMix = 0.0f,
-                masterGain = 0.95f,     // headroom para boost
-                irType = IrPreset.ROOM,
-                irMix = 0.08f
-            )
-            // SURROUND — Inmersivo: crossfeed binaural + Haas + reflexiones
-            Preset.SURROUND -> Params(
-                Preset.SURROUND, true, autoDevice = false,
-                bassGain = +0.5f,
-                trebleGain = +1.0f,     // apertura espacial en agudos
-                subBassGain = +0.5f,
-                presenceGain = +0.8f,
-                surroundWidth = 0.85f,  // ancho máximo sin fase
-                fieldSurround = 0.6f,   // V4A fuerte: Haas 9/12ms + reflexión 16ms
-                exciterAmount = 0.15f,  // detalle espacial
-                harmonicBass = 0.08f,
-                compression = 0.2f,
-                reverbMix = 0.12f,      // ambiente envolvente
-                masterGain = 1.0f,
-                irType = IrPreset.CROSSFEED,
-                irMix = 0.2f            // crossfeed binaural real
-            )
-            // DIALOGUE — Noticias/podcasts/audiolibros: inteligibilidad absoluta
-            Preset.DIALOGUE -> Params(
-                Preset.DIALOGUE, true, autoDevice = false,
-                bassGain = -3.0f,       // elimina rumble/musica de fondo
-                trebleGain = +1.5f,     // aire/consonantes
-                subBassGain = -4.0f,
-                presenceGain = +5.0f,   // 1.5-4 kHz: zona crítica habla
-                surroundWidth = 0.0f,   // mono perfecto: foco central
-                fieldSurround = 0.0f,
-                exciterAmount = 0.12f,  // nitidez consonantes
-                harmonicBass = 0.0f,
-                compression = 0.7f,     // nivelación fuerte: voz constante
-                reverbMix = 0.0f,
-                masterGain = 1.05f,     // compensación corte graves
-                irType = IrPreset.NONE,
-                irMix = 0.0f
-            )
-            // MUSIC — Audiófilo: respuesta plana + micro-mejora
-            Preset.MUSIC -> Params(
-                Preset.MUSIC, true, autoDevice = false,
-                bassGain = +0.8f,       // compensación Fletcher-Munson suave
-                trebleGain = +0.8f,     // "aire" 8-16 kHz
-                subBassGain = +0.5f,    // extensión grave sutil
-                presenceGain = +0.3f,   // presencia vocal natural
-                surroundWidth = 0.25f,  // estéreo natural, no ensanchado artificial
-                fieldSurround = 0.1f,   // profundidad Haas leve
-                exciterAmount = 0.05f,  // armónicos: realismo timbre
-                harmonicBass = 0.12f,   // TruBass sutil: cuerpo sin colorar
-                compression = 0.1f,     // casi sin compresión: DR máximo
-                reverbMix = 0.02f,      // ambiente de sala real (IR ROOM)
-                masterGain = 1.0f,
-                irType = IrPreset.ROOM,
-                irMix = 0.12f
-            )
-            // SPEAKER / TRUE MAXBASS — Bocina chica: máximo grave percibido
-            Preset.SPEAKER -> Params(
-                Preset.SPEAKER, true, autoDevice = false,
-                bassGain = +3.5f,       // medio-bajo: donde el driver rinde
-                trebleGain = -0.3f,     // doma resonancias metálicas
-                subBassGain = -5.0f,    // elimina sub real (distorsiona driver)
-                presenceGain = +1.8f,   // claridad vocal
-                surroundWidth = 0.0f,
-                fieldSurround = 0.0f,
-                exciterAmount = 0.04f,
-                harmonicBass = 0.7f,    // síntesis armónica agresiva (2f, 3f, 4f)
-                compression = 0.5f,     // protege driver, nivelación fuerte
-                reverbMix = 0.0f,
-                masterGain = 1.0f,
-                irType = IrPreset.SPEAKER_CAB,
-                irMix = 0.35f           // máximo cuerpo de cabina
-            )
+                 irType = IrPreset.SPEAKER_CAB,
+                 irMix = 0.25f,
+                 subharmonicMix = 0.5f
+             )
+             // CINEMA — Soundbar/TV/5.1: experiencia cinematográfica real
+             Preset.CINEMA -> Params(
+                 Preset.CINEMA, true, autoDevice = false,
+                 bassGain = +1.0f,       // soporte, no boom
+                 trebleGain = +0.3f,     // aire sutil
+                 subBassGain = +3.0f,    // LFE real (explosiones, banda sonora)
+                 presenceGain = +1.2f,   // diálogos inteligibles sin dureza
+                 surroundWidth = 0.4f,   // ancho cinematográfico
+                 fieldSurround = 0.35f,  // campo V4A: Haas + bass centrado = 5.1 fantasma
+                 exciterAmount = 0.04f,  // casi transparente
+                 harmonicBass = 0.1f,    // ligero refuerzo armónico
+                 compression = 0.35f,    // rango dinámico cine (respeta DR original)
+                 reverbMix = 0.08f,      // sala de cine leve
+                 masterGain = 0.98f,     // headroom para picos de LFE
+                 irType = IrPreset.HALL,
+                 irMix = 0.18f,
+                 subharmonicMix = 0.4f
+             )
+             // BASS_BOOST — Musical: graves ajustados, rápidos, armónicamente ricos
+             Preset.BASS_BOOST -> Params(
+                 Preset.BASS_BOOST, true, autoDevice = false,
+                 bassGain = +3.0f,       // 80-150 Hz: "punch" musical
+                 trebleGain = +0.5f,     // compensa masking de graves
+                 subBassGain = +1.5f,    // sub controlado (no retumba)
+                 presenceGain = 0.0f,
+                 surroundWidth = 0.15f,
+                 fieldSurround = 0.05f,
+                 exciterAmount = 0.06f,  // claridad en ataque de bombo/bajo
+                 harmonicBass = 0.3f,    // síntesis armónica: graves "más grandes"
+                 compression = 0.25f,    // dinámica musical preservada
+                 reverbMix = 0.0f,
+                 masterGain = 0.95f,     // headroom para boost
+                 irType = IrPreset.ROOM,
+                 irMix = 0.08f,
+                 subharmonicMix = 0.2f
+             )
+             // SURROUND — Inmersivo: crossfeed binaural + Haas + reflexiones
+             Preset.SURROUND -> Params(
+                 Preset.SURROUND, true, autoDevice = false,
+                 bassGain = +0.5f,
+                 trebleGain = +1.0f,     // apertura espacial en agudos
+                 subBassGain = +0.5f,
+                 presenceGain = +0.8f,
+                 surroundWidth = 0.85f,  // ancho máximo sin fase
+                 fieldSurround = 0.6f,   // V4A fuerte: Haas 9/12ms + reflexión 16ms
+                 exciterAmount = 0.15f,  // detalle espacial
+                 harmonicBass = 0.08f,
+                 compression = 0.2f,
+                 reverbMix = 0.12f,      // ambiente envolvente
+                 masterGain = 1.0f,
+                 irType = IrPreset.CROSSFEED,
+                 irMix = 0.2f,           // crossfeed binaural real
+                 subharmonicMix = 0.1f
+             )
+             // DIALOGUE — Noticias/podcasts/audiolibros: inteligibilidad absoluta
+             Preset.DIALOGUE -> Params(
+                 Preset.DIALOGUE, true, autoDevice = false,
+                 bassGain = -3.0f,       // elimina rumble/musica de fondo
+                 trebleGain = +1.5f,     // aire/consonantes
+                 subBassGain = -4.0f,
+                 presenceGain = +5.0f,   // 1.5-4 kHz: zona crítica habla
+                 surroundWidth = 0.0f,   // mono perfecto: foco central
+                 fieldSurround = 0.0f,
+                 exciterAmount = 0.12f,  // nitidez consonantes
+                 harmonicBass = 0.0f,
+                 compression = 0.7f,     // nivelación fuerte: voz constante
+                 reverbMix = 0.0f,
+                 masterGain = 1.05f,     // compensación corte graves
+                 irType = IrPreset.NONE,
+                 irMix = 0.0f,
+                 subharmonicMix = 0.3f
+             )
+             // MUSIC — Audiófilo: respuesta plana + micro-mejora
+             Preset.MUSIC -> Params(
+                 Preset.MUSIC, true, autoDevice = false,
+                 bassGain = +0.8f,       // compensación Fletcher-Munson suave
+                 trebleGain = +0.8f,     // "aire" 8-16 kHz
+                 subBassGain = +0.5f,    // extensión grave sutil
+                 presenceGain = +0.3f,   // presencia vocal natural
+                 surroundWidth = 0.25f,  // estéreo natural, no ensanchado artificial
+                 fieldSurround = 0.1f,   // profundidad Haas leve
+                 exciterAmount = 0.05f,  // armónicos: realismo timbre
+                 harmonicBass = 0.12f,   // TruBass sutil: cuerpo sin colorar
+                 compression = 0.1f,     // casi sin compresión: DR máximo
+                 reverbMix = 0.02f,      // ambiente de sala real (IR ROOM)
+                 masterGain = 1.0f,
+                 irType = IrPreset.ROOM,
+                 irMix = 0.12f,
+                 subharmonicMix = 0.1f
+             )
+             // SPEAKER / TRUE MAXBASS — Bocina chica: máximo grave percibido
+             Preset.SPEAKER -> Params(
+                 Preset.SPEAKER, true, autoDevice = false,
+                 bassGain = +3.5f,       // medio-bajo: donde el driver rinde
+                 trebleGain = -0.3f,     // doma resonancias metálicas
+                 subBassGain = -5.0f,    // elimina sub real (distorsiona driver)
+                 presenceGain = +1.8f,   // claridad vocal
+                 surroundWidth = 0.0f,
+                 fieldSurround = 0.0f,
+                 exciterAmount = 0.04f,
+                 harmonicBass = 0.7f,    // síntesis armónica agresiva (2f, 3f, 4f)
+                 compression = 0.5f,     // protege driver, nivelación fuerte
+                 reverbMix = 0.0f,
+                 masterGain = 1.0f,
+                 irType = IrPreset.SPEAKER_CAB,
+                 irMix = 0.35f,          // máximo cuerpo de cabina
+                 subharmonicMix = 0.6f
+             )
         }
     }
 
@@ -486,6 +496,9 @@ object AudioEnhanceConfig {
 
     fun getSpeechClarity(): Boolean = prefs?.getBoolean(KEY_SPEECH, true) ?: true
     fun setSpeechClarity(v: Boolean) { prefs?.edit()?.putBoolean(KEY_SPEECH, v)?.apply() }
+    private const val KEY_SUBHARMONIC = "dsp_subharmonic"
+    fun getSubharmonicMix(): Float = prefs?.getFloat(KEY_SUBHARMONIC, 0f) ?: 0f
+    fun setSubharmonicMix(v: Float) { prefs?.edit()?.putFloat(KEY_SUBHARMONIC, v.coerceIn(0f, 1f))?.apply() }
 
     fun getParametric(): List<ParamBand>? {
         val s = prefs?.getString(KEY_PARAMETRIC, null) ?: return null
@@ -567,8 +580,9 @@ object AudioEnhanceConfig {
             dynamicBass = getDynamicBass(),
             loudnessComp = getLoudnessComp(),
             surfaceResonance = getSurfaceResonance(),
-            speechClarity = getSpeechClarity(),
-            parametricEq = getParametric(),
+             speechClarity = getSpeechClarity(),
+             subharmonicMix = getSubharmonicMix(),
+             parametricEq = getParametric(),
             userIrName = userIrName(),
             eq10 = getEq10()
         )
@@ -598,6 +612,7 @@ object AudioEnhanceConfig {
         setLoudnessComp(p.loudnessComp)
         setSurfaceResonance(p.surfaceResonance)
         setSpeechClarity(p.speechClarity)
+        setSubharmonicMix(p.subharmonicMix)
         setAutoDevice(p.autoDevice)
         setParametric(p.parametricEq)
         setEq10(p.eq10)
