@@ -164,7 +164,7 @@ class SeriesDetailActivity : AppCompatActivity() {
                     val doc = ScrapingEngine.fetch(seriesUrl, siteName, "${siteName}::series::${seriesUrl.hashCode()}")
                     Log.d("SeriesDetail", "Fetch result: doc=${doc != null}, bodyLen=${doc?.body()?.html()?.length ?: 0}")
                     if (doc != null) {
-                        val result = DynamicParser.parseSeriesPage(doc, seriesUrl, siteName)
+                        val result = DynamicParser.parseSeriesPageAsync(doc, seriesUrl, siteName)
                         Log.d("SeriesDetail", "Parsed: title='${result.title}', episodes=${result.episodes.size}, cover='${result.coverUrl.take(60)}'")
                         if (result.episodes.isEmpty()) {
                             val verLinks = doc.select("a[href*='/ver/']")

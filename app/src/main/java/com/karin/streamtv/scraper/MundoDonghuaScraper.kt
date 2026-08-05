@@ -26,7 +26,7 @@ import com.karin.streamtv.model.Episode
  */
 object MundoDonghuaScraper : GenericScraper() {
     override val name = "MundoDonghua"
-    override val baseUrl = "https://mundodonghua.com"
+    override val baseUrl = "https://www.mundodonghua.com"
 
     override fun buildSearchUrl(query: String): String =
         "${baseUrl}/busquedas/?donghua=${java.net.URLEncoder.encode(query, "UTF-8")}"

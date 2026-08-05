@@ -221,14 +221,6 @@ enum class VideoServer(
         speedRating = 3,
         priority = 52
     ),
-    DORAMASYT_REPRODUCTOR(
-        displayName = "DoramasYT",
-        patterns = listOf("doramasyt.com/reproductor"),
-        supportsResolution = false,
-        speedRating = 3,
-        priority = 88,
-        webViewOnly = true
-    ),
     TOROPLAY_EMBED(
         displayName = "Reproductor",
         patterns = listOf("trembed="),

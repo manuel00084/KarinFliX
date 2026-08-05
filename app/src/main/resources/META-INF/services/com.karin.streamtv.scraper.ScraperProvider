@@ -1,6 +1,5 @@
 com.karin.streamtv.scraper.LatAnimeScraperProvider
 com.karin.streamtv.scraper.JKAnimeScraperProvider
-com.karin.streamtv.scraper.DoramaYtScraperProvider
 com.karin.streamtv.scraper.FrikiserieScraperProvider
 com.karin.streamtv.scraper.MundoDonghuaScraperProvider
 com.karin.streamtv.scraper.LaCartoonsScraperProvider

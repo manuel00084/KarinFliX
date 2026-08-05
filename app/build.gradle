@@ -109,9 +109,6 @@ dependencies {
     implementation 'androidx.media3:media3-effect:1.5.1'
     implementation 'androidx.media3:media3-common:1.5.1'
 
-    // VLC (used by VlcGlRenderer for 60fps interpolation)
-    implementation 'org.videolan.android:libvlc-all:3.6.3'
-
     // Unit tests
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'

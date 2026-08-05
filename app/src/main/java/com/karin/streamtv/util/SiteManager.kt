@@ -15,8 +15,7 @@ class SiteManager(context: Context) {
     private val defaultConfigs = listOf(
         SiteConfig(name = "JKAnime", url = "https://jkanime.net", icon = "JA"),
         SiteConfig(name = "LatAnime", url = "https://latanime.org", icon = "LA"),
-        SiteConfig(name = "DoramasYT", url = "https://www.doramasyt.com", icon = "DY"),
-        SiteConfig(name = "MundoDonghua", url = "https://mundodonghua.com", icon = "MD"),
+        SiteConfig(name = "MundoDonghua", url = "https://www.mundodonghua.com", icon = "MD"),
         SiteConfig(name = "RetroTVE", url = "https://retrotve.com", icon = "RT"),
         SiteConfig(name = "LaCartoons", url = "https://www.lacartoons.com", icon = "LC"),
         SiteConfig(name = "FrikiSeries", url = "https://www.frikiserie.com", icon = "FS"),
@@ -89,6 +88,8 @@ class SiteManager(context: Context) {
 
     private fun ensureDefaults() {
         val removedUrls = setOf(
+            "https://www.doramasyt.com",
+            "https://doramasyt.com",
             "https://www.pandrama.tv",
             "https://pandrama.tv",
             "https://pandrama.info",

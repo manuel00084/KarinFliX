@@ -31,6 +31,9 @@ import org.jsoup.nodes.Element
 object JKAnimeScraper : GenericScraper() {
     override val name = "JKAnime"
     override val baseUrl = "https://jkanime.net"
+
+    private const val MAX_EPISODE_PAGES = 30
+
     override fun buildSearchUrl(query: String): String =
         "${baseUrl}/buscar/${java.net.URLEncoder.encode(query, "UTF-8")}/"
 
@@ -65,10 +68,110 @@ object JKAnimeScraper : GenericScraper() {
         )
     }
 
+    /**
+     * JKAnime renders its episode list client-side into #episodes-content via
+     * `POST https://jkanime.net/ajax/episodes/{id}/{page}` (Laravel paginator, 16/page, CSRF protected).
+     * The numeric series id, slug and CSRF token are extracted from the series page markup.
+     */
+    suspend fun fetchSeriesEpisodes(doc: Document, seriesUrl: String, siteName: String): List<Episode> {
+        val html = doc.toString()
+        val token = Regex("""<meta name="csrf-token" content="([^"]+)""")
+            .find(html)?.groupValues?.get(1)?.trim().orEmpty()
+
+        val id = Regex("""ajax/episodes/(\d+)/""").find(html)?.groupValues?.get(1)
+            ?: Regex("""anime_checks\('[^']+',\s*'(\d+)'""").find(html)?.groupValues?.get(1)
+            ?: ""
+        if (id.isBlank() || token.isBlank()) {
+            Log.w("JKAnimeScraper", "fetchSeriesEpisodes: missing id/token (id='$id' token='$token')")
+            return emptyList()
+        }
+
+        val origin = try {
+            val uri = java.net.URI(seriesUrl)
+            "${uri.scheme}://${uri.host}"
+        } catch (_: Exception) { baseUrl }
+        val slug = try {
+            java.net.URI(seriesUrl).path.trim('/').substringBeforeLast('/')
+        } catch (_: Exception) { "" }
+        if (slug.isBlank()) {
+            Log.w("JKAnimeScraper", "fetchSeriesEpisodes: cannot derive slug from $seriesUrl")
+            return emptyList()
+        }
+
+        // Replicate the page's cdnthumb: cover /animes/image/{dir}/ -> /animes/video/image_thumb/{dir}/
+        val cdnThumb = doc.selectFirst(".anime_pic img")?.attr("abs:src")
+            ?.replace("/animes/image/", "/animes/video/image_thumb/")
+            ?.substringBeforeLast("/")?.plus("/").orEmpty()
+
+        val episodes = mutableListOf<Episode>()
+        var lastPage = 1
+
+        fun parsePage(body: String) {
+            val json = try { org.json.JSONObject(body) } catch (e: Exception) {
+                Log.w("JKAnimeScraper", "episodes JSON parse failed: ${e.message}")
+                return
+            }
+            val arr = json.optJSONArray("data") ?: return
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val number = obj.optInt("number", 0)
+                if (number <= 0) continue
+                val title = obj.optString("title").trim().ifBlank { "$slug - $number" }
+                val img = obj.optString("image").trim()
+                episodes.add(Episode(
+                    title = title,
+                    url = "$origin/$slug/$number/",
+                    episodeNum = number.toString(),
+                    thumbnailUrl = if (cdnThumb.isNotBlank() && img.isNotBlank()) cdnThumb + img else "",
+                    siteName = siteName
+                ))
+            }
+            lastPage = json.optInt("last_page", 1)
+        }
+
+        var page = 1
+        var refreshed = false
+        while (page <= MAX_EPISODE_PAGES) {
+            var body = ScrapingEngine.postForm(
+                url = "$origin/ajax/episodes/$id/$page",
+                form = mapOf("_token" to token),
+                csrfToken = token,
+                siteName = siteName
+            )
+            if (body.isNullOrBlank() && !refreshed) {
+                // Session likely expired -> refresh the series page to obtain a fresh CSRF token and retry once.
+                refreshed = true
+                val fresh = ScrapingEngine.fetch("$origin/$slug/", siteName, null, forceFresh = true)
+                val freshToken = fresh?.toString()
+                    ?.let { Regex("""<meta name="csrf-token" content="([^"]+)""").find(it)?.groupValues?.get(1)?.trim() }
+                    .orEmpty()
+                if (freshToken.isNotBlank()) {
+                    body = ScrapingEngine.postForm(
+                        url = "$origin/ajax/episodes/$id/$page",
+                        form = mapOf("_token" to freshToken),
+                        csrfToken = freshToken,
+                        siteName = siteName
+                    )
+                }
+            }
+            if (body.isNullOrBlank()) break
+            parsePage(body)
+            page++
+            if (page > lastPage) break
+        }
+
+        Log.d("JKAnimeScraper", "Fetched ${episodes.size} episodes for '$slug' (id=$id)")
+        return episodes.distinctBy { it.url }
+    }
+
     override suspend fun extractServers(episodeUrl: String): List<VideoSource> {
         val doc = fetchDocument(episodeUrl) ?: return emptyList()
         val servers = mutableListOf<VideoSource>()
         val seen = mutableSetOf<String>()
+
+        // JKAnime embeds the real server list as `var servers = [{"remote":"<base64>","slug":"...","server":"Nombre",...}]`
+        // inside a <script>. This is the primary source — the tab links are rendered from it via JS.
+        extractJkServersFromScript(doc, seen, servers)
 
         // JKAnime uses tabs with data-server or onclick to load iframes
         // Pattern 1: <a class="option" data-server="server-name" data-src="iframe-url">
@@ -104,7 +207,7 @@ object JKAnimeScraper : GenericScraper() {
             }
         }
 
-        // Pattern 3: iframes directly in page
+        // Pattern 3: iframes directly in page (jkplayer/um wrapper as fallback when the script JSON is absent)
         doc.select("iframe[src]").forEach { iframe ->
             val src = iframe.attr("abs:src")
             if (src.isNotBlank() && src !in seen) {
@@ -125,6 +228,43 @@ object JKAnimeScraper : GenericScraper() {
 
         Log.d("JKAnimeScraper", "Extracted ${servers.size} servers from $episodeUrl")
         return servers.distinctBy { it.serverUrl }
+    }
+
+    /**
+     * Parses `var servers = [{"remote":"<base64>","server":"Name",...}]` from the page script.
+     * `remote` is a Base64-encoded server URL. This is the reliable source for JKAnime server tabs.
+     */
+    private fun extractJkServersFromScript(doc: Document, seen: MutableSet<String>, out: MutableList<VideoSource>) {
+        val html = doc.toString()
+        val match = Regex("""var\s+servers\s*=\s*(\[[^\]\n]*\]);""", RegexOption.IGNORE_CASE).find(html) ?: return
+        val raw = match.groupValues[1]
+        val arr = try {
+            org.json.JSONArray(raw)
+        } catch (e: Exception) {
+            Log.w("JKAnimeScraper", "servers JSON parse failed: ${e.message}")
+            return
+        }
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val name = obj.optString("server").trim().ifBlank { continue }
+            val encoded = obj.optString("remote").trim()
+            if (encoded.isBlank()) continue
+            val url = try {
+                String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)).trim()
+            } catch (e: Exception) {
+                continue
+            }
+            if (url.isBlank() || url in seen || !url.startsWith("http")) continue
+            seen.add(url)
+            val server = VideoServer.detectServer(url)
+            out.add(VideoSource(
+                name = name,
+                serverUrl = url,
+                supportsResolutionChange = server.supportsResolution,
+                speedRating = server.speedRating
+            ))
+        }
+        Log.d("JKAnimeScraper", "servers JSON: ${out.size} server(s)")
     }
 }
 

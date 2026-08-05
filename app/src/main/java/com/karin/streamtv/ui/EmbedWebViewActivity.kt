@@ -15,6 +15,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -23,6 +24,7 @@ import androidx.lifecycle.lifecycleScope
 import com.karin.streamtv.R
 import com.karin.streamtv.util.AniSkipService
 import com.karin.streamtv.util.AppPreferences
+import com.karin.streamtv.util.CloudflareInterceptor
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.EpisodeProgress
 import com.karin.streamtv.util.onActionKey
@@ -53,6 +55,10 @@ class EmbedWebViewActivity : AppCompatActivity() {
     private var nextEpisodeUrlFromDom: String? = null
     private var playlist: List<com.karin.streamtv.model.PlaylistItem> = emptyList()
     private var playlistIndex: Int = 0
+
+    private var presented = false
+    private var launching = false
+    private var hiddenContainer: FrameLayout? = null
     
     private var skipInterval: AniSkipService.SkipInterval? = null
     private var isShowingSkipButton: Boolean = false
@@ -1116,7 +1122,11 @@ class EmbedWebViewActivity : AppCompatActivity() {
     s.id='kf-video-enhance';
     s.textContent='video{filter:contrast(1.10)saturate(1.35)brightness(1.04)!important;image-rendering:auto!important}';
     document.head.appendChild(s);
-    console.log('KF: VideoEnhance CSS applied');
+    var l=document.createElement('style');
+    l.id='kf-hide-login';
+    l.textContent='a[href*="login"],a[href*="signin"],a[href*="sign-in"],a[href*="iniciar"],a[href*="registro"],a[href*="register"],a[href*="signup"],a[href*="sign-up"],button[class*="login"],button[class*="auth"],button[class*="signin"],button[class*="session"],.login-btn,.login-button,.auth-btn,.btn-login,.btn-auth,.nav-login,.nav-auth,.header-login,.header-auth,.user-login,.user-auth,.account-login,a.md-auth-trigger,li:has(>a.md-auth-trigger),.md-login-toggle,.md-auth-overlay,.md-auth-modal,#authOverlay,#authModal,.modal-login,.modal-auth,.overlay-login,.overlay-auth,.popup-login,.popup-auth,.sidebar-login,.sidebar-auth,.menu-login,.menu-auth,.dropdown-login,.dropdown-auth,[class*="login" i],[class*="signin" i],[class*="sign-in" i],[class*="auth" i][class*="modal" i],[class*="auth" i][class*="overlay" i],[class*="iniciar" i][class*="sesion" i],[class*="iniciar" i][class*="sesión" i]{display:none!important;visibility:hidden!important;opacity:0!important;height:0!important;overflow:hidden!important}';
+    document.head.appendChild(l);
+    console.log('KF: VideoEnhance + LoginHid CSS applied');
 })();
 """
     }
@@ -1216,11 +1226,30 @@ class EmbedWebViewActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_embed_webview)
 
-        webView = findViewById(R.id.webview)
         loadingLayout = findViewById(R.id.webview_loading)
         skipButtonContainer = findViewById(R.id.skip_button_container)
         btnSkip = findViewById(R.id.btn_skip)
         mainHandler = Handler(Looper.getMainLooper())
+
+        hiddenContainer = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(1, 1)
+            x = -9999f
+            y = -9999f
+            clipChildren = false
+            visibility = View.INVISIBLE
+        }
+        webView = WebView(this).apply {
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            visibility = View.INVISIBLE
+            alpha = 0f
+            isHorizontalScrollBarEnabled = false
+            isVerticalScrollBarEnabled = false
+            setOnTouchListener { _, _ -> true }
+            layoutParams = FrameLayout.LayoutParams(720, 1280)
+        }
+        hiddenContainer!!.addView(webView)
+        val rootView = findViewById<FrameLayout>(android.R.id.content)
+        rootView.addView(hiddenContainer)
 
         val embedUrl = intent.getStringExtra("embed_url") ?: ""
         title = intent.getStringExtra("video_title") ?: ""
@@ -1304,8 +1333,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                loadingLayout.visibility = View.GONE
-                webView.visibility = View.VISIBLE
                 val currentUrl = url ?: embedUrl
                 Log.d(TAG, "Page loaded: ${currentUrl.takeLast(80)}")
 
@@ -1375,11 +1402,15 @@ class EmbedWebViewActivity : AppCompatActivity() {
                                 var src=kfExtract();
                                 if(!src){
                                     mo.disconnect();
+                                    var videoHosts=['streamtape','stape','doodstream','dood','dsvplay','voe','mixdrop','filemoon','streamsb','sbplay','streamwish','embedwish','fembed','feurl','vcdn','nupload','hexload','savefiles','lulu','mega','byse','netu','mp4upload','sendvid','ok.ru','vk.com'];
                                     var all=document.querySelectorAll('a[href],video[src],source[src]');
                                     for(var i=0;i<all.length;i++){
                                         var h=all[i].href||all[i].src||all[i].getAttribute('data-src')||'';
-                                        if(h&&h.indexOf('http')===0&&h.indexOf('doubleclick')===-1&&h.indexOf(window.location.hostname)===-1){
-                                            window.location.href=h;return;
+                                        if(h&&h.indexOf('http')===0){
+                                            var hl=h.toLowerCase();
+                                            if(videoHosts.some(function(vh){return hl.indexOf(vh)>=0;})){
+                                                window.location.href=h;return;
+                                            }
                                         }
                                     }
                                 }
@@ -1395,6 +1426,22 @@ class EmbedWebViewActivity : AppCompatActivity() {
                 }
 
                 view?.evaluateJavascript(VIDEO_EXTRACT_JS, null)
+
+                if (hasNavigatedAway && !videoFound && !presented) {
+                    val server = com.karin.streamtv.model.VideoServer.detectServer(currentUrl)
+                    if (server.httpResolvable || currentUrl.lowercase().let { u ->
+                            videoAllowDomains.any { d -> u.contains(d) }
+                        }) {
+                        Log.i(TAG, "Post-redirect HTTP resolve for: ${currentUrl.takeLast(80)}")
+                        lifecycleScope.launch {
+                            val resolved = com.karin.streamtv.scraper.ServerDirectResolver.resolve(currentUrl, currentEpisodeUrl)
+                            if (resolved != null && !videoFound) {
+                                Log.i(TAG, "Post-redirect HTTP resolved: ${resolved.url.takeLast(80)}")
+                                presentExtracted(listOf(resolved))
+                            }
+                        }
+                    }
+                }
                 view?.evaluateJavascript(VIDEO_ENDED_JS, null)
                 view?.evaluateJavascript(NEXT_EPISODE_JS, null)
 
@@ -1466,10 +1513,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                if (newProgress >= 50 && loadingLayout.visibility == View.VISIBLE) {
-                    loadingLayout.visibility = View.GONE
-                    webView.visibility = View.VISIBLE
-                }
             }
 
             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
@@ -1485,15 +1528,10 @@ class EmbedWebViewActivity : AppCompatActivity() {
             }
         }
 
-        webView.visibility = View.INVISIBLE
         webView.loadUrl(embedUrl)
 
         mainHandler.postDelayed({
-            if (loadingLayout.visibility == View.VISIBLE) {
-                loadingLayout.visibility = View.GONE
-                webView.visibility = View.VISIBLE
-                Log.w(TAG, "Loading timeout — forcing WebView visible")
-            }
+            Log.w(TAG, "Background extraction timeout — still scraping servers")
         }, 15000)
 
         bridge = VideoBridge()
@@ -1518,10 +1556,17 @@ class EmbedWebViewActivity : AppCompatActivity() {
             return
         }
         lifecycleScope.launch {
-            val resolved = com.karin.streamtv.scraper.ServerDirectResolver.resolve(targetUrl, currentEpisodeUrl)
+            var resolved = com.karin.streamtv.scraper.ServerDirectResolver.resolve(targetUrl, currentEpisodeUrl)
+            if (resolved == null) {
+                Log.w(TAG, "HTTP resolve failed, trying Cloudflare bypass for ${targetUrl.takeLast(60)}")
+                val html = com.karin.streamtv.util.CloudflareInterceptor.solveWithWebView(this@EmbedWebViewActivity, targetUrl)
+                if (html != null) {
+                    resolved = com.karin.streamtv.scraper.ServerDirectResolver.resolveFromHtml(targetUrl, html, currentEpisodeUrl)
+                }
+            }
             if (resolved != null && !videoFound) {
-                Log.i(TAG, "HTTP resolution won over WebView, launching ExoPlayer")
-                openExoFromResolved(resolved)
+                Log.i(TAG, "HTTP resolution produced direct link")
+                withContext(Dispatchers.Main) { presentExtracted(listOf(resolved!!)) }
             }
         }
     }
@@ -1569,14 +1614,96 @@ class EmbedWebViewActivity : AppCompatActivity() {
         }
     }
 
+    private fun presentExtracted(bestUrl: String, allUrlsJson: String) {
+        val urls = parseJsonUrls(allUrlsJson).filter { it.startsWith("http") }
+        val list = if (urls.isEmpty()) {
+            if (bestUrl.startsWith("http")) listOf(bestUrl) else emptyList()
+        } else urls
+        val links = list.map {
+            com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo(
+                url = it,
+                referer = try { webView.url ?: currentEpisodeUrl } catch (e: Exception) { currentEpisodeUrl }
+            )
+        }
+        presentExtracted(links)
+    }
+
+    private fun presentExtracted(links: List<com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo>) {
+        if (presented || launching) return
+        val unique = links.distinctBy { it.url }.filter { it.url.startsWith("http") }
+        if (unique.isEmpty()) {
+            mainHandler.post { showNoLinkDialog() }
+            return
+        }
+        presented = true
+        mainHandler.post { showExtractedDialog(unique) }
+    }
+
+    private fun parseJsonUrls(allUrlsJson: String): List<String> {
+        return try {
+            val arr = org.json.JSONArray(allUrlsJson)
+            (0 until arr.length()).mapNotNull { arr.optString(it, "").takeIf { s -> s.isNotBlank() } }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun showExtractedDialog(links: List<com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo>) {
+        loadingLayout.visibility = View.GONE
+        val labels = links.map { link ->
+            val server = com.karin.streamtv.model.VideoServer.detectServer(link.url)
+            val host = try { android.net.Uri.parse(link.url).host ?: "" } catch (e: Exception) { "" }
+            if (host.isBlank()) server.displayName else "${server.displayName} · $host"
+        }.toTypedArray()
+
+        val dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
+            .setTitle("Enlaces extraídos (${links.size})")
+            .setItems(labels) { _, which ->
+                launching = true
+                openExoFromResolved(links[which])
+            }
+            .setNegativeButton("Cancelar", null)
+            .create()
+        dialog.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.85).toInt(),
+            android.view.WindowManager.LayoutParams.WRAP_CONTENT
+        )
+        dialog.setOnDismissListener { if (!hasOpenedExternal && !launching) finish() }
+        dialog.show()
+    }
+
+    private fun showNoLinkDialog() {
+        if (presented || launching) return
+        presented = true
+        loadingLayout.visibility = View.GONE
+        val embedUrl = intent.getStringExtra("embed_url") ?: ""
+        val dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
+            .setTitle("Sin enlace directo")
+            .setMessage("No se pudo extraer un enlace de video directo de este servidor en segundo plano.")
+            .setPositiveButton("Reintentar") { _, _ ->
+                presented = false
+                videoFound = false
+                if (embedUrl.isNotBlank()) webView.loadUrl(embedUrl)
+            }
+            .setNegativeButton("Abrir en navegador") { _, _ ->
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(embedUrl)))
+                } catch (e: Exception) {
+                    Log.w(TAG, "No browser for embed url")
+                }
+                finish()
+            }
+            .setNeutralButton("Cancelar") { _, _ -> finish() }
+            .create()
+        dialog.show()
+    }
+
     private fun tryNextServer() {
+        if (presented || hasOpenedExternal) return
         currentServerIndex++
         if (currentServerIndex >= allServerUrls.size) {
             Log.d(TAG, "All servers exhausted")
-            loadingLayout.visibility = View.GONE
-            webView.visibility = View.VISIBLE
-            Toast.makeText(this, "Lo sentimos, El Link que desea Ya no Funciona o Fue dado de Baja", Toast.LENGTH_LONG).show()
-            mainHandler.postDelayed({ finish() }, 3000)
+            showNoLinkDialog()
             return
         }
         val nextUrl = allServerUrls[currentServerIndex]
@@ -1599,68 +1726,13 @@ class EmbedWebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun onVideoFound(url: String, allUrlsJson: String) {
             Log.i(TAG, "Video source found: ${url.takeLast(60)}")
-            videoFound = true
-            if (animeId.isNotBlank() && episodeNumber > 0) {
-                EpisodeProgress.markWatched(animeId, episodeNumber)
-                EpisodeProgress.setLastWatchedEpisode(animeId, episodeNumber)
-            }
-            if (openExternalWhenReady && !hasOpenedExternal) {
-                hasOpenedExternal = true
-                mainHandler.post {
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(android.net.Uri.parse(url), "video/*")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    try {
-                        startActivity(Intent.createChooser(intent, "Abrir con..."))
-                    } catch (e: Exception) {
-                        Toast.makeText(this@EmbedWebViewActivity, "No se encontró reproductor externo", Toast.LENGTH_SHORT).show()
-                    }
-                    finish()
-                }
-            }
+            presentExtracted(url, allUrlsJson)
         }
 
         @JavascriptInterface
         fun onDirectVideoFound(url: String, allUrlsJson: String) {
             Log.i(TAG, "Direct video URL (native fallback): ${url.takeLast(60)}")
-            videoFound = true
-            if (animeId.isNotBlank() && episodeNumber > 0) {
-                EpisodeProgress.markWatched(animeId, episodeNumber)
-                EpisodeProgress.setLastWatchedEpisode(animeId, episodeNumber)
-            }
-            if (hasOpenedExternal) return
-            hasOpenedExternal = true
-            mainHandler.post {
-                if (openExternalWhenReady) {
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(android.net.Uri.parse(url), "video/*")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    try {
-                        startActivity(Intent.createChooser(intent, "Abrir con..."))
-                    } catch (e: Exception) {
-                        Toast.makeText(this@EmbedWebViewActivity, "No se encontró reproductor externo", Toast.LENGTH_SHORT).show()
-                    }
-                    finish()
-                } else {
-                    val ref = try { webView.url ?: currentEpisodeUrl } catch (e: Exception) { currentEpisodeUrl }
-                    val intent = Intent(this@EmbedWebViewActivity, com.karin.streamtv.player.ExoPlayerActivity::class.java).apply {
-                        putExtra("video_url", url)
-                        putExtra("video_title", title)
-                        putExtra("episode_url", currentEpisodeUrl)
-                        putExtra("episode_number", episodeNumber)
-                        putExtra("referer", ref)
-                        putExtra("site_name", intent.getStringExtra("site_name") ?: "")
-                        if (playlist.isNotEmpty()) {
-                            putExtra("playlist_json", com.karin.streamtv.util.PlaylistQueue.toJson(playlist))
-                            putExtra("playlist_index", playlistIndex)
-                        }
-                    }
-                    startActivity(intent)
-                    finish()
-                }
-            }
+            presentExtracted(url, allUrlsJson)
         }
 
         @JavascriptInterface
@@ -1927,20 +1999,6 @@ class EmbedWebViewActivity : AppCompatActivity() {
     document.head.appendChild(s);
 })();
 """
-            "doramasyt.com/reproductor" in lower -> """
-(function(){
-    var s=document.createElement('style');
-    s.id='kf-dy-css';
-    s.textContent='
-        html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;overflow:hidden!important;background:#000!important}
-        nav,header,.navbar,.breadcrumb,footer,.sidebar,.col-lg-3,.d-flex.justify-content-center,.modal,.reportar,.d-flex.justify-content-left,.text-left,.fs-5.text-light.my-4{display:none!important}
-        iframe,video,.ifplay,.player{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:999999!important;border:none!important;margin:0!important;padding:0!important}
-        video{object-fit:contain!important}
-    ';
-    document.head.appendChild(s);
-})();
-"""
-
             "trembed=" in lower -> TOROPLAY_EMBED_CSS
             else -> GENERIC_EMBED_CSS
         }
@@ -1983,7 +2041,10 @@ class EmbedWebViewActivity : AppCompatActivity() {
         mainHandler.removeCallbacksAndMessages(null)
         webView.handler?.removeCallbacksAndMessages(null)
         webView.stopLoading()
+        (webView.parent as? android.view.ViewGroup)?.removeView(webView)
         webView.destroy()
+        hiddenContainer?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+        hiddenContainer = null
         super.onDestroy()
     }
 }

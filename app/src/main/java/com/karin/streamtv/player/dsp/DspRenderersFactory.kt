@@ -14,7 +14,7 @@ class DspRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
         return DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .setAudioProcessors(arrayOf(AudioEnhanceProcessor()))
+            .setAudioProcessors(arrayOf(AudioEnhanceProcessor(context)))
             .build()
     }
 }

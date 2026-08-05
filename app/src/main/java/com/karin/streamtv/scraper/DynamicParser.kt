@@ -19,6 +19,7 @@ object DynamicParser {
         "div.series",                          // latanime /animes
         "div[class*='post-card']",             // WordPress card theme
         "div[class*='card']:has(img)",         // Bootstrap/various cards
+        "div.md-card:has(a[href] img)",        // MundoDonghua .md-card grid
         "div[class*='item']:has(a[href] img)", // Generic items with images
         "div[class*='col-']:has(a[href] img)", // Bootstrap responsive columns
         "li[class*='post']:has(a[href] img)",  // List-based post listings
@@ -369,6 +370,14 @@ object DynamicParser {
             Log.w(TAG, "Empty document body for $siteName")
             return emptyList()
         }
+        // Some sites (e.g. JKAnime directory) embed the whole list as
+        // `var animes = {"current_page":1,"data":[{"title":...,"url":...,"image":...}]}`
+        // in a <script>; the visible cards are rendered by JS. Parse that first.
+        val jsonEpisodes = parseEmbeddedAnimeJson(doc, siteName)
+        if (jsonEpisodes.isNotEmpty()) {
+            Log.i(TAG, "Embedded JSON parsing: ${jsonEpisodes.size} episodes ($siteName)")
+            return jsonEpisodes
+        }
         val cards = findCards(doc, minCards)
         val episodes = cards.mapNotNull { card ->
             try {
@@ -383,6 +392,65 @@ object DynamicParser {
 
         Log.i(TAG, "Dynamic parsing: ${episodes.size} episodes from ${cards.size} cards ($siteName)")
         return episodes
+    }
+
+    /**
+     * Parses `var animes = {"current_page":1,"data":[{"title":...,"url":...,"image":...}, ...]}` embedded
+     * in a page <script> (used by JS-rendered sites like the JKAnime directory).
+     */
+    private fun parseEmbeddedAnimeJson(doc: Document, siteName: String): List<Episode> {
+        val html = doc.toString()
+        val jsonText = extractJsonObjectVar(html, "animes") ?: return emptyList()
+        val obj = try {
+            org.json.JSONObject(jsonText)
+        } catch (e: Exception) {
+            Log.w(TAG, "animes JSON parse failed ($siteName): ${e.message}")
+            return emptyList()
+        }
+        val data = try { obj.optJSONArray("data") } catch (e: Exception) { null } ?: return emptyList()
+        val episodes = mutableListOf<Episode>()
+        for (i in 0 until data.length()) {
+            try {
+                val item = data.optJSONObject(i) ?: continue
+                val title = item.optString("title").trim()
+                val url = item.optString("url").trim()
+                if (title.isBlank() || url.isBlank()) continue
+                val image = item.optString("image").trim()
+                val synopsis = item.optString("synopsis").trim()
+                episodes.add(Episode(title, url, image, synopsis.take(80), siteName, ""))
+            } catch (_: Exception) { }
+        }
+        return episodes
+    }
+
+    /** Extracts the balanced JSON object assigned to `var <name> = { ... }`. */
+    private fun extractJsonObjectVar(html: String, varName: String): String? {
+        val marker = "var $varName = {"
+        val start = html.indexOf(marker)
+        if (start < 0) return null
+        val from = start + marker.length - 1 // index of '{'
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in from until html.length) {
+            val ch = html[i]
+            when {
+                inString -> {
+                    if (escaped) escaped = false
+                    else when (ch) {
+                        '\\' -> escaped = true
+                        '"' -> inString = false
+                    }
+                }
+                ch == '"' -> inString = true
+                ch == '{' -> depth++
+                ch == '}' -> {
+                    depth--
+                    if (depth == 0) return html.substring(from, i + 1)
+                }
+            }
+        }
+        return null
     }
 
     fun findNextPageUrl(doc: Document, currentUrl: String): String? {
@@ -492,8 +560,28 @@ object DynamicParser {
         return SeriesPage(title, cover, description, type, status, episodes)
     }
 
+    /**
+     * Site-aware series page parser. JKAnime renders its episode list via AJAX (CSRF protected),
+     * so for that site the episodes are fetched from `POST /ajax/episodes/{id}/{page}`.
+     */
+    suspend fun parseSeriesPageAsync(doc: Document, baseUrl: String, siteName: String = ""): SeriesPage {
+        if (siteName.equals("JKAnime", ignoreCase = true)) {
+            val jkEpisodes = JKAnimeScraper.fetchSeriesEpisodes(doc, baseUrl, siteName)
+            if (jkEpisodes.isNotEmpty()) {
+                return SeriesPage(
+                    title = findSeriesTitle(doc),
+                    coverUrl = findSeriesCover(doc),
+                    description = findDescription(doc),
+                    episodes = jkEpisodes
+                )
+            }
+        }
+        return parseSeriesPage(doc, baseUrl, siteName)
+    }
+
     private fun findSeriesTitle(doc: Document): String {
         val candidates = listOf(
+            "div.anime_info h3", ".anime_info h3",
             "h1", "h2", "h3",
             "[class*='title']", "[class*='heading']", "[class*='name']",
             "[class*='anime']", "[id*='title']", "[id*='anime']"
@@ -508,6 +596,7 @@ object DynamicParser {
 
     private fun findSeriesCover(doc: Document): String {
         val selectors = listOf(
+            "div.movpic img", ".movpic img", "div.anime_pic img", "div.anime_info img",
             "div.serieimgficha img",
             "div.series2 img",
             "[class*='cover'] img", "[class*='poster'] img", "[class*='anime'] img",
@@ -534,6 +623,7 @@ object DynamicParser {
 
     private fun findDescription(doc: Document): String {
         val selectors = listOf(
+            "div.anime_info p.scroll", "div.anime_info p", ".anime_info p",
             "[class*='sinopsis']", "[class*='description']", "[class*='synopsis']",
             "[class*='descripcion']", "[class*='summary']", "[class*='resumen']",
             "[class*='argumento']", "[class*='story']",

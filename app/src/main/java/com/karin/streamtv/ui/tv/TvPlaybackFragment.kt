@@ -28,10 +28,14 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
 import com.karin.streamtv.R
+import com.karin.streamtv.player.CodecSelectorFactory
 import com.karin.streamtv.player.Media3SixtyFpsProcessor
 import com.karin.streamtv.player.MegaDecryptingDataSource
+import com.karin.streamtv.player.TvSurfaceCompat
 import com.karin.streamtv.player.VideoDataSource
 import com.karin.streamtv.player.VideoEnhanceConfig
+import com.karin.streamtv.player.VideoEnhanceUi
+import com.karin.streamtv.player.ColorProfileUi
 import com.karin.streamtv.player.VideoExtractorHelper
 import com.karin.streamtv.scraper.ServerDirectResolver
 import com.karin.streamtv.util.AutoPlayManager
@@ -69,6 +73,7 @@ class TvPlaybackFragment : Fragment() {
     private lateinit var btnUpscaler: TextView
     private lateinit var btnInterp: TextView
     private lateinit var btnVideoProfile: TextView
+    private lateinit var btnColorProfile: TextView
     private lateinit var btnQuality: TextView
     private lateinit var btnRewind: ImageButton
     private lateinit var btnForward: ImageButton
@@ -80,6 +85,7 @@ class TvPlaybackFragment : Fragment() {
     private val progressRunnable = object : Runnable {
         override fun run() {
             updateProgress()
+            com.karin.streamtv.player.dsp.AudioEnhanceConfig.refreshPlaybackVolume()
             controllerHandler.postDelayed(this, 500)
         }
     }
@@ -87,9 +93,30 @@ class TvPlaybackFragment : Fragment() {
         controllerPanel.visibility = View.GONE
         btnBack.visibility = View.GONE
     }
+
+    private val irPicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            val name = com.karin.streamtv.player.dsp.WavIr.displayName(requireContext().contentResolver, uri)
+            val bytes = requireContext().contentResolver.openInputStream(uri)?.readBytes()
+            if (bytes != null && com.karin.streamtv.player.dsp.AudioEnhanceConfig.setUserIr(name, bytes)) {
+                com.karin.streamtv.player.dsp.AudioEnhanceConfig.setIrPreset(
+                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.IrPreset.USER
+                )
+                android.widget.Toast.makeText(requireContext(), "IR cargado: $name", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                android.widget.Toast.makeText(requireContext(), "WAV no soportado (PCM 16/24/32 o float 32)", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        } catch (t: Throwable) {
+            android.widget.Toast.makeText(requireContext(), "Error al leer el archivo", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
     private val hidePlayState = Runnable { playStateOverlay.visibility = View.GONE }
     private lateinit var glSurface: android.opengl.GLSurfaceView
     private var glActive = false
+    private var standardPlayerView: androidx.media3.ui.PlayerView? = null
 
     private var animeId = ""
     private var episodeNumber = 0
@@ -155,6 +182,7 @@ class TvPlaybackFragment : Fragment() {
         btnUpscaler = content.findViewById(R.id.btn_upscaler)
         btnInterp = content.findViewById(R.id.btn_interp)
         btnVideoProfile = content.findViewById(R.id.btn_video_profile)
+        btnColorProfile = content.findViewById(R.id.btn_color_profile)
         btnQuality = content.findViewById(R.id.btn_quality)
 
         setupController()
@@ -217,7 +245,9 @@ class TvPlaybackFragment : Fragment() {
         btnDsp.setOnClickListener { showDspDialog() }
         btnVideoProfile.setOnClickListener { showVideoProfileDialog() }
         updateVideoProfileButton()
-        btnInterp.setOnClickListener { toggleInterpolation() }
+        btnColorProfile.setOnClickListener { showColorProfileDialog() }
+        updateColorProfileButton()
+        btnInterp.setOnClickListener { showInterpolationDialog() }
         updateInterpButton()
         btnUpscaler.setOnClickListener { showUpscalerDialog() }
         updateUpscalerButton()
@@ -349,74 +379,87 @@ class TvPlaybackFragment : Fragment() {
         val seek = android.widget.SeekBar(requireContext())
         seek.max = 300
         seek.progress = (p.volume * 100).toInt().coerceIn(10, 300)
-        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
+        val profilesLink = android.widget.TextView(requireContext()).apply {
+            text = "Perfiles de audio (DSP)"
+            textSize = 14f
+            setTextColor(0xFF4FC3F7.toInt())
+            setPadding(0, 20, 0, 0)
+        }
+        val container = android.widget.LinearLayout(requireContext()).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+            addView(seek)
+            addView(profilesLink)
+        }
+        val dlg = androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
             .setTitle("Volumen (100% = normal, hasta 300% para videos bajos)")
-            .setView(seek)
+            .setView(container)
             .setPositiveButton("Aceptar", null)
             .setOnDismissListener {
                 p.volume = seek.progress / 100f
+                com.karin.streamtv.player.dsp.AudioEnhanceConfig.setAppVolume(p.volume)
                 com.karin.streamtv.util.AppPreferences.setPlayerVolume(p.volume)
             }
-            .show()
+            .create()
+        profilesLink.setOnClickListener {
+            dlg.dismiss()
+            showDspDialog()
+        }
+        dlg.show()
     }
 
     private fun showDspDialog() {
-        val presets = com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.entries
-        val labels = ArrayList<String>()
-        presets.forEach { labels.add(it.label) }
-        val current = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
-        val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
-        val selectedIdx = if (!enabled || current == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
-            presets.indexOf(com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
-        else presets.indexOf(current)
-        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
-            .setTitle("Sonido (DSP)")
-            .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
-                val preset = presets[which]
-                com.karin.streamtv.player.dsp.AudioEnhanceConfig.applyParams(
-                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.Params().withPreset(preset)
-                )
+        com.karin.streamtv.player.dsp.AudioDspUi.showPresetDialog(requireContext(),
+            onAdvanced = {
+                com.karin.streamtv.player.dsp.AudioDspUi.showAdvanced(requireContext()) {
+                    irPicker.launch(arrayOf("audio/*", "application/octet-stream"))
+                }
+            },
+            onChanged = {
                 updateDspButton()
                 showController()
             }
-            .setNegativeButton("Cerrar", null)
-            .show()
+        )
     }
 
     private fun updateDspButton() {
         val preset = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
         val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
-        btnDsp.text = if (!enabled || preset == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF)
-            "Sonido: OFF"
-        else "Sonido: ${preset.label}"
+        val auto = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isAutoDevice()
+        btnDsp.text = when {
+            !enabled || preset == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF ->
+                "Sonido: OFF"
+            auto -> "Sonido: Auto (${com.karin.streamtv.player.dsp.AudioEnhanceConfig.outputDeviceLabel()})"
+            else -> "Sonido: ${preset.label}"
+        }
     }
 
     private fun showVideoProfileDialog() {
-        val presets = VideoEnhanceConfig.Preset.entries
-        val labels = ArrayList<String>()
-        presets.forEach { labels.add(it.label) }
-        val current = VideoEnhanceConfig.preset()
-        val enabled = VideoEnhanceConfig.isEnabled()
-        val selectedIdx = if (!enabled || current == VideoEnhanceConfig.Preset.OFF)
-            presets.indexOf(VideoEnhanceConfig.Preset.OFF)
-        else presets.indexOf(current)
-        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
-            .setTitle("Perfil de Video")
-            .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
-                VideoEnhanceConfig.applyPreset(presets[which])
-                updateVideoProfileButton()
+        VideoEnhanceUi.showAdvanced(requireContext()) {
+            updateVideoProfileButton()
+            if (VideoEnhanceConfig.isEnabled() && !useEnhancedMode) {
+                useEnhancedMode = true
+                restartWithEnhanced()
+            } else {
                 showController()
             }
-            .setNegativeButton("Cerrar", null)
-            .show()
+        }
     }
 
     private fun updateVideoProfileButton() {
-        val preset = VideoEnhanceConfig.preset()
-        val enabled = VideoEnhanceConfig.isEnabled()
-        btnVideoProfile.text = if (!enabled || preset == VideoEnhanceConfig.Preset.OFF)
-            "Video: OFF"
-        else "Video: ${preset.label}"
+        btnVideoProfile.text = if (VideoEnhanceConfig.isEnabled()) "Enhancement: ON" else "Enhancement: OFF"
+    }
+
+    private fun showColorProfileDialog() {
+        ColorProfileUi.show(requireContext()) {
+            updateColorProfileButton()
+            showController()
+        }
+    }
+
+    private fun updateColorProfileButton() {
+        val p = VideoEnhanceConfig.colorPreset()
+        btnColorProfile.text = if (p == VideoEnhanceConfig.ColorPreset.OFF) "Color" else "Color: ${p.label}"
     }
 
     private fun skipToPlaylist(delta: Int) {
@@ -435,15 +478,35 @@ class TvPlaybackFragment : Fragment() {
         requireActivity().finish()
     }
 
-    private fun toggleInterpolation() {
-        val enabling = !VideoEnhanceConfig.isInterpolationEnabled()
-        VideoEnhanceConfig.setInterpolationEnabled(enabling)
-        updateInterpButton()
-        Toast.makeText(requireContext(), "MotionX2 60p: ${if (enabling) "Activado" else "Desactivado"}", Toast.LENGTH_SHORT).show()
-        if (enabling && !useEnhancedMode) {
-            useEnhancedMode = true
-            restartWithEnhanced()
-        }
+    private fun showInterpolationDialog() {
+        val labels = arrayOf("Apagado") + VideoEnhanceConfig.InterpolationMode.entries.map { it.label }
+        val selected = if (!VideoEnhanceConfig.isInterpolationEnabled()) 0
+                       else VideoEnhanceConfig.interpolationMode().ordinal + 1
+        androidx.appcompat.app.AlertDialog.Builder(requireContext())
+            .setTitle("MotionX2 60p")
+            .setSingleChoiceItems(labels, selected) { _, which ->
+                if (which == 0) {
+                    VideoEnhanceConfig.setInterpolationEnabled(false)
+                } else {
+                    val mode = VideoEnhanceConfig.InterpolationMode.entries[which - 1]
+                    VideoEnhanceConfig.setInterpolationMode(mode)
+                    VideoEnhanceConfig.setInterpolationEnabled(true)
+                }
+                updateInterpButton()
+                if (VideoEnhanceConfig.isInterpolationEnabled() && !useEnhancedMode) {
+                    useEnhancedMode = true
+                    restartWithEnhanced()
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun updateInterpButton() {
+        val enabled = VideoEnhanceConfig.isInterpolationEnabled()
+        val mode = VideoEnhanceConfig.interpolationMode()
+        btnInterp.text = if (!enabled) "MotionX2 60p: OFF"
+                         else "MotionX2 60p: ${mode.label}"
     }
 
     private fun restartWithEnhanced() {
@@ -462,17 +525,34 @@ class TvPlaybackFragment : Fragment() {
         playVideo(currentVideoUrl)
     }
 
-    private fun updateInterpButton() {
-        btnInterp.text = "MotionX2 60p: ${if (VideoEnhanceConfig.isInterpolationEnabled()) "ON" else "OFF"}"
-    }
-
     private fun showUpscalerDialog() {
-        val modes = VideoEnhanceConfig.UpscalerMode.entries
-        val labels = modes.map { it.label }.toTypedArray()
+        val modes = VideoEnhanceConfig.mainUpscalers
+        val labels = modes.map { if (it == VideoEnhanceConfig.UpscalerMode.FSR) "FSR…" else it.label }.toTypedArray()
         val current = VideoEnhanceConfig.getUpscalerMode()
-        val selectedIdx = modes.indexOf(current)
+        val selectedIdx = if (VideoEnhanceConfig.isFsr(current)) modes.indexOf(VideoEnhanceConfig.UpscalerMode.FSR)
+                          else modes.indexOfFirst { it.ordinal == current.ordinal }.coerceAtLeast(0)
         androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
             .setTitle("Escalado de Video")
+            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
+                val chosen = modes[which]
+                if (chosen == VideoEnhanceConfig.UpscalerMode.FSR) {
+                    showFsrQualityDialog()
+                } else {
+                    VideoEnhanceConfig.setUpscalerMode(chosen)
+                    updateUpscalerButton()
+                    showController()
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun showFsrQualityDialog() {
+        val modes = VideoEnhanceConfig.fsrQualities
+        val labels = modes.map { it.label }.toTypedArray()
+        val selectedIdx = modes.indexOf(VideoEnhanceConfig.currentFsr()).coerceAtLeast(0)
+        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
+            .setTitle("FSR · Calidad")
             .setSingleChoiceItems(labels, selectedIdx) { _, which ->
                 VideoEnhanceConfig.setUpscalerMode(modes[which])
                 updateUpscalerButton()
@@ -484,12 +564,15 @@ class TvPlaybackFragment : Fragment() {
 
     private fun updateUpscalerButton() {
         val mode = VideoEnhanceConfig.getUpscalerMode()
-        btnUpscaler.text = "Escala: ${mode.label}"
+        btnUpscaler.text = if (VideoEnhanceConfig.isFsr(mode)) "Escala: FSR · ${mode.label.removePrefix("FSR ")}"
+                           else "Escala: ${mode.label}"
     }
 
     private fun applySavedVolume() {
         val p = player ?: return
-        p.volume = com.karin.streamtv.util.AppPreferences.getPlayerVolume()
+        val v = com.karin.streamtv.util.AppPreferences.getPlayerVolume()
+        p.volume = v
+        com.karin.streamtv.player.dsp.AudioEnhanceConfig.setAppVolume(v)
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -576,7 +659,7 @@ class TvPlaybackFragment : Fragment() {
         val megaFactory = DataSource.Factory {
             MegaDecryptingDataSource(key, resolved.megaCtrStart, resolved.extraHeaders)
         }
-        val exoPlayer = ExoPlayer.Builder(requireContext(), com.karin.streamtv.player.dsp.DspRenderersFactory(requireContext()))
+        val exoPlayer = ExoPlayer.Builder(requireContext(), CodecSelectorFactory.renderersFactory(requireContext()))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(megaFactory)
             )
@@ -606,7 +689,7 @@ class TvPlaybackFragment : Fragment() {
         url.startsWith("content://") || url.startsWith("file://")
 
     private fun playStandard(url: String) {
-        val exoPlayer = ExoPlayer.Builder(requireContext(), com.karin.streamtv.player.dsp.DspRenderersFactory(requireContext()))
+        val exoPlayer = ExoPlayer.Builder(requireContext(), CodecSelectorFactory.renderersFactory(requireContext()))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(
                     if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
@@ -665,7 +748,7 @@ class TvPlaybackFragment : Fragment() {
         }, 5000)
     }
 
-    private fun addPlayerView(exoPlayer: ExoPlayer) {
+    private fun addPlayerView(exoPlayer: ExoPlayer): androidx.media3.ui.PlayerView {
         val playerView = PlayerView(requireContext()).apply {
             useController = false
             keepScreenOn = true
@@ -675,6 +758,8 @@ class TvPlaybackFragment : Fragment() {
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
+        standardPlayerView = playerView
+        return playerView
     }
 
     private fun triggerGlFallback() {
@@ -734,6 +819,15 @@ class TvPlaybackFragment : Fragment() {
             }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 processor?.renderer?.setVideoSize(videoSize.width, videoSize.height)
+                // Android TV fix: force the hardware SurfaceView buffer to panel-native resolution
+                val ctx = requireContext()
+                val (w, h) = TvSurfaceCompat.idealSurfaceSize(ctx, videoSize.width, videoSize.height)
+                val stdView = standardPlayerView
+                if (stdView != null) {
+                    TvSurfaceCompat.forcePlayerViewSurface(stdView, w, h)
+                } else if (::glSurface.isInitialized) {
+                    TvSurfaceCompat.forceGlSurfaceSize(glSurface, w, h)
+                }
             }
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "Playback error: ${error.message}")

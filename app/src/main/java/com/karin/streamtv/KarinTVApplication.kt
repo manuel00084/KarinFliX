@@ -8,6 +8,7 @@ class KarinTVApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        registerActivityLifecycleCallbacks(com.karin.streamtv.util.AppActivityHolder)
         AppPreferences.init(this)
         com.karin.streamtv.util.Http.initCache(cacheDir)
         com.karin.streamtv.util.Http.initCookies(this)

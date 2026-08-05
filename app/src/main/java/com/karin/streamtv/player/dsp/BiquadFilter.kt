@@ -1,6 +1,7 @@
 package com.karin.streamtv.player.dsp
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sin
@@ -34,7 +35,7 @@ class BiquadFilter {
             }
             Kind.LOWSHELF -> {
                 val a = 10.0.pow(gainDb / 40.0)
-                val alpha = sw / 2.0 * sqrt((a + 1.0 / a) * (1.0 / q - 1.0) + 2.0)
+                val alpha = sw / 2.0 * sqrt((a + 1.0 / a) * (1.0 / q - 1.0) + 2.0).coerceAtLeast(1e-6)
                 val ts = 2.0 * sqrt(a)
                 val a0 = (a + 1.0) + (a - 1.0) * cw + ts * alpha
                 b0 = a * ((a + 1.0) - (a - 1.0) * cw + ts * alpha) / a0
@@ -45,7 +46,7 @@ class BiquadFilter {
             }
             Kind.HIGHSHELF -> {
                 val a = 10.0.pow(gainDb / 40.0)
-                val alpha = sw / 2.0 * sqrt((a + 1.0 / a) * (1.0 / q - 1.0) + 2.0)
+                val alpha = sw / 2.0 * sqrt((a + 1.0 / a) * (1.0 / q - 1.0) + 2.0).coerceAtLeast(1e-6)
                 val ts = 2.0 * sqrt(a)
                 val a0 = (a + 1.0) - (a - 1.0) * cw + ts * alpha
                 b0 = a * ((a + 1.0) + (a - 1.0) * cw + ts * alpha) / a0
@@ -76,7 +77,10 @@ class BiquadFilter {
     }
 
     fun process(x: Double): Double {
-        val y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+        var y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+        // Flush-to-zero: evita estados denormales (slowness ~100x en ARM) durante silencio.
+        // 1e-20 ~ -400 dBFS: inaudible, pero mantiene la cola de decaimiento real.
+        if (abs(y) < 1e-20) y = 0.0
         x2 = x1
         x1 = x
         y2 = y1

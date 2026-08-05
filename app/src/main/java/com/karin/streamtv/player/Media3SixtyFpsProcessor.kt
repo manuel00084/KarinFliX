@@ -41,7 +41,7 @@ class Media3SixtyFpsProcessor(
     fun createPlayer(trackSelector: DefaultTrackSelector? = null, dataSourceFactory: androidx.media3.datasource.DataSource.Factory? = null): ExoPlayer {
         val renderersFactory = DspRenderersFactory(context)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            .setMediaCodecSelector(MediaCodecSelector.DEFAULT)
+            .setMediaCodecSelector(CodecSelectorFactory.selector())
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
@@ -369,6 +369,18 @@ class Media3SixtyFpsProcessor(
         private var colorBoostLoc = -1
         private var denoiseLoc = -1
         private var debandLoc = -1
+        private var deblockLoc = -1
+        private var desRingingLoc = -1
+        private var localContrastLoc = -1
+        private var grainLoc = -1
+        private var grainSeedLoc = -1
+        private var dehazeLoc = -1
+        private var adaptiveSharpLoc = -1
+        private var tintLoc = -1
+        private var hdrLoc = -1
+        private var detailBoostLoc = -1
+        private var lightBoostLoc = -1
+         private var clarityLoc = -1
         private var dbgLoc = -1
         private var upscalerLoc = -1
         private var fsrScaleLoc = -1
@@ -550,9 +562,21 @@ class Media3SixtyFpsProcessor(
             uniform float uContrast;
             uniform float uBrightness;
             uniform float uSharpness;
+            uniform float uAdaptiveSharp;
             uniform float uColorBoost;
             uniform float uDenoise;
             uniform float uDeband;
+            uniform float uDeblock;
+            uniform float uDesRinging;
+            uniform float uLocalContrast;
+            uniform float uGrain;
+            uniform float uGrainSeed;
+            uniform float uDehaze;
+            uniform float uTint;
+            uniform float uHdr;
+            uniform float uDetailBoost;
+            uniform float uLightBoost;
+             uniform float uClarity;
             uniform float uDbgMode;
             uniform float uUpscalerMode;
             uniform float uFsrScale;
@@ -561,7 +585,11 @@ class Media3SixtyFpsProcessor(
 
             vec3 adjustSaturation(vec3 c, float s) {
                 float g = dot(c, vec3(0.2126, 0.7152, 0.0722));
-                return mix(vec3(g), c, s);
+                vec3 sat = mix(vec3(g), c, s);
+                float skinMask = smoothstep(0.15, 0.08, abs(sat.r - sat.g)) * smoothstep(0.15, 0.05, sat.r - sat.b);
+                skinMask *= step(0.3, sat.r) * step(sat.r, 0.75) * step(0.15, sat.g) * step(sat.g, 0.65);
+                float skinProtect = 1.0 - skinMask * clamp(s - 1.0, 0.0, 1.0) * 0.4;
+                return mix(sat, mix(vec3(g), c, 1.0 + (s - 1.0) * 0.6), skinProtect);
             }
 
             float hash(vec2 p) {
@@ -639,10 +667,279 @@ class Media3SixtyFpsProcessor(
                 result -= (sp1 - c) * peakVal1;
                 result -= (sp2 - c) * peakVal2;
                 result -= (sp3 - c) * peakVal3;
-                result -= (sp4 - c) * peakVal4;
                 result = clamp(c + (result - c) * 1.3, vec3(0.0), vec3(1.0));
                 return result;
             }
+
+            vec3 bilinearRescale(vec2 uv, vec2 inputTexel) {
+                // Rejilla explícita por píxel de origen (rescalado bilineal suave)
+                vec3 c  = texture2D(uCurrTex, uv).rgb;
+                vec3 t  = texture2D(uCurrTex, uv + vec2(0.0, -inputTexel.y)).rgb;
+                vec3 b  = texture2D(uCurrTex, uv + vec2(0.0,  inputTexel.y)).rgb;
+                vec3 l  = texture2D(uCurrTex, uv + vec2(-inputTexel.x, 0.0)).rgb;
+                vec3 r  = texture2D(uCurrTex, uv + vec2( inputTexel.x, 0.0)).rgb;
+                vec3 box = (c + t + b + l + r) * 0.2;
+                return mix(c, box, 0.5);
+            }
+
+            float lumaOf(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+            // Quita el "ringing" (halo/ecos) alrededor de bordes: detecta oscilación de luma en la dirección del gradiente.
+            vec3 desRinging(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec2 h = texel * 1.0;
+                vec3 r = texture2D(uCurrTex, uv + vec2(h.x, 0.0)).rgb;
+                vec3 l = texture2D(uCurrTex, uv - vec2(h.x, 0.0)).rgb;
+                vec3 t = texture2D(uCurrTex, uv + vec2(0.0, h.y)).rgb;
+                vec3 b = texture2D(uCurrTex, uv - vec2(0.0, h.y)).rgb;
+                vec3 r2 = texture2D(uCurrTex, uv + vec2(h.x * 2.0, 0.0)).rgb;
+                vec3 l2 = texture2D(uCurrTex, uv - vec2(h.x * 2.0, 0.0)).rgb;
+                vec3 t2 = texture2D(uCurrTex, uv + vec2(0.0, h.y * 2.0)).rgb;
+                vec3 b2 = texture2D(uCurrTex, uv - vec2(0.0, h.y * 2.0)).rgb;
+                float lc = lumaOf(color);
+                float lr = lumaOf(r); float ll = lumaOf(l);
+                float lt = lumaOf(t); float lb = lumaOf(b);
+                float lr2 = lumaOf(r2); float ll2 = lumaOf(l2);
+                float lt2 = lumaOf(t2); float lb2 = lumaOf(b2);
+                float oscH1 = (lr - lc) * (ll - lc);
+                float oscH2 = (lr2 - lr) * (lc - lr);
+                float ringH = smoothstep(0.0, 0.02, oscH1) * smoothstep(0.0, 0.02, oscH2);
+                float oscV1 = (lt - lc) * (lb - lc);
+                float oscV2 = (lt2 - lt) * (lc - lt);
+                float ringV = smoothstep(0.0, 0.02, oscV1) * smoothstep(0.0, 0.02, oscV2);
+                float ring = clamp(max(ringH, ringV), 0.0, 1.0);
+                vec3 avg = (t + b + l + r) * 0.25;
+                return mix(color, avg, ring * strength * 0.8);
+            }
+
+            // Ajusta la temperatura de color: positivo = cálido (rojo), negativo = frío (azul).
+            vec3 applyTint(vec3 c, float t) {
+                float luma = lumaOf(c);
+                if (t > 0.0) {
+                    c.r = mix(c.r, min(c.r + t * 0.6, 1.0), 0.8 + luma * 0.2);
+                    c.g = mix(c.g, c.g + t * 0.15, 0.7);
+                    c.b = mix(c.b, c.b * (1.0 - t * 0.5), 0.8);
+                } else {
+                    float tt = -t;
+                    c.r = mix(c.r, c.r * (1.0 - tt * 0.5), 0.8);
+                    c.g = mix(c.g, c.g + tt * 0.08, 0.7);
+                    c.b = mix(c.b, min(c.b + tt * 0.6, 1.0), 0.8 + luma * 0.2);
+                }
+                return clamp(c, 0.0, 1.0);
+            }
+
+            // Suaviza nodos de bloques de compresión detectados por CONTENIDO (discontinuidad de luma),
+            // nunca por posición fija de rejilla, para no dibujar una malla visible.
+            vec3 deblock(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec2 m = 1.0 / uVideoRes;
+                vec3 n1 = texture2D(uCurrTex, uv + vec2(0.0, m.y)).rgb;
+                vec3 n2 = texture2D(uCurrTex, uv - vec2(0.0, m.y)).rgb;
+                vec3 n3 = texture2D(uCurrTex, uv + vec2(m.x, 0.0)).rgb;
+                vec3 n4 = texture2D(uCurrTex, uv - vec2(m.x, 0.0)).rgb;
+                vec3 f1 = texture2D(uCurrTex, uv + vec2(0.0, m.y * 4.0)).rgb;
+                vec3 f2 = texture2D(uCurrTex, uv - vec2(0.0, m.y * 4.0)).rgb;
+                vec3 f3 = texture2D(uCurrTex, uv + vec2(m.x * 4.0, 0.0)).rgb;
+                vec3 f4 = texture2D(uCurrTex, uv - vec2(m.x * 4.0, 0.0)).rgb;
+                float stepV = abs(lumaOf(n1) - lumaOf(n2));
+                float stepH = abs(lumaOf(n3) - lumaOf(n4));
+                float flatV = max(abs(lumaOf(f1) - lumaOf(f2)), abs(lumaOf(n1) - lumaOf(f1)));
+                float flatH = max(abs(lumaOf(f3) - lumaOf(f4)), abs(lumaOf(n3) - lumaOf(f3)));
+                float blockV = stepV * (1.0 - smoothstep(0.004, 0.03, flatV));
+                float blockH = stepH * (1.0 - smoothstep(0.004, 0.03, flatH));
+                float blockiness = max(blockV, blockH);
+                float amount = smoothstep(0.015, 0.08, blockiness) * strength;
+                vec3 blendV = (n1 + n2) * 0.5;
+                vec3 blendH = (n3 + n4) * 0.5;
+                float wV = stepV / (stepV + stepH + 0.0001);
+                vec3 result = color;
+                result = mix(result, blendV, amount * wV);
+                result = mix(result, blendH, amount * (1.0 - wV));
+                return clamp(result, 0.0, 1.0);
+            }
+
+            // Contraste local estilo CLAHE-lite: compara con la luma media local y empuja hacia los extremos.
+            vec3 localContrast(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec2 h1 = texel * 2.0;
+                vec3 n1 = texture2D(uCurrTex, uv + vec2(0.0, h1.y)).rgb
+                        + texture2D(uCurrTex, uv - vec2(0.0, h1.y)).rgb
+                        + texture2D(uCurrTex, uv + vec2(h1.x, 0.0)).rgb
+                        + texture2D(uCurrTex, uv - vec2(h1.x, 0.0)).rgb
+                        + texture2D(uCurrTex, uv).rgb;
+                vec3 mean1 = n1 * 0.2;
+                vec2 h2 = texel * 6.0;
+                vec3 n2 = texture2D(uCurrTex, uv + vec2(0.0, h2.y)).rgb
+                        + texture2D(uCurrTex, uv - vec2(0.0, h2.y)).rgb
+                        + texture2D(uCurrTex, uv + vec2(h2.x, 0.0)).rgb
+                        + texture2D(uCurrTex, uv - vec2(h2.x, 0.0)).rgb
+                        + texture2D(uCurrTex, uv).rgb;
+                vec3 mean2 = n2 * 0.2;
+                float lm1 = lumaOf(mean1);
+                float lm2 = lumaOf(mean2);
+                float lc = lumaOf(color);
+                float shift1 = (lc - lm1) * strength * 1.2;
+                float shift2 = (lc - lm2) * strength * 0.6;
+                float combined = shift1 + shift2;
+                vec3 result = color + combined;
+                float edgeProtect = smoothstep(0.02, 0.08, abs(combined));
+                result = mix(color, result, 0.5 + edgeProtect * 0.5);
+                return clamp(result, 0.0, 1.0);
+            }
+
+            // Granado fílmico coherente y animado por semilla de frame.
+            vec3 addGrain(vec3 color, vec2 uv, float amount) {
+                float g1 = (hash(uv * 57.0 + uGrainSeed) - 0.5);
+                float g2 = (hash(uv * 113.0 + uGrainSeed * 1.7) - 0.5);
+                float g = (g1 * 0.7 + g2 * 0.3) * amount;
+                float flicker = (hash(vec2(uGrainSeed * 0.1, 0.0)) - 0.5) * amount * 0.15;
+                float luma = lumaOf(color);
+                float grainLuma = mix(1.0, 0.4, luma);
+                return clamp(color + g * grainLuma + flicker, 0.0, 1.0);
+            }
+
+            // Quita gris lavado: sube el contraste global sutil con clamp asimétrico según la luma media local.
+            vec3 dehaze(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec2 h = texel * 4.0;
+                vec3 s0 = texture2D(uCurrTex, uv).rgb;
+                vec3 s1 = texture2D(uCurrTex, uv + vec2(0.0, h.y)).rgb;
+                vec3 s2 = texture2D(uCurrTex, uv - vec2(0.0, h.y)).rgb;
+                vec3 s3 = texture2D(uCurrTex, uv + vec2(h.x, 0.0)).rgb;
+                vec3 s4 = texture2D(uCurrTex, uv - vec2(h.x, 0.0)).rgb;
+                vec3 s5 = texture2D(uCurrTex, uv + vec2(h.x, h.y)).rgb;
+                vec3 s6 = texture2D(uCurrTex, uv - vec2(h.x, h.y)).rgb;
+                vec3 s7 = texture2D(uCurrTex, uv + vec2(-h.x, h.y)).rgb;
+                vec3 s8 = texture2D(uCurrTex, uv + vec2(h.x, -h.y)).rgb;
+                vec3 darkMin = min(min(min(s1, s2), min(s3, s4)), min(min(s5, s6), min(s7, s8)));
+                darkMin = min(darkMin, s0);
+                float darkChannel = lumaOf(darkMin);
+                float atmosLight = lumaOf(color);
+                float transmission = 1.0 - darkChannel * strength * 1.5;
+                transmission = clamp(transmission, 0.2, 1.0);
+                vec3 result = (color - darkChannel * strength * 0.15) / max(transmission, 0.3);
+                float localContrast = smoothstep(0.1, 0.6, atmosLight) * strength * 0.25;
+                result = mix(result, result * (1.0 + localContrast), localContrast);
+                return clamp(result, 0.0, 1.0);
+            }
+
+            vec3 applyHdr(vec3 color, float strength) {
+                float luma = lumaOf(color);
+                float shadows = smoothstep(0.3, 0.0, luma) * strength;
+                float highlights = smoothstep(0.7, 1.0, luma) * strength;
+                vec3 lifted = color - shadows * 0.15;
+                vec3 brightened = lifted + highlights * 0.1;
+                float localCont = (luma - 0.5) * strength * 0.6;
+                vec3 result = mix(brightened, brightened * (1.0 + localCont), abs(localCont));
+                float satBoost = 1.0 + strength * 0.3 * (1.0 - smoothstep(0.1, 0.5, luma));
+                vec3 satResult = mix(vec3(lumaOf(result)), result, satBoost);
+                result = mix(result, satResult, strength);
+                float gamma = 1.0 - strength * 0.15;
+                result = pow(clamp(result, 0.0, 1.0), vec3(gamma));
+                return clamp(result, 0.0, 1.0);
+            }
+
+            // Detail Boost estilo Splash: realza el detalle de color y micro-contraste.
+            vec3 detailBoost(vec3 color, vec2 uv, vec2 texel, float strength) {
+                float luma = lumaOf(color);
+                float rDev = color.r - luma;
+                float gDev = color.g - luma;
+                float bDev = color.b - luma;
+                float colorDetail = sqrt(rDev * rDev + gDev * gDev + bDev * bDev);
+                float detailMask = smoothstep(0.005, 0.05, colorDetail);
+                vec3 enhanced = color + vec3(rDev, gDev, bDev) * detailMask * strength * 3.0;
+                float micro = 1.0 + strength * 0.4 * detailMask;
+                enhanced = mix(vec3(0.5), enhanced, micro);
+                float hl = smoothstep(0.8, 1.0, luma);
+                enhanced = mix(enhanced, color, hl * strength * 0.5);
+                enhanced = enhanced * enhanced * (3.0 - 2.0 * enhanced);
+                return clamp(enhanced, 0.0, 1.0);
+            }
+
+            // Light Boost estilo Splash: look vívido y brillante global.
+            vec3 lightBoost(vec3 color, vec2 uv, vec2 texel, float strength) {
+                float luma = lumaOf(color);
+                float shadowLift = (1.0 - smoothstep(0.1, 0.5, luma)) * strength * 0.6;
+                vec3 result = color * (1.0 + shadowLift) + shadowLift * 0.06;
+                float vividSat = 1.0 + strength * 0.7 * (1.0 - smoothstep(0.08, 0.4, luma));
+                result = mix(vec3(lumaOf(result)), result, vividSat);
+                result = result * result * (3.0 - 2.0 * result);
+                result = mix(vec3(0.5), result, 1.0 + strength * 0.22);
+                float hl = smoothstep(0.8, 0.95, luma);
+                result = mix(result, color, hl * strength * 0.4);
+                result = pow(clamp(result, 0.0, 1.0), vec3(1.0 - strength * 0.04));
+                return clamp(result, 0.0, 1.0);
+            }
+
+             vec3 clarityBoost(vec3 color, vec2 uv, vec2 texel, float strength) {
+                 vec2 txl = texel;
+                 vec3 c = texture2D(uCurrTex, uv).rgb;
+                 vec3 n  = texture2D(uCurrTex, uv + vec2(0.0, -txl.y)).rgb;
+                 vec3 s  = texture2D(uCurrTex, uv + vec2(0.0,  txl.y)).rgb;
+                 vec3 w  = texture2D(uCurrTex, uv + vec2(-txl.x, 0.0)).rgb;
+                 vec3 e  = texture2D(uCurrTex, uv + vec2( txl.x, 0.0)).rgb;
+                 vec3 nw = texture2D(uCurrTex, uv + vec2(-txl.x, -txl.y)).rgb;
+                 vec3 ne = texture2D(uCurrTex, uv + vec2( txl.x, -txl.y)).rgb;
+                 vec3 sw = texture2D(uCurrTex, uv + vec2(-txl.x,  txl.y)).rgb;
+                 vec3 se = texture2D(uCurrTex, uv + vec2( txl.x,  txl.y)).rgb;
+                 float lc = lumaOf(c);
+                 float ln = lumaOf(n); float ls = lumaOf(s);
+                 float lw = lumaOf(w); float le = lumaOf(e);
+                 float lnw = lumaOf(nw); float lne = lumaOf(ne);
+                 float lsw = lumaOf(sw); float lse = lumaOf(se);
+
+                 float edgeH = abs(le - lw);
+                 float edgeV = abs(ln - ls);
+                 float edgeD1 = abs(lne - lsw);
+                 float edgeD2 = abs(lnw - lse);
+                 float edgeStrength = max(max(edgeH, edgeV), max(edgeD1, edgeD2));
+                 float edgeMask = smoothstep(0.02, 0.15, edgeStrength);
+
+                 vec2 h8 = txl * 8.0;
+                 float stepBlockH = abs(lumaOf(texture2D(uCurrTex, uv + vec2(h8.x, 0.0)).rgb) -
+                                        lumaOf(texture2D(uCurrTex, uv - vec2(h8.x, 0.0)).rgb));
+                 float stepBlockV = abs(lumaOf(texture2D(uCurrTex, uv + vec2(0.0, h8.y)).rgb) -
+                                        lumaOf(texture2D(uCurrTex, uv - vec2(0.0, h8.y)).rgb));
+                 float blockDiscontinuity = max(stepBlockH, stepBlockV);
+                 float localVar = (abs(lc - ln) + abs(lc - ls) + abs(lc - lw) + abs(lc - le)) * 0.25;
+                 float isFlat = smoothstep(0.0, 0.03, localVar);
+                 float blockEdge = smoothstep(0.02, 0.12, blockDiscontinuity) * isFlat;
+
+                 vec3 smoothH = (w + c + e) * 0.333;
+                 vec3 smoothV = (n + c + s) * 0.333;
+                 vec3 smoothD = (nw + ne + sw + se + c * 2.0) * 0.2;
+                 vec3 smoothAvg = (smoothH + smoothV + smoothD) * 0.333;
+                 float deblockAmount = blockEdge * strength * 1.2;
+                 vec3 deblocked = mix(c, smoothAvg, deblockAmount);
+
+                 vec3 edgeDir;
+                 if (edgeH > edgeV && edgeH > edgeD1 && edgeH > edgeD2) {
+                     edgeDir = (e - w);
+                 } else if (edgeV > edgeD1 && edgeV > edgeD2) {
+                     edgeDir = (n - s);
+                 } else if (edgeD1 > edgeD2) {
+                     edgeDir = (ne - sw);
+                 } else {
+                     edgeDir = (nw - se);
+                 }
+                 vec3 edgeRecon = deblocked + edgeDir * edgeMask * strength * 0.7;
+
+                 vec3 highFreqH = deblocked - (w + e) * 0.5;
+                 vec3 highFreqV = deblocked - (n + s) * 0.5;
+                 vec3 highFreqD = deblocked - (nw + ne + sw + se) * 0.25;
+                 vec3 highFreq = (highFreqH + highFreqV + highFreqD) * 0.333;
+                 float textureMask = edgeMask * 0.7 + 0.15;
+                 vec3 textureRecovered = deblocked + highFreq * strength * 2.5 * textureMask;
+
+                 vec3 sharpened = deblocked + (deblocked - smoothAvg) * strength * 2.5;
+                 float sharpenMask = edgeMask * 0.7 + 0.3;
+                 vec3 detail = mix(textureRecovered, sharpened, sharpenMask);
+
+                 vec3 result = mix(deblocked, detail, 0.5 + edgeMask * 0.5);
+
+                 float microContrast = (lc - lumaOf(smoothAvg)) * strength * 0.5;
+                 result = mix(vec3(0.5), result, 1.0 + microContrast);
+                 result = result * result * (3.0 - 2.0 * result);
+                 float gamma = 1.0 - strength * 0.02;
+                 result = pow(clamp(result, 0.0, 1.0), vec3(gamma));
+                 return clamp(result, 0.0, 1.0);
+             }
 
             void main() {
                 vec4 curr = texture2D(uCurrTex, vTexCoord);
@@ -695,98 +992,55 @@ class Media3SixtyFpsProcessor(
                 if (uInterpEnabled > 0.5) {
                     vec3 interp;
                     float mask;
-                    if (uMode > 0.5) {
-                        vec2 mt = uMotionTexel * 3.0;
-                        vec4 m0 = texture2D(uMotionTex, vTexCoord);
-                        vec4 m1 = texture2D(uMotionTex, vTexCoord + vec2(mt.x, 0.0));
-                        vec4 m2 = texture2D(uMotionTex, vTexCoord - vec2(mt.x, 0.0));
-                        vec4 m3 = texture2D(uMotionTex, vTexCoord + vec2(0.0, mt.y));
-                        vec4 m4 = texture2D(uMotionTex, vTexCoord - vec2(0.0, mt.y));
-                        float w0 = m0.b * m0.a;
-                        float w1 = m1.b * m1.a;
-                        float w2 = m2.b * m2.a;
-                        float w3 = m3.b * m3.a;
-                        float w4 = m4.b * m4.a;
-                        float wm = max(max(max(w0, w1), max(w2, w3)), w4);
-                        vec2 mv;
-                        if (wm <= 0.001) { mv = m0.xy * 2.0 - 1.0; }
-                        else if (wm == w0) { mv = m0.xy * 2.0 - 1.0; }
-                        else if (wm == w1) { mv = m1.xy * 2.0 - 1.0; }
-                        else if (wm == w2) { mv = m2.xy * 2.0 - 1.0; }
-                        else if (wm == w3) { mv = m3.xy * 2.0 - 1.0; }
-                        else { mv = m4.xy * 2.0 - 1.0; }
-                        mv = mix(uGlobalVec, mv, clamp(wm, 0.0, 1.0));
-                        mv *= 16.0;
-                        vec2 msF = mv * uMotionScale;
-
-                        vec4 b0 = texture2D(uBwdTex, vTexCoord);
-                        vec4 b1 = texture2D(uBwdTex, vTexCoord + vec2(mt.x, 0.0));
-                        vec4 b2 = texture2D(uBwdTex, vTexCoord - vec2(mt.x, 0.0));
-                        vec4 b3 = texture2D(uBwdTex, vTexCoord + vec2(0.0, mt.y));
-                        vec4 b4 = texture2D(uBwdTex, vTexCoord - vec2(0.0, mt.y));
-                        float q0 = b0.b * b0.a;
-                        float q1 = b1.b * b1.a;
-                        float q2 = b2.b * b2.a;
-                        float q3 = b3.b * b3.a;
-                        float q4 = b4.b * b4.a;
-                        float qm = max(max(max(q0, q1), max(q2, q3)), q4);
-                        vec2 mvB;
-                        if (qm <= 0.001) { mvB = b0.xy * 2.0 - 1.0; }
-                        else if (qm == q0) { mvB = b0.xy * 2.0 - 1.0; }
-                        else if (qm == q1) { mvB = b1.xy * 2.0 - 1.0; }
-                        else if (qm == q2) { mvB = b2.xy * 2.0 - 1.0; }
-                        else if (qm == q3) { mvB = b3.xy * 2.0 - 1.0; }
-                        else { mvB = b4.xy * 2.0 - 1.0; }
-                        mvB = mix(uGlobalVec, mvB, clamp(qm, 0.0, 1.0));
-                        mvB *= 16.0;
-                        vec2 msB = mvB * uMotionScale;
-
-                        float consistency = 1.0 - smoothstep(0.004, 0.016, length(msF + msB));
-                        vec2 fwdUV = clamp(vTexCoord - msF * uFactor, vec2(0.0), vec2(1.0));
-                        vec2 bwdUV = clamp(vTexCoord + msF * (1.0 - uFactor), vec2(0.0), vec2(1.0));
-                        vec3 pF = texture2D(uPrevTex, fwdUV).rgb;
-                        vec3 cF = texture2D(uCurrTex, bwdUV).rgb;
-                        vec3 interpF = clamp(mix(pF, cF, uFactor), min(pF, cF), max(pF, cF));
-                        vec2 fwdUVB = clamp(vTexCoord + msB * uFactor, vec2(0.0), vec2(1.0));
-                        vec2 bwdUVB = clamp(vTexCoord - msB * (1.0 - uFactor), vec2(0.0), vec2(1.0));
-                        vec3 pB = texture2D(uPrevTex, fwdUVB).rgb;
-                        vec3 cB = texture2D(uCurrTex, bwdUVB).rgb;
-                        vec3 interpB = clamp(mix(pB, cB, uFactor), min(pB, cB), max(pB, cB));
-                        float confF = clamp(wm, 0.0, 1.0);
-                        float confB = clamp(qm, 0.0, 1.0);
-                        float bWeight = mix(confB / (confF + confB + 0.001), 0.5, consistency);
-                        interp = mix(interpF, interpB, clamp(bWeight, 0.0, 1.0));
-
-                        vec2 fullUV = clamp(vTexCoord - msF, vec2(0.0), vec2(1.0));
-                        float residual = length(texture2D(uPrevTex, fullUV).rgb - curr.rgb);
-                        float trust = 1.0 - smoothstep(0.1, 0.8, residual);
-                        float maskConf = m0.b * m0.a;
-                        float panBoost = smoothstep(0.06, 0.19, length(uGlobalVec));
-                        float warpBase = mix(0.1 + 0.9 * clamp(maskConf, 0.0, 1.0), 0.92, panBoost);
-                        float warpSel = clamp(trust * consistency * warpBase, 0.0, 1.0);
-                        vec3 cf = mix(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb, uFactor);
-                        interp = mix(cf, interp, warpSel);
-                        interp = mix(interp, clamp(interp, min(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb), max(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb)), 0.8);
-                        mask = mix(0.3, 1.0, warpSel);
+                    if (uMode > 3.5) {
+                        // Híbrido recomendado: frame-doubling con micro-blend adaptativo al movimiento.
+                        // Estático -> 0% blend (nítido); movimiento rápido -> hasta 16% (oculta judder).
+                        vec3 pv = texture2D(uPrevTex, vTexCoord).rgb;
+                        float adapt = smoothstep(0.03, 0.20, length(uGlobalVec));
+                        interp = mix(curr.rgb, pv, 0.16 * adapt);
+                        mask = 1.0;
+                    } else if (uMode > 1.5) {
+                        // Blend por movimiento con clamp min/max: evita el lavado/overshoot del fundido puro.
+                        vec3 pv = texture2D(uPrevTex, vTexCoord).rgb;
+                        interp = clamp(mix(pv, curr.rgb, uFactor), min(pv, curr.rgb), max(pv, curr.rgb));
+                        mask = 1.0;
                     } else {
-                        interp = mix(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb, uFactor);
+                        interp = curr.rgb;
                         mask = 1.0;
                     }
                     color = mix(curr.rgb, interp, mask);
                 }
 
                 if (uUpscalerMode > 1.5) {
-                    color = fsrEasu(vTexCoord, 1.0 / uVideoRes);
-                } else if (uUpscalerMode > 0.5) {
                     color = anime4kEdge(color, vTexCoord, 1.0 / uVideoRes);
+                } else if (uUpscalerMode > 0.5) {
+                    color = bilinearRescale(vTexCoord, 1.0 / uVideoRes);
                 }
 
                 if (uEnabled > 0.5) {
-                    color = (color - 0.5) * uContrast + 0.5;
+                     if (uClarity > 0.001) {
+                         color = clarityBoost(color, vTexCoord, uTexelSize, uClarity);
+                     }
+
+                    if (uDeblock > 0.001) {
+                        color = deblock(color, vTexCoord, uTexelSize, uDeblock);
+                    }
+
+                    if (uDesRinging > 0.001) {
+                        color = desRinging(color, vTexCoord, uTexelSize, uDesRinging);
+                    }
+
+                    color = applyTint(color, uTint);
+                    float ct = (uContrast - 1.0) * 0.5;
+                    color = clamp(color, 0.0, 1.0);
+                    color = color * color * (3.0 - 2.0 * color);
+                    color = mix(color, color * color * (3.0 - 2.0 * color), ct);
+                    color = mix(vec3(0.5), color, uContrast);
                     color = adjustSaturation(color, uSaturation);
                     color *= uColorBoost;
-                    color += uBrightness;
+                    color += uBrightness * 0.3;
 
+                    // Nitidez del perfil de color (básica, sobre luma)
                     if (uStatic < 0.5 && uSharpness > 0.001) {
                     vec2 txl = uDownTexel;
                     vec3 top    = texture2D(uDownTex, vTexCoord + vec2(0.0, txl.y)).rgb;
@@ -797,30 +1051,90 @@ class Media3SixtyFpsProcessor(
                     color = mix(color, sharpened, uSharpness * 0.5);
                     }
 
+                    // Nitidez adaptativa (técnica de video): afila solo bordes reales, no ruido.
+                    if (uStatic < 0.5 && uAdaptiveSharp > 0.001) {
+                    vec2 txl = uDownTexel;
+                    vec3 top    = texture2D(uDownTex, vTexCoord + vec2(0.0, txl.y)).rgb;
+                    vec3 bottom = texture2D(uDownTex, vTexCoord - vec2(0.0, txl.y)).rgb;
+                    vec3 left   = texture2D(uDownTex, vTexCoord - vec2(txl.x, 0.0)).rgb;
+                    vec3 right  = texture2D(uDownTex, vTexCoord + vec2(txl.x, 0.0)).rgb;
+                    vec3 sharpened = color + uAdaptiveSharp * (2.0 * color - top - bottom);
+                    float gx = lumaOf(right) - lumaOf(left);
+                    float gy = lumaOf(top) - lumaOf(bottom);
+                    float edge = clamp(sqrt(gx * gx + gy * gy) * 6.0, 0.0, 1.0);
+                    color = mix(color, sharpened, uAdaptiveSharp * 0.5 * edge);
+                    }
+
                     if (uDenoise > 0.001) {
                         vec2 txn = uTexelSize;
                         vec3 n1 = texture2D(uCurrTex, vTexCoord + vec2(txn.x, 0.0)).rgb;
                         vec3 n2 = texture2D(uCurrTex, vTexCoord - vec2(txn.x, 0.0)).rgb;
                         vec3 n3 = texture2D(uCurrTex, vTexCoord + vec2(0.0, txn.y)).rgb;
                         vec3 n4 = texture2D(uCurrTex, vTexCoord - vec2(0.0, txn.y)).rgb;
-                        vec3 box = (color + n1 + n2 + n3 + n4) * 0.2;
+                        vec3 n5 = texture2D(uCurrTex, vTexCoord + vec2(txn.x, txn.y)).rgb;
+                        vec3 n6 = texture2D(uCurrTex, vTexCoord - vec2(txn.x, txn.y)).rgb;
+                        vec3 n7 = texture2D(uCurrTex, vTexCoord + vec2(-txn.x, txn.y)).rgb;
+                        vec3 n8 = texture2D(uCurrTex, vTexCoord + vec2(txn.x, -txn.y)).rgb;
+                        float w1 = exp(-length(n1 - color) * 8.0);
+                        float w2 = exp(-length(n2 - color) * 8.0);
+                        float w3 = exp(-length(n3 - color) * 8.0);
+                        float w4 = exp(-length(n4 - color) * 8.0);
+                        float w5 = exp(-length(n5 - color) * 8.0) * 0.7;
+                        float w6 = exp(-length(n6 - color) * 8.0) * 0.7;
+                        float w7 = exp(-length(n7 - color) * 8.0) * 0.7;
+                        float w8 = exp(-length(n8 - color) * 8.0) * 0.7;
+                        float wSum = 1.0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8;
+                        vec3 bilateral = (color + n1*w1 + n2*w2 + n3*w3 + n4*w4 + n5*w5 + n6*w6 + n7*w7 + n8*w8) / wSum;
                         if (uInterpEnabled > 0.5) {
                             vec4 mN = texture2D(uMotionTex, vTexCoord);
                             float mConf = clamp(mN.b * mN.a, 0.0, 1.0);
                             vec2 mvN = mix(uGlobalVec, mN.xy * 2.0 - 1.0, mConf) * 16.0 * uMotionScale;
                             vec2 nUV = clamp(vTexCoord - mvN * 0.5, vec2(0.0), vec2(1.0));
                             vec3 nPrev = texture2D(uPrevTex, nUV).rgb;
-                            float diff = length(nPrev - box);
+                            float diff = length(nPrev - bilateral);
                             float trust = 1.0 - smoothstep(0.03, 0.22, diff);
-                            vec3 den = mix(box, nPrev, 0.65);
+                            vec3 den = mix(bilateral, nPrev, 0.65);
                             color = mix(color, den, trust * uDenoise);
                         } else {
-                            color = mix(color, box, uDenoise * 0.6);
+                            color = mix(color, bilateral, uDenoise * 0.7);
                         }
                     }
 
+                    if (uLocalContrast > 0.001) {
+                        color = localContrast(color, vTexCoord, uTexelSize, uLocalContrast);
+                    }
+
                     if (uDeband > 0.001) {
-                        color += (hash(vTexCoord) - 0.5) * uDeband;
+                        vec2 h = uTexelSize * 2.0;
+                        vec3 avg = (texture2D(uCurrTex, vTexCoord + vec2(h.x, 0.0)).rgb
+                                 + texture2D(uCurrTex, vTexCoord - vec2(h.x, 0.0)).rgb
+                                 + texture2D(uCurrTex, vTexCoord + vec2(0.0, h.y)).rgb
+                                 + texture2D(uCurrTex, vTexCoord - vec2(0.0, h.y)).rgb) * 0.25;
+                        float lDiff = abs(lumaOf(color) - lumaOf(avg));
+                        float bandMask = smoothstep(0.004, 0.02, lDiff);
+                        float dither = (hash(vTexCoord * 437.58 + vec2(uGrainSeed, uGrainSeed * 0.7)) - 0.5);
+                        color += dither * uDeband * bandMask * 0.04;
+                        color = mix(color, avg, bandMask * uDeband * 0.2);
+                    }
+
+                    if (uGrain > 0.001) {
+                        color = addGrain(color, vTexCoord, uGrain);
+                    }
+
+                    if (uDehaze > 0.001) {
+                        color = dehaze(color, vTexCoord, uTexelSize, uDehaze);
+                    }
+
+                    if (uHdr > 0.001) {
+                        color = applyHdr(color, uHdr);
+                    }
+
+                    if (uLightBoost > 0.001) {
+                        color = lightBoost(color, vTexCoord, uTexelSize, uLightBoost);
+                    }
+
+                    if (uDetailBoost > 0.001) {
+                        color = detailBoost(color, vTexCoord, uTexelSize, uDetailBoost);
                     }
                 }
 
@@ -1216,6 +1530,18 @@ class Media3SixtyFpsProcessor(
             colorBoostLoc = GLES20.glGetUniformLocation(program, "uColorBoost")
             denoiseLoc = GLES20.glGetUniformLocation(program, "uDenoise")
             debandLoc = GLES20.glGetUniformLocation(program, "uDeband")
+            deblockLoc = GLES20.glGetUniformLocation(program, "uDeblock")
+            desRingingLoc = GLES20.glGetUniformLocation(program, "uDesRinging")
+            localContrastLoc = GLES20.glGetUniformLocation(program, "uLocalContrast")
+            grainLoc = GLES20.glGetUniformLocation(program, "uGrain")
+            grainSeedLoc = GLES20.glGetUniformLocation(program, "uGrainSeed")
+            dehazeLoc = GLES20.glGetUniformLocation(program, "uDehaze")
+            adaptiveSharpLoc = GLES20.glGetUniformLocation(program, "uAdaptiveSharp")
+            tintLoc = GLES20.glGetUniformLocation(program, "uTint")
+            hdrLoc = GLES20.glGetUniformLocation(program, "uHdr")
+            detailBoostLoc = GLES20.glGetUniformLocation(program, "uDetailBoost")
+            lightBoostLoc = GLES20.glGetUniformLocation(program, "uLightBoost")
+             clarityLoc = GLES20.glGetUniformLocation(program, "uClarity")
             dbgLoc = GLES20.glGetUniformLocation(program, "uDbgMode")
             upscalerLoc = GLES20.glGetUniformLocation(program, "uUpscalerMode")
             fsrScaleLoc = GLES20.glGetUniformLocation(program, "uFsrScale")
@@ -1336,7 +1662,7 @@ class Media3SixtyFpsProcessor(
             val t0 = System.nanoTime()
             val cfg = VideoEnhanceConfig
             qualityLabel = cfg.qualityLabel()
-            val mode = if (cfg.isInterpolationEnabled()) 1 else 0
+            val mode = if (cfg.isInterpolationEnabled()) cfg.interpolationMode().intValue else 0
             val interpWanted = cfg.isInterpolationEnabled() && mode > 0 && sourceFps < 50f
             val debugNeedsPrev = debugMode == 1 || debugMode == 5
 
@@ -1515,22 +1841,43 @@ class Media3SixtyFpsProcessor(
             }
         }
 
+        /** Rectángulo [ox, oy, ow, oh] que encaja el video manteniendo su aspecto dentro del surface. */
+        private fun aspectRect(): IntArray {
+            val vw = viewWidth
+            val vh = viewHeight
+            if (vw <= 0 || vh <= 0) return intArrayOf(0, 0, vw, vh)
+            var vv = videoWidth
+            var vhh = videoHeight
+            if (vv <= 0 || vhh <= 0) { vv = 16; vhh = 9 }
+            val ar = vv.toFloat() / vhh
+            val panelAr = vw.toFloat() / vh
+            return if (ar > panelAr) {
+                val ow = vw
+                val oh = (vw / ar).toInt().coerceAtLeast(1)
+                intArrayOf(0, (vh - oh) / 2, ow, oh)
+            } else {
+                val ow = (vh * ar).toInt().coerceAtLeast(1)
+                intArrayOf((vw - ow) / 2, 0, ow, vh)
+            }
+        }
+
         private fun renderFrame(texMatrix: FloatArray, factor: Float, cfg: VideoEnhanceConfig, interpolating: Boolean, mode: Int) {
             if (program == 0) return
             val upscalerMode = cfg.getUpscalerMode()
-            val fsrActive = upscalerMode.value >= 2f
+            val fsrActive = upscalerMode.value >= 4f
             fsrRenderScale = if (fsrActive) (1f / upscalerMode.scaleFactor) else 0f
             val effScale = if (fsrActive) fsrRenderScale else renderScale
             val offscreen = fsrActive || effScale < 1f
-            val rw = if (offscreen) ((viewWidth * effScale).toInt()).coerceAtLeast(2) else viewWidth
-            val rh = if (offscreen) ((viewHeight * effScale).toInt()).coerceAtLeast(2) else viewHeight
+            val rect = aspectRect()
+            val rw = if (offscreen) ((rect[2] * effScale).toInt()).coerceAtLeast(2) else rect[2]
+            val rh = if (offscreen) ((rect[3] * effScale).toInt()).coerceAtLeast(2) else rect[3]
             if (offscreen) {
                 ensureDrsTarget(rw, rh)
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, drsFbo)
                 GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, drsTexId, 0)
                 GLES20.glViewport(0, 0, rw, rh)
             } else {
-                GLES20.glViewport(0, 0, viewWidth, viewHeight)
+                GLES20.glViewport(rect[0], rect[1], rect[2], rect[3])
             }
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             GLES20.glUseProgram(program)
@@ -1574,6 +1921,18 @@ class Media3SixtyFpsProcessor(
             GLES20.glUniform1f(colorBoostLoc, cfg.getColorBoost())
             GLES20.glUniform1f(denoiseLoc, cfg.getDenoise())
             GLES20.glUniform1f(debandLoc, cfg.getDeband())
+            GLES20.glUniform1f(deblockLoc, if (cfg.deblockEnabled()) cfg.getDeblock() else 0f)
+            GLES20.glUniform1f(desRingingLoc, if (cfg.desringingEnabled()) cfg.getDesringing() else 0f)
+            GLES20.glUniform1f(localContrastLoc, if (cfg.localContrastEnabled()) cfg.getLocalContrast() else 0f)
+            GLES20.glUniform1f(grainLoc, if (cfg.grainEnabled()) cfg.getGrain() else 0f)
+            GLES20.glUniform1f(grainSeedLoc, (frameCount % 1024).toFloat())
+            GLES20.glUniform1f(dehazeLoc, if (cfg.dehazeEnabled()) cfg.getDehaze() else 0f)
+            GLES20.glUniform1f(adaptiveSharpLoc, if (cfg.adaptiveSharpEnabled()) cfg.getAdaptiveSharp() else 0f)
+            GLES20.glUniform1f(tintLoc, cfg.getTint())
+            GLES20.glUniform1f(hdrLoc, if (cfg.hdrEnabled()) cfg.getHdr() else 0f)
+            GLES20.glUniform1f(detailBoostLoc, if (cfg.detailBoostEnabled()) cfg.getDetailBoost() else 0f)
+            GLES20.glUniform1f(lightBoostLoc, if (cfg.lightBoostEnabled()) cfg.getLightBoost() else 0f)
+             GLES20.glUniform1f(clarityLoc, if (cfg.superResEnabled()) cfg.getSuperRes() else 0f)
             GLES20.glUniform1f(dbgLoc, debugMode.toFloat())
             GLES20.glUniform1f(upscalerLoc, if (fsrActive) 0f else upscalerMode.value)
             GLES20.glUniform1f(fsrScaleLoc, upscalerMode.scaleFactor)
@@ -1584,7 +1943,7 @@ class Media3SixtyFpsProcessor(
 
             if (offscreen) {
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
-                GLES20.glViewport(0, 0, viewWidth, viewHeight)
+                GLES20.glViewport(rect[0], rect[1], rect[2], rect[3])
                 if (fsrActive) {
                     ensureFsrUpProgram()
                     if (fsrUpProgram != 0) {
@@ -1626,11 +1985,12 @@ class Media3SixtyFpsProcessor(
 
         private fun copyOldToPrev() {
             if (program == 0) return
+            val rect = aspectRect()
             val w = viewWidth.coerceAtLeast(2)
             val h = viewHeight.coerceAtLeast(2)
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo)
             GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, prevTexId, 0)
-            GLES20.glViewport(0, 0, w, h)
+            GLES20.glViewport(rect[0], rect[1], rect[2], rect[3])
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             GLES20.glUseProgram(program)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)

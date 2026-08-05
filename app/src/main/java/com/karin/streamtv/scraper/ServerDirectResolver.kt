@@ -63,6 +63,23 @@ object ServerDirectResolver {
     }
 
     /**
+     * Resolves a video URL using pre-fetched HTML (e.g., from CloudflareInterceptor.solveWithWebView).
+     * Used when the URL is behind Cloudflare and HTTP fetch returns a challenge page instead of the real content.
+     */
+    fun resolveFromHtml(url: String, html: String, referer: String = ""): ResolvedVideo? {
+        return try {
+            val lower = url.lowercase()
+            when {
+                lower.contains("voe") || lower.contains("jessicachoosemake") -> resolveVoeFromHtml(html, url)
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveFromHtml error for ${url.takeLast(80)}: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * True when [url] can be played directly through ExoPlayer via the HTTP
      * resolver (dood/dsvplay, voe, byse, mega). False means playback falls
      * back to the WebView (hidden extractor or visible embed).
@@ -162,8 +179,15 @@ object ServerDirectResolver {
     private fun resolveVoe(url: String): ResolvedVideo? {
         val (c1, body1) = getString(url)
         if (c1 != 200) return null
-        val target = Regex("""location\.href\s*=\s*'([^']+)'""").find(body1)?.groupValues?.get(1)
-        val (c2, body2) = if (target != null) getString(target, referer = url) else c1 to body1
+        return resolveVoeFromHtml(body1, url)
+    }
+
+    private fun resolveVoeFromHtml(html: String, url: String): ResolvedVideo? {
+        val target = Regex("""location\.href\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
+        val (c2, body2) = if (target != null) getString(target, referer = url) else {
+            // Cloudflare bypass gave us the real page directly; use it as body2
+            200 to html
+        }
         if (c2 != 200) {
             Log.w(TAG, "voe page HTTP $c2")
             return null

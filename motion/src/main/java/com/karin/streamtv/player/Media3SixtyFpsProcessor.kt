@@ -1,17 +1,25 @@
 ﻿package com.karin.streamtv.player
 
 import android.content.Context
-import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.util.Log
 import android.view.Surface
+import androidx.media3.common.Format
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.video.VideoFrameMetadataListener
+import com.karin.streamtv.player.dsp.DspRenderersFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
-import java.util.concurrent.ConcurrentLinkedQueue
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -23,112 +31,131 @@ class Media3SixtyFpsProcessor(
     private val glSurface: GLSurfaceView,
     private val referer: String = ""
 ) {
-    private var vlcRenderer: VlcGlRenderer? = null
+    private var player: ExoPlayer? = null
     var renderer: InterpolationRenderer? = null
         private set
+    private var inputSurface: Surface? = null
     var onGlFailure: (() -> Unit)? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    fun setupGlPipeline(url: String) {
-        val vlc = VlcGlRenderer(context, url)
-        vlcRenderer = vlc
+    fun createPlayer(trackSelector: DefaultTrackSelector? = null, dataSourceFactory: androidx.media3.datasource.DataSource.Factory? = null): ExoPlayer {
+        val renderersFactory = DspRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setMediaCodecSelector(MediaCodecSelector.DEFAULT)
+
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                15000,
+                50000,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+            )
+            .build()
+
+        val exoPlayer = ExoPlayer.Builder(context, renderersFactory)
+            .setLoadControl(loadControl)
+            .setTrackSelector(trackSelector ?: DefaultTrackSelector(context))
+            .setMediaSourceFactory(
+                androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
+                    .setDataSourceFactory(dataSourceFactory ?: VideoDataSource.factory(referer))
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(android.os.PowerManager.PARTIAL_WAKE_LOCK)
+            .build()
+
+        player = exoPlayer
+        renderer?.let { exoPlayer.setVideoFrameMetadataListener(it) }
+        return exoPlayer
+    }
+
+    fun setupGlPipeline() {
         renderer = InterpolationRenderer(
-            onSurfaceTextureReady = { st -> vlc.attach(st) },
+            onSurfaceReady = { surface ->
+                inputSurface = surface
+                mainHandler.post {
+                    player?.setVideoSurface(surface)
+                    Log.i(TAG, "Player connected to GL 60fps pipeline")
+                }
+            },
             onGlFailure = { onGlFailure?.invoke() }
         )
         glSurface.setRenderer(renderer)
         glSurface.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
     }
 
+    fun connectPlayer(player: ExoPlayer) {
+        this.player = player
+        renderer?.let { player.setVideoFrameMetadataListener(it) }
+        val surface = inputSurface
+        if (surface != null) {
+            player.setVideoSurface(surface)
+            Log.i(TAG, "Player connected to GL 60fps pipeline")
+        }
+    }
+
     fun play(url: String) {
-        vlcRenderer?.stop()
-        val vlc = VlcGlRenderer(context, url)
-        vlcRenderer = vlc
-        renderer?.currentInputTexture()?.let { vlc.attach(it) }
-        renderer?.resetForNewStream()
-    }
-
-    fun seekTo(positionMs: Long) {
-        vlcRenderer?.seekTo(positionMs)
-    }
-
-    fun pause() {
-        vlcRenderer?.pause()
-    }
-
-    fun resume() {
-        vlcRenderer?.resume()
-    }
-
-    fun setRate(rate: Float) {
-        vlcRenderer?.setRate(rate)
+        player?.let {
+            it.setMediaItem(MediaItem.fromUri(url))
+            it.prepare()
+            it.playWhenReady = true
+            Log.i(TAG, "Playing: ${url.takeLast(60)}")
+        }
     }
 
     fun isPipelineReady(): Boolean = renderer?.pipelineReady == true
 
-    fun release() {
-        vlcRenderer?.stop()
-        vlcRenderer = null
-        renderer?.requestStop()
-        val r = renderer
-        renderer = null
-        if (r != null && glSurface.isAttachedToWindow) {
-            glSurface.queueEvent {
-                r.cleanupGl()
-                mainHandler.post {
-                    r.cleanupGl()
+    fun resyncSurface() {
+        mainHandler.post {
+            val p = player
+            val s = inputSurface
+            if (p != null && s != null) {
+                try {
+                    p.setVideoSurface(null)
+                    p.setVideoSurface(s)
+                    Log.i(TAG, "video surface resync triggered")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "surface resync failed: ${t.message}")
                 }
             }
         }
     }
 
-    inner class InterpolationRenderer(
-        private val onSurfaceTextureReady: (SurfaceTexture) -> Unit = {},
-        private val onGlFailure: () -> Unit = {}
-    ) : GLSurfaceView.Renderer {
-
-        fun currentInputTexture(): SurfaceTexture? = inputSurfaceTexture
-
-        fun resetForNewStream() {
-            synchronized(frameLock) { frameAvailable = false }
-            prevReady = false
-            firstLatch = true
-            prevPtsUs = -1L
-            currPtsUs = -1L
-            currReleaseNs = -1L
-            prevReleaseNs = -1L
-            segmentStartNs = 0L
-            staticScene = false
-            passthroughLatch = false
-            globalVecReady = false
-            motionLevel = 0f
-            synchronized(metaLock) { metaQueue.clear() }
-            frameCount = 0
-            Log.i(TAG, "InterpolationRenderer reset for new stream")
-        }
-
-        private var vlcRenderer: VlcGlRenderer? = null
-
-        fun setVlcRenderer(vlc: VlcGlRenderer) {
-            vlcRenderer = vlc
-        }
-
-        fun onFrameAvailable(ptsUs: Long) {
-            currPtsUs = ptsUs
-            synchronized(frameLock) {
-                frameAvailable = true
+    fun release() {
+        renderer?.requestStop()
+        val r = renderer
+        val p = player
+        val surface = inputSurface
+        inputSurface = null
+        if (r != null && glSurface.isAttachedToWindow) {
+            glSurface.queueEvent {
+                r.cleanupGl()
+                mainHandler.post {
+                    surface?.release()
+                    p?.release()
+                    player = null
+                    renderer = null
+                }
             }
-            glSurface.requestRender()
+        } else {
+            surface?.release()
+            p?.release()
+            player = null
+            renderer = null
         }
+    }
+
+    inner class InterpolationRenderer(
+        private val onSurfaceReady: (Surface) -> Unit = {},
+        private val onGlFailure: () -> Unit = {}
+    ) : GLSurfaceView.Renderer, VideoFrameMetadataListener {
 
         private var program = 0
         private var motionProgram = 0
         private var staticProgram = 0
 
         private var inputTexId = 0
-        private var uvTexId = 0
+        private var inputSurfaceTexture: android.graphics.SurfaceTexture? = null
         private var cachedOutputSurface: Surface? = null
-        private var inputSurfaceTexture: SurfaceTexture? = null
 
         private var prevTexId = 0
         private var prevFbo = 0
@@ -415,7 +442,7 @@ class Media3SixtyFpsProcessor(
                         }
                         lowFpsStreak = 0
                         highFpsStreak = 0
-                    } else if (VideoEnhanceConfig.isDynamicResolutionEnabled() && outputFps < 28f && renderScale > 0.7f) {
+                    } else if (outputFps < 28f && renderScale > 0.7f) {
                         lowFpsStreak++
                         if (lowFpsStreak >= 2) {
                             lowFpsStreak = 0
@@ -666,48 +693,94 @@ class Media3SixtyFpsProcessor(
                 }
 
                 if (uInterpEnabled > 0.5) {
-                    vec3 prevS = texture2D(uPrevTex, vTexCoord).rgb;
-                    if (uMode > 2.5) {
-                        // Interpolación sintética robusta: warp bidireccional con
-                        // compensación de oclusión (evita fantasmas en zonas tapadas).
+                    vec3 interp;
+                    float mask;
+                    if (uMode > 3.5) {
+                        // Híbrido recomendado: frame-doubling + micro-blend
+                        vec3 pv = texture2D(uPrevTex, vTexCoord).rgb;
+                        interp = mix(curr.rgb, pv, 0.10);
+                        mask = 1.0;
+                    } else if (uMode > 2.5) {
                         vec2 mt = uMotionTexel * 3.0;
                         vec4 m0 = texture2D(uMotionTex, vTexCoord);
                         vec4 m1 = texture2D(uMotionTex, vTexCoord + vec2(mt.x, 0.0));
                         vec4 m2 = texture2D(uMotionTex, vTexCoord - vec2(mt.x, 0.0));
                         vec4 m3 = texture2D(uMotionTex, vTexCoord + vec2(0.0, mt.y));
                         vec4 m4 = texture2D(uMotionTex, vTexCoord - vec2(0.0, mt.y));
-                        float w0 = m0.b * m0.a, w1 = m1.b * m1.a;
-                        float w2 = m2.b * m2.a, w3 = m3.b * m3.a, w4 = m4.b * m4.a;
+                        float w0 = m0.b * m0.a;
+                        float w1 = m1.b * m1.a;
+                        float w2 = m2.b * m2.a;
+                        float w3 = m3.b * m3.a;
+                        float w4 = m4.b * m4.a;
                         float wm = max(max(max(w0, w1), max(w2, w3)), w4);
-                        vec2 mv = m0.xy * 2.0 - 1.0;
-                        if (wm > 0.001) {
-                            if (wm == w1) mv = m1.xy * 2.0 - 1.0;
-                            else if (wm == w2) mv = m2.xy * 2.0 - 1.0;
-                            else if (wm == w3) mv = m3.xy * 2.0 - 1.0;
-                            else if (wm == w4) mv = m4.xy * 2.0 - 1.0;
-                        }
+                        vec2 mv;
+                        if (wm <= 0.001) { mv = m0.xy * 2.0 - 1.0; }
+                        else if (wm == w0) { mv = m0.xy * 2.0 - 1.0; }
+                        else if (wm == w1) { mv = m1.xy * 2.0 - 1.0; }
+                        else if (wm == w2) { mv = m2.xy * 2.0 - 1.0; }
+                        else if (wm == w3) { mv = m3.xy * 2.0 - 1.0; }
+                        else { mv = m4.xy * 2.0 - 1.0; }
                         mv = mix(uGlobalVec, mv, clamp(wm, 0.0, 1.0));
                         mv *= 16.0;
                         vec2 msF = mv * uMotionScale;
-                        vec2 fwdUV = clamp(vTexCoord - msF * uFactor, 0.0, 1.0);
-                        vec2 bwdUV = clamp(vTexCoord + msF * (1.0 - uFactor), 0.0, 1.0);
-                        vec3 pW = texture2D(uPrevTex, fwdUV).rgb;
-                        vec3 cW = texture2D(uCurrTex, bwdUV).rgb;
+
                         vec4 b0 = texture2D(uBwdTex, vTexCoord);
-                        vec2 mvB = mix(uGlobalVec, b0.xy * 2.0 - 1.0, clamp(b0.b * b0.a, 0.0, 1.0));
+                        vec4 b1 = texture2D(uBwdTex, vTexCoord + vec2(mt.x, 0.0));
+                        vec4 b2 = texture2D(uBwdTex, vTexCoord - vec2(mt.x, 0.0));
+                        vec4 b3 = texture2D(uBwdTex, vTexCoord + vec2(0.0, mt.y));
+                        vec4 b4 = texture2D(uBwdTex, vTexCoord - vec2(0.0, mt.y));
+                        float q0 = b0.b * b0.a;
+                        float q1 = b1.b * b1.a;
+                        float q2 = b2.b * b2.a;
+                        float q3 = b3.b * b3.a;
+                        float q4 = b4.b * b4.a;
+                        float qm = max(max(max(q0, q1), max(q2, q3)), q4);
+                        vec2 mvB;
+                        if (qm <= 0.001) { mvB = b0.xy * 2.0 - 1.0; }
+                        else if (qm == q0) { mvB = b0.xy * 2.0 - 1.0; }
+                        else if (qm == q1) { mvB = b1.xy * 2.0 - 1.0; }
+                        else if (qm == q2) { mvB = b2.xy * 2.0 - 1.0; }
+                        else if (qm == q3) { mvB = b3.xy * 2.0 - 1.0; }
+                        else { mvB = b4.xy * 2.0 - 1.0; }
+                        mvB = mix(uGlobalVec, mvB, clamp(qm, 0.0, 1.0));
                         mvB *= 16.0;
                         vec2 msB = mvB * uMotionScale;
-                        float mismatch = length(msF + msB);
-                        float occ = smoothstep(0.01, 0.1, mismatch);
-                        vec3 interp = clamp(mix(pW, cW, uFactor), min(pW, cW), max(pW, cW));
-                        vec3 naive = mix(prevS, curr.rgb, uFactor);
-                        color = mix(interp, naive, occ);
-                        color = clamp(color, min(prevS, curr.rgb), max(prevS, curr.rgb));
+
+                        float consistency = 1.0 - smoothstep(0.004, 0.016, length(msF + msB));
+                        vec2 fwdUV = clamp(vTexCoord - msF * uFactor, vec2(0.0), vec2(1.0));
+                        vec2 bwdUV = clamp(vTexCoord + msF * (1.0 - uFactor), vec2(0.0), vec2(1.0));
+                        vec3 pF = texture2D(uPrevTex, fwdUV).rgb;
+                        vec3 cF = texture2D(uCurrTex, bwdUV).rgb;
+                        vec3 interpF = clamp(mix(pF, cF, uFactor), min(pF, cF), max(pF, cF));
+                        vec2 fwdUVB = clamp(vTexCoord + msB * uFactor, vec2(0.0), vec2(1.0));
+                        vec2 bwdUVB = clamp(vTexCoord - msB * (1.0 - uFactor), vec2(0.0), vec2(1.0));
+                        vec3 pB = texture2D(uPrevTex, fwdUVB).rgb;
+                        vec3 cB = texture2D(uCurrTex, bwdUVB).rgb;
+                        vec3 interpB = clamp(mix(pB, cB, uFactor), min(pB, cB), max(pB, cB));
+                        float confF = clamp(wm, 0.0, 1.0);
+                        float confB = clamp(qm, 0.0, 1.0);
+                        float bWeight = mix(confB / (confF + confB + 0.001), 0.5, consistency);
+                        interp = mix(interpF, interpB, clamp(bWeight, 0.0, 1.0));
+
+                        vec2 fullUV = clamp(vTexCoord - msF, vec2(0.0), vec2(1.0));
+                        float residual = length(texture2D(uPrevTex, fullUV).rgb - curr.rgb);
+                        float trust = 1.0 - smoothstep(0.1, 0.8, residual);
+                        float maskConf = m0.b * m0.a;
+                        float panBoost = smoothstep(0.06, 0.19, length(uGlobalVec));
+                        float warpBase = mix(0.1 + 0.9 * clamp(maskConf, 0.0, 1.0), 0.92, panBoost);
+                        float warpSel = clamp(trust * consistency * warpBase, 0.0, 1.0);
+                        vec3 cf = mix(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb, uFactor);
+                        interp = mix(cf, interp, warpSel);
+                        interp = mix(interp, clamp(interp, min(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb), max(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb)), 0.8);
+                        mask = mix(0.3, 1.0, warpSel);
                     } else if (uMode > 1.5) {
-                        color = mix(prevS, curr.rgb, uFactor);
+                        interp = mix(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb, uFactor);
+                        mask = 1.0;
                     } else {
-                        color = (uFactor < 0.5) ? prevS : curr.rgb;
+                        interp = curr.rgb;
+                        mask = 1.0;
                     }
+                    color = mix(curr.rgb, interp, mask);
                 }
 
                 if (uUpscalerMode > 1.5) {
@@ -1106,16 +1179,15 @@ class Media3SixtyFpsProcessor(
             downFbo = fbos[3]
             globalFbo = fbos[4]
 
-            // SurfaceTexture de entrada: libVLC (vía el VlcGlRenderer) escribe
-            // los frames aquí, sobre la textura externa de entrada.
-            inputSurfaceTexture = SurfaceTexture(inputTexId).also { st ->
-                st.setDefaultBufferSize(1920, 1080)
-                st.setOnFrameAvailableListener {
-                    synchronized(frameLock) { frameAvailable = true }
-                    glSurface.requestRender()
+            inputSurfaceTexture = android.graphics.SurfaceTexture(inputTexId)
+            inputSurfaceTexture!!.setOnFrameAvailableListener({
+                synchronized(frameLock) {
+                    frameAvailable = true
+                    frameLock.notifyAll()
                 }
-            }
-            onSurfaceTextureReady(inputSurfaceTexture!!)
+                if (staticScene) glSurface.requestRender()
+            })
+            onSurfaceReady(Surface(inputSurfaceTexture!!))
 
             program = buildProgram(vertexShader, fragmentShader)
             motionProgram = buildProgram(vertexShader, motionShader)
@@ -1251,6 +1323,23 @@ class Media3SixtyFpsProcessor(
             }
         }
 
+        override fun onVideoFrameAboutToBeRendered(releaseTimeNs: Long, presentationTimeUs: Long, format: Format, mediaFormat: android.media.MediaFormat?) {
+            synchronized(metaLock) {
+                if (metaQueue.size >= 32) metaQueue.removeFirst()
+                metaQueue.addLast(FrameMeta(presentationTimeUs, releaseTimeNs))
+                metadataCount++
+            }
+        }
+
+        override fun onDrawFrame(gl: GL10?) {
+            if (stopped) return
+            try {
+                onDrawFrameSafe()
+            } catch (t: Throwable) {
+                glFailed("onDrawFrame crashed", t)
+            }
+        }
+
         private fun onDrawFrameSafe() {
             val t0 = System.nanoTime()
             val cfg = VideoEnhanceConfig
@@ -1278,46 +1367,41 @@ class Media3SixtyFpsProcessor(
                         val newTs = st.timestamp
                         drainMetadata(newTs)
                         if (interpWanted || debugNeedsPrev) {
-                            if (mode == 3) {
-                                // Interpolación sintética: construye el mapa de movimiento.
-                                if (!staticScene || debugNeedsPrev) {
-                                    buildMotionMap()
-                                    globalCounter++
-                                    if (globalCounter % 5 == 0) computeGlobalMotion()
-                                    staticReadCounter++
-                                    if (staticReadCounter >= STATIC_READ_INTERVAL) {
-                                        staticReadCounter = 0
-                                        val lvl = readStaticLevel()
-                                        motionLevel = lvl
-                                        if (lvl < STATIC_THRESHOLD) {
-                                            staticFrames++
-                                            if (staticFrames >= 2) {
-                                                staticScene = true
-                                                staticFrames = 0
-                                            }
-                                        } else {
+                            if (!staticScene || debugNeedsPrev) {
+                                buildMotionMap()
+                                globalCounter++
+                                if (globalCounter % 5 == 0) computeGlobalMotion()
+                                staticReadCounter++
+                                if (staticReadCounter >= STATIC_READ_INTERVAL) {
+                                    staticReadCounter = 0
+                                    val lvl = readStaticLevel()
+                                    motionLevel = lvl
+                                    if (lvl < STATIC_THRESHOLD) {
+                                        staticFrames++
+                                        if (staticFrames >= 2) {
+                                            staticScene = true
                                             staticFrames = 0
                                         }
-                                    }
-                                } else {
-                                    staticCheckCounter++
-                                    if (staticCheckCounter >= 20) {
-                                        staticCheckCounter = 0
-                                        buildMotionMap()
-                                        val lvl = readStaticLevel()
-                                        motionLevel = lvl
-                                        if (lvl >= STATIC_THRESHOLD * 3f) {
-                                            staticScene = false
-                                            prevDirty = true
-                                            passthroughLatch = true
-                                            globalVecReady = false
-                                            globalVec[0] = 0f
-                                            globalVec[1] = 0f
-                                        }
+                                    } else {
+                                        staticFrames = 0
                                     }
                                 }
                             } else {
-                                // Frame-Doubling / Blend: sin mapas de movimiento (ligero).
+                                staticCheckCounter++
+                                if (staticCheckCounter >= 20) {
+                                    staticCheckCounter = 0
+                                    buildMotionMap()
+                                    val lvl = readStaticLevel()
+                                    motionLevel = lvl
+                                    if (lvl >= STATIC_THRESHOLD * 3f) {
+                                        staticScene = false
+                                        prevDirty = true
+                                        passthroughLatch = true
+                                        globalVecReady = false
+                                        globalVec[0] = 0f
+                                        globalVec[1] = 0f
+                                    }
+                                }
                             }
                         }
                         if (cfg.isEnabled() && !staticScene && cfg.getSharpness() > 0.001f) downscaleCurr()

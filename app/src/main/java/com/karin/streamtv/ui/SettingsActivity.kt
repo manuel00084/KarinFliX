@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.karin.streamtv.R
+import com.karin.streamtv.player.VideoEnhanceConfig
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.AutoPlayManager
 import com.karin.streamtv.util.DeviceUtils
@@ -84,6 +85,9 @@ class SettingsActivity : FragmentActivity() {
         }
         rowCredits.onActionKey { rowCredits.performClick() }
 
+        setupCodecRow()
+        setupAudioRow()
+
         if (DeviceUtils.isTvDevice(this)) {
             btnBack.post { btnBack.requestFocus() }
         } else {
@@ -119,6 +123,62 @@ class SettingsActivity : FragmentActivity() {
                 btnBack?.setTextColor(Color.WHITE)
             }
         } catch (_: Exception) { }
+    }
+
+    private fun setupCodecRow() {
+        VideoEnhanceConfig.init(this)
+        val row = findViewById<android.widget.LinearLayout>(R.id.row_codec)
+        val value = findViewById<TextView>(R.id.txt_codec_value)
+        fun refresh() {
+            value.text = VideoEnhanceConfig.codecMode().label
+        }
+        refresh()
+        val showDialog = {
+            val modes = VideoEnhanceConfig.CodecMode.entries
+            val labels = modes.map { it.label }.toTypedArray()
+            val current = VideoEnhanceConfig.codecMode()
+            val selectedIdx = modes.indexOf(current).coerceAtLeast(0)
+            val dialog = android.app.AlertDialog.Builder(this)
+                .setTitle("Códec ExoPlayer")
+                .setSingleChoiceItems(labels, selectedIdx) { _, which ->
+                    VideoEnhanceConfig.setCodecMode(modes[which])
+                    refresh()
+                    row.announceForAccessibility("Códec ExoPlayer: ${modes[which].label}")
+                }
+                .setNegativeButton("Cerrar", null)
+                .create()
+            dialog.show()
+        }
+        row.setOnClickListener { showDialog() }
+        row.onActionKey { showDialog() }
+    }
+
+    private fun setupAudioRow() {
+        com.karin.streamtv.player.dsp.AudioEnhanceConfig.init(this)
+        val row = findViewById<android.widget.LinearLayout>(R.id.row_audio)
+        val value = findViewById<TextView>(R.id.txt_audio_value)
+        fun refresh() {
+            val config = com.karin.streamtv.player.dsp.AudioEnhanceConfig
+            val preset = config.preset()
+            val enabled = config.isEnabled()
+            val auto = config.isAutoDevice()
+            value.text = when {
+                !enabled || preset == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF -> "Apagado"
+                auto -> "Automático · ${config.outputDeviceLabel()}"
+                else -> preset.label
+            }
+        }
+        refresh()
+        val showDialog = {
+            com.karin.streamtv.player.dsp.AudioDspUi.showPresetDialog(this, onAdvanced = {
+                com.karin.streamtv.player.dsp.AudioDspUi.showAdvanced(this)
+            }, onChanged = {
+                refresh()
+                row.announceForAccessibility(value.text.toString())
+            })
+        }
+        row.setOnClickListener { showDialog() }
+        row.onActionKey { showDialog() }
     }
 
     private fun saveSettings() {

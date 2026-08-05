@@ -5,105 +5,43 @@ import android.content.SharedPreferences
 
 object VideoEnhanceConfig {
 
-    enum class Preset(val label: String) {
-        OFF("Sin mejora"),
-        ANIME("Anime"),
-        CINE("Cine"),
-        DEPORTE("Deporte"),
+    enum class ColorPreset(val label: String) {
+        OFF("Sin cambio"),
         VIVIDO("Vívido"),
-        CINE_CLASICO("Cine Clásico"),
-        VIDEO_DOMESTICO("Vídeo Doméstico")
+        CINE("Cine"),
+        ANIME("Anime"),
+        CALIDO("Cálido"),
+        FRIO("Frío")
+    }
+
+    enum class InterpolationMode(val label: String, val intValue: Int) {
+        X2("Frame x2 (simple)", 1),
+        BLEND("Suavizado (Blend)", 2),
+        HYBRID("Doubling + Micro-Blend (recomendado)", 4)
+    }
+
+    enum class CodecMode(val label: String, val hint: String) {
+        HW("Hardware (chip)", "Usa el decodificador de hardware del dispositivo (más rápido, calidad según el chip)."),
+        SW_GOOGLE("Software Google", "Fuerza los decodificadores de software de Google (c2.android.*/OMX.google.*). Calidad determinista, más CPU.")
     }
 
     enum class UpscalerMode(val label: String, val value: Float, val scaleFactor: Float = 1.0f, val sharpness: Float = 0.8f) {
         OFF("Apagado", 0f),
-        ANIME4K("Anime4K", 1f),
-        FSR_ULTRA_QUALITY("FSR Ultra Quality", 2f, 1.3f, 0.17f),   // 77% render res
-        FSR_QUALITY("FSR Quality", 3f, 1.5f, 0.32f),                 // 67% render res
-        FSR_BALANCED("FSR Balanced", 4f, 1.7f, 0.48f),               // 59% render res
-        FSR_PERFORMANCE("FSR Performance", 5f, 2.0f, 0.62f)          // 50% render res
-    }
-
-    data class Params(
-        val preset: Preset = Preset.ANIME,
-        val enabled: Boolean = true,
-        val saturation: Float = 1.0f,    // 0.5..2.0
-        val contrast: Float = 1.0f,       // 0.5..2.0
-        val brightness: Float = 0.0f,     // -0.5..+0.5
-        val sharpness: Float = 0.0f,      // 0..2.0
-        val colorBoost: Float = 1.0f,     // 0.5..2.0
-        val denoise: Float = 0.0f,        // 0..1
-        val deband: Float = 0.0f          // 0..0.06
-    ) {
-        fun withPreset(p: Preset): Params = when (p) {
-            Preset.OFF -> Params(Preset.OFF, false, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f)
-            Preset.ANIME -> Params(
-                Preset.ANIME, true,
-                saturation = 1.40f,   // colores vivos tipo cel
-                contrast = 1.15f,     // contraste medio-alto
-                brightness = 0.02f,
-                sharpness = 0.55f,    // lineart nítido
-                colorBoost = 1.25f,
-                denoise = 0.20f,      // limpia ruido de compresión
-                deband = 0.02f
-            )
-            Preset.CINE -> Params(
-                Preset.CINE, true,
-                saturation = 1.10f,
-                contrast = 1.40f,     // negros profundos, look fílmico
-                brightness = -0.05f,
-                sharpness = 0.15f,
-                colorBoost = 1.05f,
-                denoise = 0.40f,      // grano suavizado
-                deband = 0.05f        // gradación suave en oscuros
-            )
-            Preset.DEPORTE -> Params(
-                Preset.DEPORTE, true,
-                saturation = 1.30f,
-                contrast = 1.45f,     // máximo punch
-                brightness = 0.03f,
-                sharpness = 0.70f,    // seguimiento de movimiento
-                colorBoost = 1.20f,
-                denoise = 0.25f,
-                deband = 0.02f
-            )
-            Preset.VIVIDO -> Params(
-                Preset.VIVIDO, true,
-                saturation = 1.75f,   // supersaturado
-                contrast = 1.25f,
-                brightness = 0.05f,
-                sharpness = 0.35f,
-                colorBoost = 1.60f,
-                denoise = 0.15f,
-                deband = 0.03f
-            )
-            Preset.CINE_CLASICO -> Params(
-                Preset.CINE_CLASICO, true,
-                saturation = 0.90f,   // paleta apagada/cálida
-                contrast = 1.25f,
-                brightness = 0.00f,
-                sharpness = 0.10f,
-                colorBoost = 0.95f,
-                denoise = 0.45f,
-                deband = 0.06f
-            )
-            Preset.VIDEO_DOMESTICO -> Params(
-                Preset.VIDEO_DOMESTICO, true,
-                saturation = 1.05f,   // look natural
-                contrast = 1.10f,
-                brightness = 0.02f,
-                sharpness = 0.25f,
-                colorBoost = 1.00f,
-                denoise = 0.30f,
-                deband = 0.03f
-            )
-        }
+        ANIME4K("Anime4K", 2f),
+        FSR_ULTRA_QUALITY("FSR Ultra Quality", 4f, 1.3f, 0.17f),   // 77% render res
+        FSR_QUALITY("FSR Quality", 5f, 1.5f, 0.32f),                 // 67% render res
+        FSR_BALANCED("FSR Balanced", 6f, 1.7f, 0.48f),               // 59% render res
+        FSR_PERFORMANCE("FSR Performance", 7f, 2.0f, 0.62f),         // 50% render res
+        BILINEAR("Bilinear", 1f),
+        FSR("FSR", 3f)
     }
 
     private const val PREF_NAME = "karin_video_enhance"
-    private const val KEY_PRESET = "enhance_preset"
     private const val KEY_ENABLED = "enhance_enabled"
+    private const val KEY_COLOR_PRESET = "color_preset"
+    private const val KEY_TINT = "tint"
     private const val KEY_INTERPOLATION = "interpolation_enabled"
+    private const val KEY_INTERPOLATION_MODE = "interpolation_mode"
     private const val KEY_SATURATION = "saturation"
     private const val KEY_CONTRAST = "contrast"
     private const val KEY_BRIGHTNESS = "brightness"
@@ -111,8 +49,29 @@ object VideoEnhanceConfig {
     private const val KEY_COLOR_BOOST = "color_boost"
     private const val KEY_DENOISE = "denoise"
     private const val KEY_DEBAND = "deband"
+    private const val KEY_DEBLOCK = "deblock"
+    private const val KEY_DEBLOCK_EN = "deblock_en"
+    private const val KEY_DESRINGING = "desringing"
+    private const val KEY_DESRINGING_EN = "desringing_en"
+    private const val KEY_LOCAL_CONTRAST = "local_contrast"
+    private const val KEY_LOCAL_CONTRAST_EN = "local_contrast_en"
+    private const val KEY_GRAIN = "grain"
+    private const val KEY_GRAIN_EN = "grain_en"
+    private const val KEY_DEHAZE = "dehaze"
+    private const val KEY_DEHAZE_EN = "dehaze_en"
+    private const val KEY_ADAPTIVE_SHARP = "adaptive_sharp"
+    private const val KEY_ADAPTIVE_SHARP_EN = "adaptive_sharp_en"
+    private const val KEY_HDR = "hdr"
+    private const val KEY_HDR_EN = "hdr_en"
+    private const val KEY_DETAIL_BOOST = "detail_boost"
+    private const val KEY_DETAIL_BOOST_EN = "detail_boost_en"
+    private const val KEY_LIGHT_BOOST = "light_boost"
+    private const val KEY_LIGHT_BOOST_EN = "light_boost_en"
+    private const val KEY_SUPER_RES = "super_res"
+    private const val KEY_SUPER_RES_EN = "super_res_en"
     private const val KEY_DEBUG_MODE = "debug_mode"
     private const val KEY_UPSCALER_MODE = "upscaler_mode"
+    private const val KEY_CODEC_MODE = "codec_mode"
 
     private var prefs: SharedPreferences? = null
 
@@ -123,16 +82,49 @@ object VideoEnhanceConfig {
     fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, true) ?: true
     fun setEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_ENABLED, v)?.apply() }
 
-    fun preset(): Preset {
-        val idx = prefs?.getInt(KEY_PRESET, 1) ?: 1 // default ANIME
-        return Preset.entries.getOrElse(idx.coerceIn(0, Preset.entries.size - 1)) { Preset.ANIME }
+    fun colorPreset(): ColorPreset {
+        val idx = prefs?.getInt(KEY_COLOR_PRESET, 0) ?: 0
+        return ColorPreset.entries.getOrElse(idx.coerceIn(0, ColorPreset.entries.size - 1)) { ColorPreset.OFF }
     }
-    fun setPreset(p: Preset) { prefs?.edit()?.putInt(KEY_PRESET, p.ordinal)?.apply() }
+    fun setColorPreset(p: ColorPreset) { prefs?.edit()?.putInt(KEY_COLOR_PRESET, p.ordinal)?.apply() }
+
+    fun getTint(): Float = prefs?.getFloat(KEY_TINT, 0.0f) ?: 0.0f
+    fun setTint(v: Float) { prefs?.edit()?.putFloat(KEY_TINT, v.coerceIn(-0.2f, 0.2f))?.apply() }
+
+    fun applyColorPreset(p: ColorPreset) {
+        setColorPreset(p)
+        when (p) {
+            ColorPreset.OFF -> {
+                setSaturation(1.0f); setContrast(1.0f); setBrightness(0.0f); setSharpness(0.0f); setTint(0.0f); setColorBoost(1.0f); setDenoise(0f)
+            }
+            ColorPreset.VIVIDO -> {
+                setSaturation(1.65f); setContrast(1.25f); setBrightness(0.03f); setSharpness(0.35f); setTint(0.0f); setColorBoost(1.1f); setDenoise(0.05f)
+            }
+            ColorPreset.CINE -> {
+                setSaturation(0.9f); setContrast(1.4f); setBrightness(-0.04f); setSharpness(0.15f); setTint(-0.03f); setColorBoost(0.95f); setDenoise(0.1f)
+            }
+            ColorPreset.ANIME -> {
+                setSaturation(1.55f); setContrast(1.3f); setBrightness(0.02f); setSharpness(0.6f); setTint(0.02f); setColorBoost(1.15f); setDenoise(0.08f)
+            }
+            ColorPreset.CALIDO -> {
+                setSaturation(1.15f); setContrast(1.12f); setBrightness(0.03f); setSharpness(0.1f); setTint(0.1f); setColorBoost(1.05f); setDenoise(0.05f)
+            }
+            ColorPreset.FRIO -> {
+                setSaturation(1.15f); setContrast(1.12f); setBrightness(0.0f); setSharpness(0.1f); setTint(-0.1f); setColorBoost(1.05f); setDenoise(0.05f)
+            }
+        }
+    }
 
     fun isInterpolationEnabled(): Boolean = prefs?.getBoolean(KEY_INTERPOLATION, false) ?: false
     fun setInterpolationEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_INTERPOLATION, v)?.apply() }
 
-    fun qualityLabel(): String = if (isInterpolationEnabled()) "60p" else "OFF"
+    fun interpolationMode(): InterpolationMode {
+        val idx = prefs?.getInt(KEY_INTERPOLATION_MODE, InterpolationMode.HYBRID.ordinal) ?: InterpolationMode.HYBRID.ordinal
+        return InterpolationMode.entries.getOrElse(idx.coerceIn(0, InterpolationMode.entries.size - 1)) { InterpolationMode.HYBRID }
+    }
+    fun setInterpolationMode(m: InterpolationMode) { prefs?.edit()?.putInt(KEY_INTERPOLATION_MODE, m.ordinal)?.apply() }
+
+    fun qualityLabel(): String = if (isInterpolationEnabled()) "60p ${interpolationMode().label}" else "OFF"
 
     fun getSaturation(): Float = prefs?.getFloat(KEY_SATURATION, 1.0f) ?: 1.0f
     fun setSaturation(v: Float) { prefs?.edit()?.putFloat(KEY_SATURATION, v)?.apply() }
@@ -155,6 +147,56 @@ object VideoEnhanceConfig {
     fun getDeband(): Float = prefs?.getFloat(KEY_DEBAND, 0.0f) ?: 0.0f
     fun setDeband(v: Float) { prefs?.edit()?.putFloat(KEY_DEBAND, v.coerceIn(0f, 0.06f))?.apply() }
 
+    fun deblockEnabled(): Boolean = prefs?.getBoolean(KEY_DEBLOCK_EN, false) ?: false
+    fun setDeblockEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_DEBLOCK_EN, b)?.apply() }
+    fun getDeblock(): Float = prefs?.getFloat(KEY_DEBLOCK, 0.3f) ?: 0.3f
+    fun setDeblock(v: Float) { prefs?.edit()?.putFloat(KEY_DEBLOCK, v.coerceIn(0f, 1f))?.apply() }
+
+    fun desringingEnabled(): Boolean = prefs?.getBoolean(KEY_DESRINGING_EN, false) ?: false
+    fun setDesringingEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_DESRINGING_EN, b)?.apply() }
+    fun getDesringing(): Float = prefs?.getFloat(KEY_DESRINGING, 0.3f) ?: 0.3f
+    fun setDesringing(v: Float) { prefs?.edit()?.putFloat(KEY_DESRINGING, v.coerceIn(0f, 1f))?.apply() }
+
+    fun localContrastEnabled(): Boolean = prefs?.getBoolean(KEY_LOCAL_CONTRAST_EN, false) ?: false
+    fun setLocalContrastEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_LOCAL_CONTRAST_EN, b)?.apply() }
+    fun getLocalContrast(): Float = prefs?.getFloat(KEY_LOCAL_CONTRAST, 0.3f) ?: 0.3f
+    fun setLocalContrast(v: Float) { prefs?.edit()?.putFloat(KEY_LOCAL_CONTRAST, v.coerceIn(0f, 1f))?.apply() }
+
+    fun grainEnabled(): Boolean = prefs?.getBoolean(KEY_GRAIN_EN, false) ?: false
+    fun setGrainEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_GRAIN_EN, b)?.apply() }
+    fun getGrain(): Float = prefs?.getFloat(KEY_GRAIN, 0.3f) ?: 0.3f
+    fun setGrain(v: Float) { prefs?.edit()?.putFloat(KEY_GRAIN, v.coerceIn(0f, 1f))?.apply() }
+
+    fun dehazeEnabled(): Boolean = prefs?.getBoolean(KEY_DEHAZE_EN, false) ?: false
+    fun setDehazeEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_DEHAZE_EN, b)?.apply() }
+    fun getDehaze(): Float = prefs?.getFloat(KEY_DEHAZE, 0.3f) ?: 0.3f
+    fun setDehaze(v: Float) { prefs?.edit()?.putFloat(KEY_DEHAZE, v.coerceIn(0f, 1f))?.apply() }
+
+    fun adaptiveSharpEnabled(): Boolean = prefs?.getBoolean(KEY_ADAPTIVE_SHARP_EN, false) ?: false
+    fun setAdaptiveSharpEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_ADAPTIVE_SHARP_EN, b)?.apply() }
+    fun getAdaptiveSharp(): Float = prefs?.getFloat(KEY_ADAPTIVE_SHARP, 0.4f) ?: 0.4f
+    fun setAdaptiveSharp(v: Float) { prefs?.edit()?.putFloat(KEY_ADAPTIVE_SHARP, v.coerceIn(0f, 1f))?.apply() }
+
+    fun hdrEnabled(): Boolean = prefs?.getBoolean(KEY_HDR_EN, false) ?: false
+    fun setHdrEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_HDR_EN, b)?.apply() }
+    fun getHdr(): Float = prefs?.getFloat(KEY_HDR, 0.5f) ?: 0.5f
+    fun setHdr(v: Float) { prefs?.edit()?.putFloat(KEY_HDR, v.coerceIn(0f, 1f))?.apply() }
+
+    fun detailBoostEnabled(): Boolean = prefs?.getBoolean(KEY_DETAIL_BOOST_EN, false) ?: false
+    fun setDetailBoostEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_DETAIL_BOOST_EN, b)?.apply() }
+     fun getDetailBoost(): Float = prefs?.getFloat(KEY_DETAIL_BOOST, 0.7f) ?: 0.7f
+     fun setDetailBoost(v: Float) { prefs?.edit()?.putFloat(KEY_DETAIL_BOOST, v.coerceIn(0f, 1f))?.apply() }
+
+    fun lightBoostEnabled(): Boolean = prefs?.getBoolean(KEY_LIGHT_BOOST_EN, false) ?: false
+    fun setLightBoostEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_LIGHT_BOOST_EN, b)?.apply() }
+     fun getLightBoost(): Float = prefs?.getFloat(KEY_LIGHT_BOOST, 0.7f) ?: 0.7f
+     fun setLightBoost(v: Float) { prefs?.edit()?.putFloat(KEY_LIGHT_BOOST, v.coerceIn(0f, 1f))?.apply() }
+
+    fun superResEnabled(): Boolean = prefs?.getBoolean(KEY_SUPER_RES_EN, false) ?: false
+    fun setSuperResEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_SUPER_RES_EN, b)?.apply() }
+     fun getSuperRes(): Float = prefs?.getFloat(KEY_SUPER_RES, 0.7f) ?: 0.7f
+     fun setSuperRes(v: Float) { prefs?.edit()?.putFloat(KEY_SUPER_RES, v.coerceIn(0f, 1f))?.apply() }
+
     fun getDebugMode(): Int = prefs?.getInt(KEY_DEBUG_MODE, 0) ?: 0
     fun setDebugMode(v: Int) { prefs?.edit()?.putInt(KEY_DEBUG_MODE, v.coerceIn(0, 7))?.apply() }
 
@@ -163,6 +205,26 @@ object VideoEnhanceConfig {
         return UpscalerMode.entries.getOrElse(idx.coerceIn(0, UpscalerMode.entries.size - 1)) { UpscalerMode.OFF }
     }
     fun setUpscalerMode(mode: UpscalerMode) { prefs?.edit()?.putInt(KEY_UPSCALER_MODE, mode.ordinal)?.apply() }
+
+    val mainUpscalers: List<UpscalerMode>
+        get() = listOf(UpscalerMode.OFF, UpscalerMode.ANIME4K, UpscalerMode.BILINEAR, UpscalerMode.FSR)
+
+    val fsrQualities: List<UpscalerMode>
+        get() = listOf(
+            UpscalerMode.FSR_ULTRA_QUALITY,
+            UpscalerMode.FSR_QUALITY,
+            UpscalerMode.FSR_BALANCED,
+            UpscalerMode.FSR_PERFORMANCE
+        )
+
+    fun isFsr(mode: UpscalerMode): Boolean = mode.value >= 4f
+    fun currentFsr(): UpscalerMode = fsrQualities.firstOrNull { it.ordinal == getUpscalerMode().ordinal } ?: UpscalerMode.FSR_ULTRA_QUALITY
+
+    fun codecMode(): CodecMode {
+        val idx = prefs?.getInt(KEY_CODEC_MODE, 0) ?: 0
+        return CodecMode.entries.getOrElse(idx.coerceIn(0, CodecMode.entries.size - 1)) { CodecMode.HW }
+    }
+    fun setCodecMode(mode: CodecMode) { prefs?.edit()?.putInt(KEY_CODEC_MODE, mode.ordinal)?.apply() }
 
     fun debugModeLabel(mode: Int): String = when (mode) {
         1 -> "PREV"
@@ -196,31 +258,27 @@ object VideoEnhanceConfig {
     fun seekBarToDeband(progress: Int): Float = (progress / 100f) * 0.06f
     fun debandToSeekBar(value: Float): Int = (value / 0.06f * 100).toInt().coerceIn(0, 100)
 
-    fun params(): Params = Params(
-        preset = preset(),
-        enabled = isEnabled(),
-        saturation = getSaturation(),
-        contrast = getContrast(),
-        brightness = getBrightness(),
-        sharpness = getSharpness(),
-        colorBoost = getColorBoost(),
-        denoise = getDenoise(),
-        deband = getDeband()
-    )
+    fun seekBarToDeblock(progress: Int): Float = progress / 100f
+    fun deblockToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
 
-    fun applyParams(p: Params) {
-        setPreset(p.preset)
-        setEnabled(p.enabled)
-        setSaturation(p.saturation)
-        setContrast(p.contrast)
-        setBrightness(p.brightness)
-        setSharpness(p.sharpness)
-        setColorBoost(p.colorBoost)
-        setDenoise(p.denoise)
-        setDeband(p.deband)
-    }
+    fun seekBarToLocalContrast(progress: Int): Float = progress / 100f
+    fun localContrastToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
 
-    fun applyPreset(p: Preset) {
-        applyParams(Params().withPreset(p))
-    }
+    fun seekBarToGrain(progress: Int): Float = progress / 100f
+    fun grainToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
+
+    fun seekBarToDehaze(progress: Int): Float = progress / 100f
+    fun dehazeToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
+
+    fun seekBarToHdr(progress: Int): Float = progress / 100f
+    fun hdrToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
+
+    fun seekBarToDetailBoost(progress: Int): Float = progress / 100f
+    fun detailBoostToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
+
+    fun seekBarToLightBoost(progress: Int): Float = progress / 100f
+    fun lightBoostToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
+
+    fun seekBarToSuperRes(progress: Int): Float = progress / 100f
+    fun superResToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
 }

@@ -104,6 +104,7 @@ object VideoEnhanceConfig {
     //  DOUBLING -> repite cada frame (24/25/30 -> ~48/50/60)
     //  BLEND    -> mezcla alpha de los 2 frames vecinos (más suave)
     enum class InterpolationMode(val label: String, val intValue: Int) {
+        HYBRID("Doubling + Micro-Blend (híbrido recomendado)", 4),
         DOUBLING("Frame x2", 1),
         BLEND("Suavizado", 2),
         INTERP("Interpolado", 3)

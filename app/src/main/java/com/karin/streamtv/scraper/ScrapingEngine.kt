@@ -3,6 +3,8 @@ package com.karin.streamtv.scraper
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.withLock
+import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
 import com.karin.streamtv.util.Http
@@ -79,6 +81,28 @@ object ScrapingEngine {
         )
     )
     private val userAgentIndex = AtomicInteger(0)
+
+    // Hosts that needed a Cloudflare bypass. Their cf_clearance cookie is bound to a specific
+    // User-Agent, so every request to these hosts must reuse the UA the challenge was solved with
+    // (fixed Chrome/131 desktop profile) instead of rotating. Key: host.
+    private val cfLockedHosts = ConcurrentHashMap<String, String>()
+
+    // Fixed mobile Android Chrome/131 profile shared by the CF WebView and every retry to a
+    // CF-protected host. Cloudflare binds cf_clearance to the exact UA string, so both must match.
+    private val cfLockedProfile = BrowserProfile(
+        ua = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        secChUa = "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+        secChUaPlatform = "\"Android\"",
+        secChUaMobile = "?1"
+    )
+
+    // Serialize the WebView CF bypass per host so concurrent fetches share a single solve.
+    private val cfBypassMutexes = ConcurrentHashMap<String, kotlinx.coroutines.sync.Mutex>()
+    private val cfResolvedHosts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun hostOf(url: String): String {
+        return try { java.net.URI(url).host ?: "" } catch (_: Exception) { "" }
+    }
 
     private fun nextBrowserProfile(): BrowserProfile {
         val idx = (userAgentIndex.getAndIncrement() and Int.MAX_VALUE) % browserProfiles.size
@@ -321,16 +345,26 @@ object ScrapingEngine {
 
                         if (!cfBypassAttempted) {
                             cfBypassAttempted = true
+                            val host = hostOf(url)
+                            cfLockedHosts[host] = cfLockedProfile.ua
                             val ctx = appContext
                             if (ctx != null) {
-                                Log.i(TAG, "Attempting WebView CF bypass for $url")
-                                val solved = com.karin.streamtv.util.CloudflareInterceptor.solveWithWebView(ctx, url)
-                                if (solved) {
-                                    Log.i(TAG, "CF bypass succeeded — retrying fetch for $url")
-                                    memRemove(key)
-                                    diskRemove(key)
-                                    attempts = 0
-                                    continue
+                                Log.i(TAG, "Attempting WebView CF bypass for $host")
+                                val mutex = cfBypassMutexes.getOrPut(host) { kotlinx.coroutines.sync.Mutex() }
+                                val webHtml = mutex.withLock {
+                                    com.karin.streamtv.util.CloudflareInterceptor.solveWithWebView(ctx, url, cfLockedProfile.ua)
+                                }
+                                val doc = webHtml?.let { safeParse(it, url) }
+                                if (doc != null && !doc.body().html().isBlank()) {
+                                    cfResolvedHosts.add(host)
+                                    Log.i(TAG, "CF bypass succeeded — got HTML (${webHtml!!.length} chars) for $url")
+                                    if (!doc.body().html().isBlank()) {
+                                        memPut(key, MemCacheEntry(webHtml!!, System.currentTimeMillis()))
+                                        diskPut(key, webHtml!!)
+                                    }
+                                    recordSuccess(siteName)
+                                    emitMetrics(siteName, url, true, "cf_webview", 1, System.currentTimeMillis() - metricsStart, true)
+                                    return@withConcurrencyLimit doc
                                 }
                             }
                         }
@@ -456,6 +490,84 @@ object ScrapingEngine {
             throw IllegalStateException("HTTP ${response.code} for $url")
         }
         return response
+    }
+
+    /**
+     * POST form-encoded and return the raw body. Reuses the persistent cookie jar so the session
+     * (e.g. Laravel CSRF) established by a previous GET on the same host is honored.
+     * Returns null on 419/403/503/network errors so the caller can re-establish the session.
+     */
+    suspend fun postForm(url: String, form: Map<String, String>, csrfToken: String?, siteName: String): String? {
+        return withConcurrencyLimit {
+            var result: String? = null
+            var attempts = 0
+            while (attempts < maxRetries) {
+                attempts++
+                try {
+                    enforceRateLimit(siteName)
+                    Log.i(TAG, "POST [$attempts/$maxRetries] $url ($siteName)")
+
+                    val referer = try {
+                        val uri = java.net.URI(url)
+                        "${uri.scheme}://${uri.host}/"
+                    } catch (_: Exception) { url }
+val profile = if (cfLockedHosts.containsKey(hostOf(url))) cfLockedProfile else nextBrowserProfile()
+
+                    val formBody = FormBody.Builder().apply {
+                        for ((k, v) in form) add(k, v)
+                    }.build()
+
+                    val requestBuilder = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", profile.ua)
+                        .header("Accept", "application/json, text/javascript, */*; q=0.01")
+                        .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
+                        .header("Referer", referer)
+                        .header("Origin", referer.trimEnd('/'))
+                        .header("X-Requested-With", "XMLHttpRequest")
+                        .header("Sec-Fetch-Dest", "empty")
+                        .header("Sec-Fetch-Mode", "cors")
+                        .header("Sec-Fetch-Site", "same-origin")
+                        .post(formBody)
+                    if (!csrfToken.isNullOrBlank()) {
+                        requestBuilder.header("X-CSRF-TOKEN", csrfToken)
+                    }
+                    if (profile.secChUa.isNotEmpty()) {
+                        requestBuilder
+                            .header("sec-ch-ua", profile.secChUa)
+                            .header("sec-ch-ua-mobile", profile.secChUaMobile)
+                            .header("sec-ch-ua-platform", profile.secChUaPlatform)
+                    }
+
+                    val response = httpClient.newCall(requestBuilder.build()).execute()
+                    val code = response.code
+                    val body = try { response.body?.string() ?: "" } catch (_: Exception) { "" }
+                    response.close()
+
+                    when {
+                        code == 419 || code == 403 || code == 503 -> {
+                            Log.w(TAG, "POST $code for $url — session invalid ($siteName)")
+                            return@withConcurrencyLimit null
+                        }
+                        body.isBlank() -> throw IllegalStateException("Empty POST response body")
+                        else -> {
+                            recordSuccess(siteName)
+                            result = body
+                            return@withConcurrencyLimit body
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "POST attempt $attempts failed for $url: ${e.javaClass.simpleName}: ${e.message}", e)
+                    if (attempts < maxRetries) {
+                        val backoff = (attempts * 1500L).coerceAtMost(6000L)
+                        delay(backoff)
+                    } else {
+                        recordFailure(siteName)
+                    }
+                }
+            }
+            result
+        }
     }
 
     private fun safeParse(html: String, baseUrl: String): Document? = try {

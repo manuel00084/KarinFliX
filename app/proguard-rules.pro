@@ -13,6 +13,20 @@
 -keep class androidx.media3.** { *; }
 -dontwarn androidx.media3.**
 
+# Media3 extension decoders (ffmpeg/vp9/av1/flac/opus) - registrados por reflexión
+-keep class androidx.media3.decoder.** { *; }
+-keep class androidx.media3.ffmpeg.** { *; }
+-keep class androidx.media3.vp9.** { *; }
+-keep class androidx.media3.av1.** { *; }
+-keep class androidx.media3.flac.** { *; }
+-keep class androidx.media3.opus.** { *; }
+-dontwarn androidx.media3.decoder.**
+-dontwarn androidx.media3.ffmpeg.**
+-dontwarn androidx.media3.vp9.**
+-dontwarn androidx.media3.av1.**
+-dontwarn androidx.media3.flac.**
+-dontwarn androidx.media3.opus.**
+
 # OkHttp
 -dontwarn okhttp3.**
 -dontwarn okio.**

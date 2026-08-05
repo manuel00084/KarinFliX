@@ -8,13 +8,15 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
+
+
 import android.widget.EditText
-import android.widget.Spinner
+import android.widget.LinearLayout
+
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -54,13 +56,23 @@ class SiteBrowserActivity : AppCompatActivity() {
     private lateinit var btnNextPage: TextView
     private lateinit var btnPrevPage: TextView
     private lateinit var filterBar: View
-    private lateinit var spinnerYear: Spinner
-    private lateinit var spinnerGenre: Spinner
-    private lateinit var spinnerLetter: Spinner
-    private lateinit var spinnerCategory: Spinner
-    private lateinit var btnFilterApply: TextView
+    private lateinit var filterChipsContainer: LinearLayout
+    private lateinit var btnFilterClear: TextView
+    private val selectedFilters = LinkedHashMap<String, String>()
+    private var activeDims: List<FilterDim> = emptyList()
     private lateinit var paginationBar: View
     private lateinit var tvPageNumber: TextView
+
+    // Spinners de filtro (compatibilidad código legacy)
+    private var spinnerOrder: android.widget.Spinner? = null
+    private var spinnerYear: android.widget.Spinner? = null
+    private var spinnerGenre: android.widget.Spinner? = null
+    private var spinnerDemo: android.widget.Spinner? = null
+    private var spinnerType: android.widget.Spinner? = null
+    private var spinnerStatus: android.widget.Spinner? = null
+    private var spinnerSeason: android.widget.Spinner? = null
+    private var spinnerLetter: android.widget.Spinner? = null
+    private var spinnerCategory: android.widget.Spinner? = null
 
     private var siteName: String = ""
     private var siteUrl: String = ""
@@ -116,18 +128,13 @@ class SiteBrowserActivity : AppCompatActivity() {
         btnPrevPage.setOnClickListener { loadPrevPage() }
         btnPrevPage.onActionKey { loadPrevPage() }
 
-        filterBar = findViewById(R.id.filter_bar)
-        spinnerYear = findViewById(R.id.spinner_year)
-        spinnerGenre = findViewById(R.id.spinner_genre)
-        spinnerLetter = findViewById(R.id.spinner_letter)
-        spinnerCategory = findViewById(R.id.spinner_category)
-        btnFilterApply = findViewById(R.id.btn_filter_apply)
+filterBar = findViewById(R.id.filter_bar)
+        filterChipsContainer = findViewById(R.id.filter_chips_container)
+        btnFilterClear = findViewById(R.id.btn_filter_clear)
         paginationBar = findViewById(R.id.pagination_bar)
         tvPageNumber = findViewById(R.id.tv_page_number)
 
-        setupFilterSpinners()
-        btnFilterApply.setOnClickListener { applyFilters() }
-        btnFilterApply.onActionKey { applyFilters() }
+        initDynamicFilterBar()
 
         tvTitle.text = siteName
 
@@ -181,33 +188,6 @@ class SiteBrowserActivity : AppCompatActivity() {
                         }
                     } else false
                 }
-            }
-            // Spinners navegables con DPAD
-            listOf(spinnerYear, spinnerGenre, spinnerLetter, spinnerCategory).forEach { spinner ->
-                spinner.setOnKeyListener { _, keyCode, event ->
-                    if (event.action == KeyEvent.ACTION_DOWN) {
-                        when (keyCode) {
-                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                                spinner.performClick()
-                                true
-                            }
-                            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                                rvEpisodes.requestFocus()
-                                true
-                            }
-                            else -> false
-                        }
-                    } else false
-                }
-            }
-            btnFilterApply.setOnKeyListener { _, keyCode, event ->
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    when (keyCode) {
-                        KeyEvent.KEYCODE_DPAD_DOWN -> { rvEpisodes.requestFocus(); true }
-                        KeyEvent.KEYCODE_DPAD_LEFT -> { spinnerCategory.requestFocus(); true }
-                        else -> false
-                    }
-                } else false
             }
         }
 
@@ -529,56 +509,146 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
         btnNextPage.visibility = if (nextPageUrl != null) View.VISIBLE else View.GONE
     }
 
-    private fun setupFilterSpinners() {
-        val years = listOf("Año") + (2026 downTo 1990).map { it.toString() }
-        spinnerYear.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, years)
+    // region --- Barra de filtros dinámica ---
 
-        val genres = listOf("Género") + listOf(
-            "Acción", "Aventura", "Carreras", "Ciencia Ficción", "Comedia", "Cyberpunk",
-            "Deportes", "Drama", "Ecchi", "Escolares", "Fantasía", "Gore", "Harem",
-            "Horror", "Josei", "Lucha", "Magia", "Mecha", "Militar", "Misterio",
-            "Música", "Parodias", "Psicológico", "Seinen", "Shojo", "Shonen",
-            "Sobrenatural", "Vampiros", "Yaoi", "Yuri", "Latino", "Espacial",
-            "Histórico", "Samurai", "Artes Marciales", "Demonios", "Romance",
-            "Dementia", "Policía", "Castellano", "Donghua", "Blu-ray", "Isekai", "Suspenso"
-        )
-        spinnerGenre.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, genres)
+    private data class FilterDim(
+        val key: String,
+        val label: String,
+        val options: List<String>,
+        val slugMap: Map<String, String> = emptyMap(),
+        val valueFromLabel: (String) -> String = { it }
+    )
 
-        val letters = listOf("Letra") + listOf("0-9") + ('A'..'Z').map { it.toString() }
-        spinnerLetter.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, letters)
+    private val genericGenres = listOf(
+        "Acción", "Aventura", "Carreras", "Ciencia Ficción", "Comedia", "Cyberpunk",
+        "Deportes", "Drama", "Ecchi", "Escolares", "Fantasía", "Gore", "Harem",
+        "Horror", "Josei", "Lucha", "Magia", "Mecha", "Militar", "Misterio",
+        "Música", "Parodias", "Psicológico", "Seinen", "Shojo", "Shonen",
+        "Sobrenatural", "Vampiros", "Yaoi", "Yuri", "Latino", "Espacial",
+        "Histórico", "Samurai", "Artes Marciales", "Demonios", "Romance",
+        "Dementia", "Policía", "Castellano", "Donghua", "Blu-ray", "Isekai", "Suspenso"
+    )
 
-        val categories = listOf("Categoría") + listOf(
-            "Anime", "Ova", "Película", "Especial", "Corto", "Ona", "Donghua",
-            "Sin Censura", "Preestreno", "Latino", "Castellano", "Live Action",
-            "Cartoon", "Catalán"
-        )
-        spinnerCategory.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, categories)
+    private val genericCategories = listOf(
+        "Anime", "Ova", "Película", "Especial", "Corto", "Ona", "Donghua",
+        "Sin Censura", "Preestreno", "Latino", "Castellano", "Live Action",
+        "Cartoon", "Catalán"
+    )
+
+    private fun initDynamicFilterBar() {
+        activeDims = buildFilterDims()
+        renderFilterChips()
+        btnFilterClear.setOnClickListener { clearFilters() }
+        btnFilterClear.onActionKey { clearFilters() }
     }
 
+    private fun buildFilterDims(): List<FilterDim> {
+        return if (siteName.equals("JKAnime", ignoreCase = true)) {
+            listOf(
+                FilterDim("filtro", "Ordenar", jkOrderSlugs.map { it.first }, slugMap = jkOrderSlugs.toMap()),
+                FilterDim("fecha", "Año", (2026 downTo 1981).map { it.toString() }),
+                FilterDim("genero", "Género", jkGenreSlugs.map { it.first }, slugMap = jkGenreSlugs.toMap()),
+                FilterDim("demografia", "Demografía", jkDemoSlugs.map { it.first }, slugMap = jkDemoSlugs.toMap()),
+                FilterDim("tipo", "Tipo", jkTypeSlugs.map { it.first }, slugMap = jkTypeSlugs.toMap()),
+                FilterDim("estado", "Estado", jkStatusSlugs.map { it.first }, slugMap = jkStatusSlugs.toMap()),
+                FilterDim("temporada", "Temporada", jkSeasonSlugs.map { it.first }, slugMap = jkSeasonSlugs.toMap()),
+                FilterDim("letra", "Letra", ('A'..'Z').map { it.toString() }),
+                FilterDim("categoria", "Categoría", jkCategorySlugs.map { it.first }, slugMap = jkCategorySlugs.toMap())
+            )
+        } else {
+            listOf(
+                FilterDim("fecha", "Año", (2026 downTo 1990).map { it.toString() }),
+                FilterDim("genero", "Género", genericGenres, valueFromLabel = { slugify(it) }),
+                FilterDim("letra", "Letra", listOf("0-9") + ('A'..'Z').map { it.toString() }, valueFromLabel = { if (it == "0-9") "09" else it }),
+                FilterDim("categoria", "Categoría", genericCategories)
+            )
+        }
+    }
+
+    private fun slugify(value: String): String =
+        value.lowercase()
+            .replace("ñ", "n").replace("ó", "o").replace("é", "e")
+            .replace("á", "a").replace("í", "i").replace("ú", "u").replace("ü", "u")
+            .replace(" ", "-")
+
+    private fun renderFilterChips() {
+        filterChipsContainer.removeAllViews()
+        for (dim in activeDims) {
+            val selected = selectedFilters[dim.key]
+            val chip = TextView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(34)
+                ).apply { marginEnd = dp(4) }
+                text = if (selected != null) "✓ ${dim.label}: $selected" else "${dim.label} ▾"
+                setPadding(dp(10), 0, dp(10), 0)
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setTextColor(if (selected != null) ContextCompat.getColor(this@SiteBrowserActivity, R.color.accent) else ContextCompat.getColor(this@SiteBrowserActivity, R.color.text_primary))
+                textSize = 13f
+                setBackgroundResource(R.drawable.bg_spinner)
+                isFocusable = true
+                setOnClickListener { showFilterPicker(dim) }
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        when (keyCode) {
+                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { performClick(); true }
+                            KeyEvent.KEYCODE_DPAD_DOWN -> { rvEpisodes.requestFocus(); true }
+                            else -> false
+                        }
+                    } else false
+                }
+            }
+            filterChipsContainer.addView(chip)
+        }
+        btnFilterClear.visibility = if (selectedFilters.isNotEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private fun showFilterPicker(dim: FilterDim) {
+        val options = dim.options
+        val current = selectedFilters[dim.key]
+        val checked = current?.let { options.indexOf(it) } ?: -1
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(dim.label)
+            .setSingleChoiceItems(options.toTypedArray(), checked) { d, which ->
+                selectedFilters[dim.key] = options[which]
+                renderFilterChips()
+                d.dismiss()
+                applyFilters()
+            }
+            .setNegativeButton("Quitar filtro") { d, _ ->
+                selectedFilters.remove(dim.key)
+                renderFilterChips()
+                d.dismiss()
+                applyFilters()
+            }
+            .setNeutralButton("Cancelar", null)
+            .show()
+    }
+
+    private fun clearFilters() {
+        selectedFilters.clear()
+        renderFilterChips()
+        applyFilters()
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    // endregion
+
+    /** Aplica los filtros dinámicos actuales y ejecuta la búsqueda en el directorio. */
     private fun applyFilters() {
-        val yearValue = if (spinnerYear.selectedItemPosition > 0) {
-            (spinnerYear.selectedItem as String).lowercase().replace(" ", "-")
-        } else ""
-        val genreValue = if (spinnerGenre.selectedItemPosition > 0) {
-            (spinnerGenre.selectedItem as String).lowercase()
-                .replace(" ", "-").replace("ó", "o").replace("é", "e").replace("á", "a").replace("í", "i").replace("ú", "u")
-        } else ""
-        val letterValue = if (spinnerLetter.selectedItemPosition > 0) {
-            val raw = spinnerLetter.selectedItem as String
-            if (raw == "0-9") "09" else raw
-        } else ""
-        val categoryValue = if (spinnerCategory.selectedItemPosition > 0) {
-            (spinnerCategory.selectedItem as String)
-        } else ""
+        val params = activeDims.mapNotNull { dim ->
+            val label = selectedFilters[dim.key] ?: return@mapNotNull null
+            val value = dim.slugMap[label] ?: dim.valueFromLabel(label)
+            if (value.isBlank()) return@mapNotNull null
+            "${dim.key}=${java.net.URLEncoder.encode(value, "UTF-8")}"
+        }
 
-        val params = mutableListOf<String>()
-        if (yearValue.isNotBlank() && yearValue != "año") params.add("fecha=$yearValue")
-        if (genreValue.isNotBlank() && genreValue != "género") params.add("genero=$genreValue")
-        if (letterValue.isNotBlank() && letterValue != "letra") params.add("letra=$letterValue")
-        if (categoryValue.isNotBlank() && categoryValue != "categoría") params.add("categoria=$categoryValue")
-
-        val baseUrl = menuItems.firstOrNull { it.section == com.karin.streamtv.model.MenuSection.DIRECTORY }?.url
-            ?: defaultDirUrl()
+        val baseUrl = if (siteName.equals("MundoDonghua", ignoreCase = true)) {
+            defaultDirUrl()
+        } else {
+            menuItems.firstOrNull { it.section == com.karin.streamtv.model.MenuSection.DIRECTORY }?.url
+                ?: defaultDirUrl()
+        }
         val url = if (params.isNotEmpty()) "$baseUrl?${params.joinToString("&")}" else baseUrl
 
         showLoading("Buscando...")
@@ -632,6 +702,55 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
         }
     }
 
+    // Opciones de filtro del directorio de JKAnime: (etiqueta visible, slug del parámetro).
+    private val jkOrderSlugs = listOf(
+        "Por Fecha" to "",
+        "Por Nombre" to "nombre",
+        "Por Popularidad" to "popularidad"
+    )
+
+    private val jkGenreSlugs = listOf(
+        "Acción" to "accion", "Aventura" to "aventura", "Autos" to "autos",
+        "Comedia" to "comedia", "Dementia" to "dementia", "Demonios" to "demonios",
+        "Misterio" to "misterio", "Drama" to "drama", "Ecchi" to "ecchi",
+        "Fantasía" to "fantasia", "Juegos" to "juegos", "Hentai" to "hentai",
+        "Histórico" to "historico", "Terror" to "terror", "Niños" to "nios",
+        "Magia" to "magia", "Artes Marciales" to "artes-marciales", "Mecha" to "mecha",
+        "Música" to "musica", "Parodia" to "parodia", "Samurái" to "samurai",
+        "Romance" to "romance", "Escolares" to "colegial", "Ciencia Ficción" to "sci-fi",
+        "Shoujo" to "shoujo", "Shoujo Ai" to "shoujo-ai", "Shounen" to "shounen",
+        "Shounen Ai" to "shounen-ai", "Espacial" to "space", "Deportes" to "deportes",
+        "Super Poderes" to "super-poderes", "Vampiros" to "vampiros", "Yaoi" to "yaoi",
+        "Yuri" to "yuri", "Harem" to "harem", "Cosas de la Vida" to "cosas-de-la-vida",
+        "Mahou Shoujo" to "maho-shoujo", "Venganza" to "venganza",
+        "Psicológico" to "psicologico", "Militar" to "militar",
+        "Sobrenatural" to "supernatural", "Josei" to "josei", "Latino" to "latino",
+        "Isekai" to "isekai"
+    )
+
+    private val jkDemoSlugs = listOf(
+        "Niños" to "nios", "Shoujo" to "shoujo", "Shounen" to "shounen",
+        "Seinen" to "seinen", "Josei" to "josei"
+    )
+
+    private val jkTypeSlugs = listOf(
+        "Animes" to "animes", "Películas" to "peliculas", "Especiales" to "especiales",
+        "OVAs" to "ovas", "ONAs" to "onas"
+    )
+
+    private val jkStatusSlugs = listOf(
+        "En emisión" to "emision", "Finalizado" to "finalizados", "Por Estrenar" to "estrenos"
+    )
+
+    private val jkSeasonSlugs = listOf(
+        "Invierno" to "invierno", "Primavera" to "primavera",
+        "Verano" to "verano", "Otoño" to "otoño"
+    )
+
+    private val jkCategorySlugs = listOf(
+        "Donghua" to "donghua", "Latino" to "latino"
+    )
+
     private fun loadDirectoryContent() {
         showLoading("Cargando directorio...")
         hideSearchBar()
@@ -643,8 +762,12 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
         prevPageUrl = null
         updatePaginationBar()
 
-        val dirUrl = menuItems.firstOrNull { it.section == com.karin.streamtv.model.MenuSection.DIRECTORY }?.url
-            ?: defaultDirUrl()
+        val dirUrl = if (siteName.equals("MundoDonghua", ignoreCase = true)) {
+            defaultDirUrl()
+        } else {
+            menuItems.firstOrNull { it.section == com.karin.streamtv.model.MenuSection.DIRECTORY }?.url
+                ?: defaultDirUrl()
+        }
 
         lifecycleScope.launch {
             try {
@@ -700,10 +823,9 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
 
     private fun defaultDirUrl(): String = when (siteName.lowercase()) {
         "latanime" -> "https://latanime.org/animes"
-        "jkanime" -> "https://jkanime.net/animes"
-        "mundodonghua" -> "https://www.mundodonghua.com/listado/"
+        "jkanime" -> "https://jkanime.net/directorio"
+        "mundodonghua" -> "https://www.mundodonghua.com/lista-donghuas"
         "lacartoons" -> "https://lacartoons.com/lista/"
-        "doramasyt" -> "https://www.doramasyt.com/directorio"
         else -> "$siteUrl/animes"
     }
 

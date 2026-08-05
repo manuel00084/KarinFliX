@@ -11,7 +11,6 @@ object SiteBranding {
     val brandColors: Map<String, Int> = mapOf(
         "JKAnime" to Color.parseColor("#1E88E5"),
         "LatAnime" to Color.parseColor("#43A047"),
-        "DoramasYT" to Color.parseColor("#00BCD4"),
         "MundoDonghua" to Color.parseColor("#8E24AA"),
         "RetroTVE" to Color.parseColor("#FF9800"),
         "LaCartoons" to Color.parseColor("#E91E63"),
@@ -21,7 +20,6 @@ object SiteBranding {
     val siteLogos: Map<String, String> = mapOf(
         "JKAnime" to "https://cdn.jkdesa.com/assets3/css/img/jkanimenet.png?v=2.0.184",
         "LatAnime" to "https://latanime.org/img/logito.png",
-        "DoramasYT" to "https://www.doramasyt.com/img/logo6.png?v=1718135438",
         "MundoDonghua" to "https://mundodonghua.com/images/favicon.png",
         "RetroTVE" to "https://retrotve.com/wp-content/uploads/2024/11/cropped-android-chrome-512x512-1-192x192.png",
         "FrikiSeries" to "https://www.frikiserie.com/assets/icon/favicon.png",
