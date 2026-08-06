@@ -57,6 +57,7 @@ class MainActivity : FragmentActivity() {
         override fun sizeOf(key: String, value: Bitmap) = 1
     }
     private var searchJob: Job? = null
+    private val faviconJobs = mutableListOf<Job>()
     private val searchAdapter = SearchResultsAdapter { result ->
         onSearchResultClick(result)
     }
@@ -156,6 +157,10 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (!::etSearch.isInitialized) {
+            finish()
+            return
+        }
         applyHighContrastIfNeeded()
         loadHistory()
         loadContinueWatching()
@@ -201,13 +206,10 @@ class MainActivity : FragmentActivity() {
 
     private fun openVideoFilePicker() {
         try {
-            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                type = "video/*"
-                addCategory(Intent.CATEGORY_OPENABLE)
-            }
-            startActivityForResult(Intent.createChooser(intent, "Seleccionar video"), REQUEST_PICK_VIDEO)
+            val intent = Intent(this, FileExplorerActivity::class.java)
+            startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(this, "No hay selector de archivos disponible", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No se pudo abrir el explorador", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -224,6 +226,15 @@ class MainActivity : FragmentActivity() {
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onBackPressed() {
+        if (::etSearch.isInitialized && etSearch.text.isNotBlank()) {
+            etSearch.text.clear()
+            showSites()
+        } else {
+            super.onBackPressed()
+        }
     }
 
     override fun onLowMemory() {
@@ -318,12 +329,22 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun renderSites() {
+        faviconJobs.forEach { it.cancel() }
+        faviconJobs.clear()
         rowSites.removeAllViews()
 
         val sites = siteManager.getSites()
 
         if (sites.isEmpty()) {
+            if (::tvSearchEmpty.isInitialized) {
+                tvSearchEmpty.text = "No hay sitios configurados"
+                tvSearchEmpty.visibility = View.VISIBLE
+            }
             return
+        }
+
+        if (::tvSearchEmpty.isInitialized) {
+            tvSearchEmpty.visibility = View.GONE
         }
 
         sites.forEachIndexed { index, site ->
@@ -375,7 +396,7 @@ class MainActivity : FragmentActivity() {
         ivLogo.setImageBitmap(DiskImageCache.renderLogoPlate(bmp, plateW, plateH))
 
         val faviconUrl = SiteBranding.siteLogos[site.name]
-        lifecycleScope.launch {
+        faviconJobs += lifecycleScope.launch {
             val plate = withContext(Dispatchers.IO) {
                 val host = runCatching { java.net.URI(site.url).host }.getOrNull()
                 val logo = faviconUrl?.let { DiskImageCache.loadFromNetwork(it, 480, 160) }
@@ -466,7 +487,7 @@ class MainActivity : FragmentActivity() {
                     val bmp = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         DiskImageCache.loadFromNetwork(entry.thumbnailUrl, 300, 180)
                     }
-                    if (bmp != null) {
+                    if (bmp != null && holder.bindingAdapterPosition == position) {
                         holder.ivThumb.setImageBitmap(bmp)
                     }
                 }
@@ -526,7 +547,7 @@ class MainActivity : FragmentActivity() {
                     val bmp = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         DiskImageCache.loadFromNetwork(entry.thumbnailUrl, 400, 220)
                     }
-                    if (bmp != null) {
+                    if (bmp != null && holder.bindingAdapterPosition == position) {
                         holder.ivThumb.setImageBitmap(bmp)
                     }
                 }

@@ -64,7 +64,6 @@ class TvMainActivity : FragmentActivity() {
                 }
             }
 
-            loadRows()
         } catch (e: Exception) {
             Log.e("TvMainActivity", "FATAL onCreate: ${e.message}", e)
             showError("Crash: ${e.message}\n\n${e.stackTraceToString()}")
@@ -89,6 +88,7 @@ class TvMainActivity : FragmentActivity() {
 
     private fun loadRows() {
         try {
+            if (!::rowsAdapter.isInitialized) return
             rowsAdapter.clear()
 
             val sites = siteManager.getSites()

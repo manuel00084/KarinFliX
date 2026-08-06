@@ -2,6 +2,7 @@ package com.karin.streamtv.scraper
 
 import android.util.Log
 import com.karin.streamtv.model.Episode
+import com.karin.streamtv.util.HtmlClean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.nodes.Document
@@ -86,11 +87,13 @@ abstract class GenericScraper : BaseScraper {
 
                 // URL — try selectors in order
                 val urlEl = firstMatch(card, urlSel) ?: card.selectFirst("a")
-                val url = urlEl?.attr(urlAttr)?.takeIf { it.isNotBlank() } ?: return@forEachIndexed
+                val rawUrl = urlEl?.attr(urlAttr)?.takeIf { it.isNotBlank() } ?: return@forEachIndexed
+                val url = HtmlClean.resolveUrl(doc.baseUri(), rawUrl)
 
                 // Title — try selectors in order
                 val titleEl = firstMatch(card, titleSel)
-                val title = if (titleAttr == "text") titleEl?.text()?.trim() else titleEl?.attr(titleAttr)?.trim()
+                val rawTitle = if (titleAttr == "text") titleEl?.text()?.trim() else titleEl?.attr(titleAttr)?.trim()
+                val title = rawTitle?.let { HtmlClean.clean(it) }
                 if (title.isNullOrBlank()) return@forEachIndexed
 
                 // Thumbnail — try selectors in order, then try attrs in order, then background-image
@@ -101,7 +104,7 @@ abstract class GenericScraper : BaseScraper {
                     thumbAttrs.firstNotNullOfOrNull { attr ->
                         img.attr(attr).ifBlank { null }
                     }
-                } ?: findBackgroundImage(card)
+                }?.let { HtmlClean.resolveUrl(doc.baseUri(), it) } ?: findBackgroundImage(card)
 
                 // Date — try selectors in order
                 val date = dateSel.firstNotNullOfOrNull { sel ->
@@ -175,7 +178,7 @@ abstract class GenericScraper : BaseScraper {
         for (el in elements) {
             val match = bgPattern.find(el.attr("style"))
             val url = match?.groupValues?.get(1)?.trim()?.ifBlank { null }
-            if (url != null) return url
+            if (url != null) return HtmlClean.resolveUrl(card.baseUri(), url)
         }
         return ""
     }

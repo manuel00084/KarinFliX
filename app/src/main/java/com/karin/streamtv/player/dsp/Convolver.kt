@@ -14,11 +14,25 @@ import kotlin.math.sin
  * entrada se hace 1 FFT, la acumulación espectral (partición * historial de
  * espectros) y 1 IFFT.
  *
- * Expone una interfaz muestra a muestra ([process]) para integrarse fácil en el
- * bucle del AudioProcessor: internamente acumula entradas y rinde un bloque de
- * salida cada [blockSize] muestras (latencia de un bloque de FFT).
- */
+     * Expone una interfaz muestra a muestra ([process]) para integrarse fácil en el
+     * bucle del AudioProcessor: internamente acumula entradas y rinde un bloque de
+     * salida cada [blockSize] muestras (latencia de un bloque de FFT).
+     */
 class Convolver {
+    companion object {
+        private const val MAX_FFT_SIZE = 1024
+        private val TWIDDLE_RE: FloatArray = FloatArray(MAX_FFT_SIZE + 1)
+        private val TWIDDLE_IM: FloatArray = FloatArray(MAX_FFT_SIZE + 1)
+
+        init {
+            for (k in 0..MAX_FFT_SIZE) {
+                val ang = 2.0 * PI * k / MAX_FFT_SIZE
+                TWIDDLE_RE[k] = cos(ang).toFloat()
+                TWIDDLE_IM[k] = sin(ang).toFloat()
+            }
+        }
+    }
+
     private var blockSize = 512
     private var fftSize = 1024
 
@@ -146,26 +160,23 @@ class Convolver {
         }
         var len = 2
         while (len <= n) {
-            val ang = (if (forward) -1.0 else 1.0) * 2.0 * PI / len
-            val wlenR = cos(ang).toFloat()
-            val wlenI = sin(ang).toFloat()
+            val half = len / 2
+            val step = MAX_FFT_SIZE / len
+            val sign = if (forward) -1f else 1f
             var i = 0
             while (i < n) {
-                var wR = 1.0f
-                var wI = 0.0f
-                val half = len / 2
                 for (k in 0 until half) {
+                    val idx = k * step
+                    val wr = TWIDDLE_RE[idx]
+                    val wi = sign * TWIDDLE_IM[idx]
                     val ur = re[i + k]
                     val ui = im[i + k]
-                    val vr = re[i + k + half] * wR - im[i + k + half] * wI
-                    val vi = re[i + k + half] * wI + im[i + k + half] * wR
+                    val vr = re[i + k + half] * wr - im[i + k + half] * wi
+                    val vi = re[i + k + half] * wi + im[i + k + half] * wr
                     re[i + k] = ur + vr
                     im[i + k] = ui + vi
                     re[i + k + half] = ur - vr
                     im[i + k + half] = ui - vi
-                    val twR = wR * wlenR - wI * wlenI
-                    wI = wR * wlenI + wI * wlenR
-                    wR = twR
                 }
                 i += len
             }

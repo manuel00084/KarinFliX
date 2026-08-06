@@ -22,8 +22,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.karin.streamtv.R
-import com.karin.streamtv.util.AniSkipService
-import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.CloudflareInterceptor
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.EpisodeProgress
@@ -56,10 +54,49 @@ class EmbedWebViewActivity : AppCompatActivity() {
     private var presented = false
     private var launching = false
     private var hiddenContainer: FrameLayout? = null
+    private var errorScreenShown = false
+    private var errorScreenShownCompleted = false
     
-    private var skipInterval: AniSkipService.SkipInterval? = null
     companion object {
         private const val TAG = "EmbedWebView"
+
+        private val ALLOWED_ORIGIN_HOSTS = setOf(
+            "jkanime.net", "cdn.jkdesa.com", "latanime.org", "mundodonghua.com",
+            "retrotve.com", "lacartoons.com", "doramasyt.com", "frikiserie.com",
+            "pandrama.info", "pandrama.tv", "pelisplus.to", "pelisplus4k.info",
+            "pelisflix1.dev", "pelisplushd.id", "pelisplushd.la", "pelisplushd.mx",
+            "bysekoze.com", "karintv.app",
+            "cloudatacdn.com", "doodcdn.com"
+        )
+
+        private val BLOCKED_HOST_KEYWORDS = listOf(
+            "localhost", "127.0.0.1", "10.", "192.168.", "172.16.", "172.17.",
+            "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
+            "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+            "172.30.", "172.31.", "[::1]"
+        )
+
+        private fun isSafeVideoUrl(raw: String): Boolean {
+            val url = raw.trim()
+            if (!url.startsWith("http://") && !url.startsWith("https://")) return false
+            val host = try { android.net.Uri.parse(url).host?.lowercase()?.trim() } catch (e: Exception) { null }
+                ?: return false
+            if (host.isBlank()) return false
+            if (BLOCKED_HOST_KEYWORDS.any { host.contains(it) }) return false
+            if (ALLOWED_ORIGIN_HOSTS.any { host == it || host.endsWith(".$it") }) return true
+            return com.karin.streamtv.model.VideoServer.detectServer(url) != com.karin.streamtv.model.VideoServer.GENERIC
+        }
+
+        private fun isSafeEpisodeUrl(raw: String): Boolean {
+            val url = raw.trim()
+            if (!url.startsWith("http://") && !url.startsWith("https://")) return false
+            val host = try { android.net.Uri.parse(url).host?.lowercase()?.trim() } catch (e: Exception) { null }
+                ?: return false
+            if (host.isBlank()) return false
+            if (BLOCKED_HOST_KEYWORDS.any { host.contains(it) }) return false
+            if (ALLOWED_ORIGIN_HOSTS.any { host == it || host.endsWith(".$it") }) return true
+            return host.split(".").size >= 2
+        }
 
         private const val DIAG_JS = """
 (function(){
@@ -158,6 +195,7 @@ class EmbedWebViewActivity : AppCompatActivity() {
     var adIframeRe=/doubleclick|googlesyndication|adsense|adnxs|adroll|taboola|outbrain|advertising|facebook\.com\/plugins|popads|propellerads|exoclick|clickadu|criteo|amazon-adsystem|mgid|exosrv|trafficjunky/;
     var adScriptRe=/doubleclick|googlesyndication|adsense|pagead|adnxs|adsrvr|adroll|taboola|outbrain|mgid|popads|propellerads|exoclick|clickadu|criteo|amazon-adsystem|moatads|quantserve|scorecardresearch|exosrv|trafficjunky|juicyads|epidemictuna|marginoboles/;
 
+    var __kfSweep__=0;
     function kfCleanAds(root){
         if(isVideoHost){return;}
         adSel.forEach(function(sel){
@@ -180,7 +218,12 @@ class EmbedWebViewActivity : AppCompatActivity() {
             el.style.display='none';el.style.visibility='hidden';el.style.pointerEvents='none';el.style.zIndex='-1';el.remove();
         });
         root.querySelectorAll('[class*="play"]').forEach(function(el){el.style.pointerEvents='auto';});
-        root.querySelectorAll('*').forEach(function(el){
+        // Barrido caro que recorre TODO el DOM con getComputedStyle: se hace solo
+        // las primeras 2 veces, no en cada tray del observer/interval (era el mayor
+        // consumo de CPU). El resto de la limpieza sigue siendo por selectores.
+        if(__kfSweep__<2){
+            __kfSweep__++;
+            root.querySelectorAll('*').forEach(function(el){
             try{
                 var s=getComputedStyle(el);
                 if((s.position==='fixed'||s.position==='sticky')&&parseInt(s.zIndex)>900000){
@@ -191,15 +234,16 @@ class EmbedWebViewActivity : AppCompatActivity() {
                     }
                 }
             }catch(e){}
-        });
-        root.querySelectorAll('*').forEach(function(el){
+            });
+            root.querySelectorAll('*').forEach(function(el){
             try{
                 var s=getComputedStyle(el);
                 if(s.position==='fixed'&&parseInt(s.zIndex)>1000&&el.querySelector('video')===null&&el.querySelector('iframe')===null){
                     el.style.pointerEvents='none';el.style.display='none';el.remove();
                 }
             }catch(e){}
-        });
+            });
+        }
         root.querySelectorAll('[style*="overflow:hidden"]').forEach(function(el){
             var cls=(el.className||'').toLowerCase();
             if(cls.indexOf('video')===-1&&cls.indexOf('player')===-1){
@@ -212,11 +256,20 @@ class EmbedWebViewActivity : AppCompatActivity() {
         });
     }
     kfCleanAds(document);
+    // Observer de DOM: con debounce (>=700ms) y que se desconecta solo a los 3s,
+    // para no re-recorrer la página permanentemente (antes quedaba activo y junto
+    // al setInterval infinito consumía CPU de layout cada pocos instantes).
     try{
-        var mo=new MutationObserver(function(mutations){kfCleanAds(document);});
+        var moLast=0;
+        var mo=new MutationObserver(function(){
+            var t=Date.now();
+            if(t-moLast>700){moLast=t;kfCleanAds(document);}
+        });
         mo.observe(document.documentElement,{childList:true,subtree:true});
+        setTimeout(function(){try{mo.disconnect();}catch(e){}},30000);
     }catch(e){}
-    setInterval(function(){kfCleanAds(document);},2000);
+    // En vez de setInterval infinito, solo 6 limpiezas acotadas (2.5s c/u) y para.
+    (function(){var k=0;var iv=setInterval(function(){++k;if(k>=6){clearInterval(iv);}kfCleanAds(document);},2500);})();
     console.log('KF: AdBlock active ('+adSel.length+' selectors)');
 })();
 """
@@ -1470,6 +1523,28 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
 
             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
                 Log.e(TAG, "WebView error: $errorCode - $description at $failingUrl")
+                val mainUrl = intent.getStringExtra("embed_url") ?: ""
+                // Solo errores de conexión/host/timeout en la página principal → pantalla de error.
+                val isFatal = errorCode == android.webkit.WebViewClient.ERROR_HOST_LOOKUP ||
+                        errorCode == android.webkit.WebViewClient.ERROR_CONNECT ||
+                        errorCode == android.webkit.WebViewClient.ERROR_TIMEOUT ||
+                        errorCode == android.webkit.WebViewClient.ERROR_UNKNOWN ||
+                        errorCode == android.webkit.WebViewClient.ERROR_IO
+                val isMainFrame = failingUrl == null || mainUrl.isBlank() ||
+                        failingUrl == mainUrl || failingUrl.startsWith(mainUrl.take(40))
+                if (isFatal && isMainFrame && !videoFound && !errorScreenShown && !hasOpenedExternal) {
+                    errorScreenShown = true
+                    // Retardo corto para no chocar con el failover de servidores.
+                    mainHandler.postDelayed({
+                        if (!videoFound && !errorScreenShownCompleted) {
+                            errorScreenShownCompleted = true
+                            showErrorScreen(
+                                "La página no respondió o no está disponible.",
+                                mainUrl
+                            )
+                        }
+                    }, 4000)
+                }
             }
 
             override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: android.webkit.WebResourceResponse?) {
@@ -1540,6 +1615,10 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
     }
 
     private fun openExoFromResolved(resolved: com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo) {
+        if (!isSafeVideoUrl(resolved.url)) {
+            Log.w(TAG, "Blocked opening unsafe video URL")
+            return
+        }
         videoFound = true
         if (animeId.isNotBlank() && episodeNumber > 0) {
             EpisodeProgress.markWatched(animeId, episodeNumber)
@@ -1583,9 +1662,9 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
     }
 
     private fun presentExtracted(bestUrl: String, allUrlsJson: String) {
-        val urls = parseJsonUrls(allUrlsJson).filter { it.startsWith("http") }
+        val urls = parseJsonUrls(allUrlsJson).filter { isSafeVideoUrl(it) }
         val list = if (urls.isEmpty()) {
-            if (bestUrl.startsWith("http")) listOf(bestUrl) else emptyList()
+            if (isSafeVideoUrl(bestUrl)) listOf(bestUrl) else emptyList()
         } else urls
         val links = list.map {
             com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo(
@@ -1598,13 +1677,18 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
 
     private fun presentExtracted(links: List<com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo>) {
         if (presented || launching) return
-        val unique = links.distinctBy { it.url }.filter { it.url.startsWith("http") }
+        val unique = links.distinctBy { it.url }.filter { isSafeVideoUrl(it.url) }
         if (unique.isEmpty()) {
             mainHandler.post { showNoLinkDialog() }
             return
         }
         presented = true
-        mainHandler.post { showExtractedDialog(unique) }
+        if (unique.size == 1) {
+            Log.i(TAG, "Auto-launching single extracted link")
+            mainHandler.post { openExoFromResolved(unique[0]) }
+        } else {
+            mainHandler.post { showExtractedDialog(unique) }
+        }
     }
 
     private fun parseJsonUrls(allUrlsJson: String): List<String> {
@@ -1645,25 +1729,24 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
         presented = true
         loadingLayout.visibility = View.GONE
         val embedUrl = intent.getStringExtra("embed_url") ?: ""
-        val dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
-            .setTitle("Sin enlace directo")
-            .setMessage("No se pudo extraer un enlace de video directo de este servidor en segundo plano.")
-            .setPositiveButton("Reintentar") { _, _ ->
-                presented = false
-                videoFound = false
-                if (embedUrl.isNotBlank()) webView.loadUrl(embedUrl)
-            }
-            .setNegativeButton("Abrir en navegador") { _, _ ->
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(embedUrl)))
-                } catch (e: Exception) {
-                    Log.w(TAG, "No browser for embed url")
-                }
-                finish()
-            }
-            .setNeutralButton("Cancelar") { _, _ -> finish() }
-            .create()
-        dialog.show()
+        startActivity(
+            Intent(this, ErrorActivity::class.java)
+                .putExtra("message", "No se pudo extraer un enlace de video de los servidores.")
+                .putExtra("embed_url", embedUrl)
+        )
+        finish()
+    }
+
+    private fun showErrorScreen(message: String, embedUrl: String) {
+        if (errorScreenShownCompleted) return
+        errorScreenShownCompleted = true
+        loadingLayout.visibility = View.GONE
+        startActivity(
+            Intent(this, ErrorActivity::class.java)
+                .putExtra("message", message)
+                .putExtra("embed_url", embedUrl)
+        )
+        finish()
     }
 
     private fun tryNextServer() {
@@ -1693,18 +1776,30 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
     private inner class VideoBridge {
         @JavascriptInterface
         fun onVideoFound(url: String, allUrlsJson: String) {
+            if (!isSafeVideoUrl(url)) {
+                Log.w(TAG, "Blocked JS bridge: unsafe video URL from page")
+                return
+            }
             Log.i(TAG, "Video source found: ${url.takeLast(60)}")
-            presentExtracted(url, allUrlsJson)
+            mainHandler.post { presentExtracted(url, allUrlsJson) }
         }
 
         @JavascriptInterface
         fun onDirectVideoFound(url: String, allUrlsJson: String) {
+            if (!isSafeVideoUrl(url)) {
+                Log.w(TAG, "Blocked JS bridge: unsafe direct video URL from page")
+                return
+            }
             Log.i(TAG, "Direct video URL (native fallback): ${url.takeLast(60)}")
-            presentExtracted(url, allUrlsJson)
+            mainHandler.post { presentExtracted(url, allUrlsJson) }
         }
 
         @JavascriptInterface
         fun onNextEpisodeFound(url: String) {
+            if (!isSafeEpisodeUrl(url)) {
+                Log.w(TAG, "Blocked JS bridge: unsafe next episode URL from page")
+                return
+            }
             Log.i(TAG, "Next episode URL from DOM: ${url.takeLast(80)}")
             nextEpisodeUrlFromDom = url
         }
@@ -1788,95 +1883,6 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
                     override fun onAutoPlayCancelled() {}
                 })
             }
-        }
-    }
-
-    private fun fetchSkipTimes() {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val result = AniSkipService.getSkipTimes(title, episodeNumber)
-                withContext(Dispatchers.Main) {
-                    if (AppPreferences.isSkipOpeningEnabled() && result.opening != null) {
-                        skipInterval = result.opening
-                        skipType = "op"
-                        Log.d(TAG, "Skip opening available: ${result.opening.startTime} - ${result.opening.endTime}")
-                        startSkipMonitor()
-                    } else if (AppPreferences.isSkipEndingEnabled() && result.ending != null) {
-                        skipInterval = result.ending
-                        skipType = "ed"
-                        Log.d(TAG, "Skip ending available: ${result.ending.startTime} - ${result.ending.endTime}")
-                        startSkipMonitor()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to fetch skip times: ${e.message}")
-            }
-        }
-    }
-
-    private fun startSkipMonitor() {
-        val interval = skipInterval ?: return
-        val js = """
-            (function(){
-                if(window.__kf_skip_monitor__)return;window.__kf_skip_monitor__=1;
-                var startTime=${interval.startTime};
-                var endTime=${interval.endTime};
-                var lastUpdate=0;
-                function kfCheckSkip(){
-                    var videos=document.querySelectorAll('video');
-                    for(var i=0;i<videos.length;i++){
-                        var v=videos[i];
-                        if(v.currentTime>=startTime&&v.currentTime<endTime){
-                            if(!window.__kf_skip_visible__){
-                                window.__kf_skip_visible__=1;
-                                if(window.KarinBridge){KarinBridge.onSkipIntervalReached('skip');}
-                            }
-                        }else{
-                            if(window.__kf_skip_visible__){
-                                window.__kf_skip_visible__=0;
-                                if(window.KarinBridge){KarinBridge.onSkipIntervalLeft();}
-                            }
-                        }
-                    }
-                }
-                setInterval(kfCheckSkip,500);
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(js, null)
-    }
-
-    private fun skipCurrentInterval() {
-        val interval = skipInterval ?: return
-        val endTime = interval.endTime
-        val js = """
-            (function(){
-                var videos=document.querySelectorAll('video');
-                for(var i=0;i<videos.length;i++){
-                    var v=videos[i];
-                    v.currentTime=$endTime;
-                    v.play();
-                }
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(js, null)
-        hideSkipButton()
-        Log.d(TAG, "Skipped $skipType to $endTime")
-    }
-
-    private fun showSkipButton(type: String) {
-        if (isShowingSkipButton) return
-        isShowingSkipButton = true
-        mainHandler.post {
-            skipButtonContainer.visibility = View.VISIBLE
-            btnSkip.text = if (type == "op") "Saltar Opening" else "Saltar Ending"
-            btnSkip.requestFocus()
-        }
-    }
-
-    private fun hideSkipButton() {
-        isShowingSkipButton = false
-        mainHandler.post {
-            skipButtonContainer.visibility = View.GONE
         }
     }
 

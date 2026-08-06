@@ -3,6 +3,7 @@ package com.karin.streamtv.karinlink
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.widget.EditText
@@ -36,6 +37,22 @@ class KarinLinkActivity : FragmentActivity() {
         karinLink = KarinLinkManager(this)
         karinLink.start()
 
+        karinLink.onPlaybackRequest = { title, epUrl, embed, site ->
+            runOnUiThread {
+                if (embed.isNotBlank()) {
+                    finish()
+                    val intent = android.content.Intent(this, com.karin.streamtv.ui.EmbedWebViewActivity::class.java)
+                    intent.putExtra("embed_url", embed)
+                    intent.putExtra("video_title", title)
+                    intent.putExtra("episode_url", epUrl)
+                    intent.putExtra("episode_number", 0)
+                    startActivity(intent)
+                } else {
+                    Toast.makeText(this, "Recibido: $title", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
         tvStatus = findViewById(R.id.tv_karinlink_status)
         tvDevices = findViewById(R.id.tv_karinlink_devices)
         tvRoom = findViewById(R.id.tv_karinlink_room)
@@ -52,6 +69,24 @@ class KarinLinkActivity : FragmentActivity() {
 
         refreshDevices()
         observeState()
+        handleJoinIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleJoinIntent(intent)
+    }
+
+    private fun handleJoinIntent(intent: android.content.Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != "karinflinx" || uri.host != "room") return
+        val roomId = uri.path?.removePrefix("/") ?: return
+        val host = uri.getQueryParameter("host")
+        val port = uri.getQueryParameter("port")?.toIntOrNull()
+        Log.i("KarinLink", "Join request: room=$roomId host=$host port=$port")
+        karinLink.joinRoom(roomId, host, port)
+        Toast.makeText(this, "Uniéndote a la sala $roomId...", Toast.LENGTH_SHORT).show()
     }
 
     private fun observeState() {
@@ -73,11 +108,12 @@ class KarinLinkActivity : FragmentActivity() {
         lifecycleScope.launch {
             karinLink.roomManager.currentRoom.collect { room ->
                 if (room != null) {
-                    tvRoom.text = "Sala: ${room.name} (${room.id})\nMiembros: ${room.members.size}"
+                    tvRoom.text = "Sala: ${room.name} (${room.id})\nMiembros: ${room.members.size}\nIP: ${karinLink.localIpAddress()}:${LinkServer.port}"
                     tvRoom.visibility = View.VISIBLE
                     generateRoomQR(room.id)
                 } else {
                     tvRoom.visibility = View.GONE
+                    ivQR.visibility = View.GONE
                 }
             }
         }
@@ -97,7 +133,11 @@ class KarinLinkActivity : FragmentActivity() {
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(24, 16, 24, 16)
-                setBackgroundResource(android.R.drawable.dialog_holo_dark_frame)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                    cornerRadius = dp(8).toFloat()
+                    setColor(Color.parseColor("#B3000000")) // negro traslúcido
+                }
                 val lp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -149,7 +189,7 @@ class KarinLinkActivity : FragmentActivity() {
 
     private fun generateRoomQR(roomId: String) {
         try {
-            val contents = "karinflinx://room/$roomId"
+            val contents = karinLink.getJoinUrl(roomId)
             val qrSize = 300
             val writer = QRCodeWriter()
             val matrix = writer.encode(contents, BarcodeFormat.QR_CODE, qrSize, qrSize)
@@ -161,9 +201,18 @@ class KarinLinkActivity : FragmentActivity() {
             }
             ivQR.setImageBitmap(bitmap)
             ivQR.visibility = View.VISIBLE
+            tvRoom.text = "Sala: ${roomManagerRoomName(roomId)} ($roomId)\nMiembros: ${roomManagerRoomSize(roomId)}\nIP: ${karinLink.localIpAddress()}:${LinkServer.port}"
         } catch (e: Exception) {
             ivQR.visibility = View.GONE
         }
+    }
+
+    private fun roomManagerRoomName(roomId: String): String {
+        return karinLink.roomManager.currentRoom.value?.name ?: "Sala $roomId"
+    }
+
+    private fun roomManagerRoomSize(roomId: String): Int {
+        return karinLink.roomManager.currentRoom.value?.members?.size ?: LinkServer.roomSize(roomId)
     }
 
     private fun refreshDevices() {
@@ -219,5 +268,9 @@ class KarinLinkActivity : FragmentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         karinLink.stop()
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
     }
 }

@@ -37,11 +37,12 @@ class LinkClient {
         this.handler = handler
     }
 
-    fun connect(host: String, port: Int, deviceId: String, deviceName: String) {
+    fun connect(host: String, port: Int, deviceId: String, deviceName: String, roomId: String? = null) {
         val request = Request.Builder()
             .url("ws://$host:$port/ws")
             .header("X-Device-Id", deviceId)
             .header("X-Device-Name", deviceName)
+            .header("X-Room-Id", roomId ?: "")
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -51,6 +52,7 @@ class LinkClient {
                     put("deviceId", deviceId)
                     put("deviceName", deviceName)
                     put("appVersion", "1.0")
+                    if (roomId != null) put("roomId", roomId)
                 })
             }
 

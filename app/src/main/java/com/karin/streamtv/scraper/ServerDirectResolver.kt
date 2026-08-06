@@ -43,8 +43,8 @@ object ServerDirectResolver {
                 val result = when {
                     lower.contains("dsvplay") || lower.contains("playmogo") ||
                             lower.contains("doodstream") || lower.contains("dooood") ||
-                            lower.contains("d0000d") || lower.contains("dood") -> resolveDood(url)
-                    lower.contains("voe") || lower.contains("jessicachoosemake") -> resolveVoe(url)
+                            lower.contains("d0000d") || lower.contains("dood") -> resolveDood(url, referer)
+                    lower.contains("voe") || lower.contains("jessicachoosemake") -> resolveVoe(url, referer)
                     lower.contains("byse") || lower.contains("bysekoze") -> resolveByse(url)
                     lower.contains("mega") -> resolveMega(url)
                     else -> null
@@ -66,11 +66,11 @@ object ServerDirectResolver {
      * Resolves a video URL using pre-fetched HTML (e.g., from CloudflareInterceptor.solveWithWebView).
      * Used when the URL is behind Cloudflare and HTTP fetch returns a challenge page instead of the real content.
      */
-    fun resolveFromHtml(url: String, html: String, referer: String = ""): ResolvedVideo? {
+    suspend fun resolveFromHtml(url: String, html: String, referer: String = ""): ResolvedVideo? {
         return try {
             val lower = url.lowercase()
             when {
-                lower.contains("voe") || lower.contains("jessicachoosemake") -> resolveVoeFromHtml(html, url)
+                lower.contains("voe") || lower.contains("jessicachoosemake") -> resolveVoeFromHtml(html, url, referer)
                 else -> null
             }
         } catch (e: Exception) {
@@ -90,40 +90,85 @@ object ServerDirectResolver {
 
     // region --- HTTP helpers ---
 
-    private fun getString(
+    private suspend fun getString(
         url: String,
         referer: String? = null,
         cookie: String? = null,
         acceptJson: Boolean = false
     ): Pair<Int, String> {
-        val rb = Request.Builder()
-            .url(url)
-            .header("User-Agent", UA)
+        val result = tryOrdinary(url, referer, cookie, acceptJson, isPost = false, postBody = null)
+        if (result != null) return result
+        // Fallback: use ScrapingEngine's CF bypass
+        return fetchViaCfBypass(url, referer) ?: (403 to "")
+    }
+
+    private suspend fun postJson(url: String, json: String): Pair<Int, String> {
+        val result = tryOrdinary(
+            url = url,
+            referer = null,
+            cookie = null,
+            acceptJson = true,
+            isPost = true,
+            postBody = json
+        )
+        if (result != null) return result
+        return fetchViaCfBypass(url, null) ?: (403 to "")
+    }
+
+    private suspend fun tryOrdinary(
+        url: String,
+        referer: String?,
+        cookie: String?,
+        acceptJson: Boolean,
+        isPost: Boolean,
+        postBody: String?
+    ): Pair<Int, String>? {
+        val host = try { java.net.URI(url).host ?: "" } catch (_: Exception) { "" }
+        // If the host was already CF-locked, use the same UA that cf_clearance is bound to.
+        val ua = ScrapingEngine.getLockedUa(host) ?: UA
+
+        val rb = Request.Builder().url(url)
+            .header("User-Agent", ua)
             .header("Accept-Language", "es-ES,es;q=0.9")
         if (acceptJson) {
             rb.header("Accept", "application/json, text/plain, */*")
         } else {
             rb.header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         }
-        if (referer != null) rb.header("Referer", referer)
-        if (cookie != null) rb.header("Cookie", cookie)
+        referer?.let { rb.header("Referer", it) }
+        cookie?.let { rb.header("Cookie", it) }
+        if (isPost && postBody != null) {
+            rb.post(postBody.toRequestBody("application/json".toMediaType()))
+        }
         client.newCall(rb.build()).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
+            if (com.karin.streamtv.util.CloudflareInterceptor.isCloudflareChallenge(resp.code, body, resp.header("Server"))) {
+                Log.w(TAG, "CF challenge for $url (code=${resp.code}) — will fallback to CF bypass")
+                return null
+            }
             return resp.code to body
         }
     }
 
-    private fun postJson(url: String, json: String): Pair<Int, String> {
-        val rb = Request.Builder()
-            .url(url)
-            .header("User-Agent", UA)
-            .header("Accept-Language", "es-ES,es;q=0.9")
-            .header("Content-Type", "application/json")
-            .post(json.toRequestBody("application/json".toMediaType()))
-        client.newCall(rb.build()).execute().use { resp ->
-            val body = resp.body?.string().orEmpty()
-            return resp.code to body
+    /**
+     * Fallback: use ScrapingEngine's built-in Cloudflare bypass (WebView) to fetch the page.
+     * Returns (statusCode, htmlBody) or null if bypass fails.
+     */
+    private suspend fun fetchViaCfBypass(url: String, referer: String? = null): Pair<Int, String>? {
+        val host = try { java.net.URI(url).host ?: "" } catch (_: Exception) { "" }
+        if (host.isBlank()) return null
+        Log.i(TAG, "CF bypass fallback for host: $host")
+        val cacheKey = "sdr_cfbypass::${host}::${url.hashCode()}"
+        val doc = ScrapingEngine.fetch(url, "ServerDirectResolver", cacheKey, referer = referer)
+        if (doc == null) return null
+        val html = doc.body().html()
+        if (html.isBlank()) return null
+        if (com.karin.streamtv.util.CloudflareInterceptor.isCloudflareChallenge(200, html, null)) {
+            Log.w(TAG, "CF bypass returned challenge page for $url")
+            return null
         }
+        Log.i(TAG, "CF bypass succeeded for $url (${html.length} chars)")
+        return 200 to html
     }
 
     private fun b64urlDecode(s: String): ByteArray {
@@ -133,18 +178,19 @@ object ServerDirectResolver {
     }
 
     private fun randomChars(n: Int): String {
+        val rng = java.security.SecureRandom()
         val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-        val buf = java.security.SecureRandom().apply { nextBytes(ByteArray(64)) }
-        return (0 until n).map { chars[Math.floorMod(buf.nextInt(), chars.length)] }.joinToString("")
+        return (0 until n).map { chars[rng.nextInt(chars.length)] }.joinToString("")
     }
     // endregion
 
     // region --- DoodStream (dsvplay/playmogo/dooood/d0000d) ---
     // Flow: GET /e/{id} -> page contains `$.get('/pass_md5/{file_id}-188-93-{ts}-{hash}/{token}')`
     // GET /pass_md5/... -> body is the direct CDN URL; final = url + 10 random chars + ?token=...&expiry=...
-    private fun resolveDood(url: String): ResolvedVideo? {
+    private suspend fun resolveDood(url: String, referer: String = ""): ResolvedVideo? {
         val host = Regex("""(https?://[^/]+)""").find(url)?.groupValues?.get(1) ?: return null
-        val (code, body) = getString(url)
+        val effectiveRefer = referer.ifBlank { "$host/" }
+        val (code, body) = getString(url, referer = effectiveRefer)
         if (code != 200) {
             Log.w(TAG, "dood embed HTTP $code")
             return null
@@ -167,8 +213,8 @@ object ServerDirectResolver {
         val final = "$direct${randomChars(10)}?token=$token&expiry=${System.currentTimeMillis()}"
         return ResolvedVideo(
             url = final,
-            referer = "$host/",
-            extraHeaders = mapOf("Referer" to "$host/")
+            referer = effectiveRefer,
+            extraHeaders = mapOf("Referer" to effectiveRefer)
         )
     }
     // endregion
@@ -176,15 +222,15 @@ object ServerDirectResolver {
     // region --- VOE (voe.sx / mirror) ---
     // Flow: voe.sx -> JS redirect to mirror (jessicachoosemake.com...) -> page has
     // <script type="application/json">["...encoded..."]</script> -> decryptF7 -> {source: m3u8}
-    private fun resolveVoe(url: String): ResolvedVideo? {
-        val (c1, body1) = getString(url)
+    private suspend fun resolveVoe(url: String, referer: String = ""): ResolvedVideo? {
+        val (c1, body1) = getString(url, referer = referer.ifBlank { null })
         if (c1 != 200) return null
-        return resolveVoeFromHtml(body1, url)
+        return resolveVoeFromHtml(body1, url, referer)
     }
 
-    private fun resolveVoeFromHtml(html: String, url: String): ResolvedVideo? {
+    private suspend fun resolveVoeFromHtml(html: String, url: String, referer: String = ""): ResolvedVideo? {
         val target = Regex("""location\.href\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
-        val (c2, body2) = if (target != null) getString(target, referer = url) else {
+        val (c2, body2) = if (target != null) getString(target, referer = referer.ifBlank { url }) else {
             // Cloudflare bypass gave us the real page directly; use it as body2
             200 to html
         }
@@ -242,7 +288,7 @@ object ServerDirectResolver {
     // region --- Byse (bysekoze.com / byse.to) ---
     // Flow: GET /api/videos/{id} -> playback {version, iv, payload, key_parts}
     // key = key_parts[version] + key_parts[31-version] (base64url) -> AES-256-GCM -> sources[].url (m3u8)
-    private fun resolveByse(url: String): ResolvedVideo? {
+    private suspend fun resolveByse(url: String): ResolvedVideo? {
         val id = url.substringAfterLast("/").trim().substringBefore("?")
         if (id.isBlank() || !id.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
             Log.w(TAG, "byse bad id: $id")
@@ -299,7 +345,7 @@ object ServerDirectResolver {
     // region --- Mega (mega.nz) ---
     // Flow: POST g.api.mega.co.nz/cs {"a":"g","g":1,"p":id} -> {g: direct url (AES-CTR encrypted), s, at}
     // Playback requires on-the-fly AES-128-CTR decryption via MegaDecryptingDataSource.
-    private fun resolveMega(url: String): ResolvedVideo? {
+    private suspend fun resolveMega(url: String): ResolvedVideo? {
         val m = Regex("""(?:/#!|/file/)(.+?)(?:!|#)([^#!?]+)""").find(url) ?: run {
             Log.w(TAG, "mega url not #!id!key or /file/id#key format")
             return null

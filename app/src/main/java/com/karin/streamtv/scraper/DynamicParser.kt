@@ -2,6 +2,7 @@ package com.karin.streamtv.scraper
 
 import android.util.Log
 import com.karin.streamtv.model.Episode
+import com.karin.streamtv.util.HtmlClean
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -164,14 +165,14 @@ object DynamicParser {
             if (text.isNotBlank()) return text
         }
 
-        val link = card.selectFirst("a") ?: return card.text().trim().takeIf { it.length > 3 }
+        val link = card.selectFirst("a") ?: return HtmlClean.clean(card.text()).takeIf { it.length > 3 }
         val text = link.text().trim()
-        if (text.isNotBlank() && text.length > 3) return text
-        val titleAttr = link.attr("title").trim()
+        if (text.isNotBlank() && text.length > 3) return HtmlClean.clean(text)
+        val titleAttr = HtmlClean.clean(link.attr("title"))
         if (titleAttr.isNotBlank()) return titleAttr
 
         // Last resort: longest non-empty text in card
-        return card.text().trim().takeIf { it.length > 3 }
+        return HtmlClean.clean(card.text()).takeIf { it.length > 3 }
     }
 
     /**
@@ -207,12 +208,12 @@ object DynamicParser {
 
             src to area
         }
-
+        // Resuelve la URL elegida contra la base del documento (RFC 3986)
         val best = thumbs.maxByOrNull { it.second }?.first
-        if (best != null) return best
+        if (best != null) return HtmlClean.resolveUrl(images.firstOrNull()?.baseUri() ?: "", best)
 
         val firstImg = images.firstOrNull() ?: return ""
-        return firstImg.attr("data-src").ifBlank {
+        return HtmlClean.resolveUrl(firstImg.baseUri(), firstImg.attr("data-src").ifBlank {
             firstImg.attr("data-lazy").ifBlank {
                 firstImg.attr("data-original").ifBlank {
                     firstImg.attr("data-lazy-src").ifBlank {
@@ -224,7 +225,7 @@ object DynamicParser {
                     }
                 }
             }
-        }
+        })
     }
 
     private fun findBackgroundImage(card: Element): String {
@@ -233,7 +234,7 @@ object DynamicParser {
         for (el in elements) {
             val match = bgPattern.find(el.attr("style"))
             val url = match?.groupValues?.get(1)?.trim()?.ifBlank { null }
-            if (url != null) return url
+            if (url != null) return HtmlClean.resolveUrl(card.baseUri(), url)
         }
         return ""
     }
@@ -336,16 +337,17 @@ object DynamicParser {
                 val url = link.attr("abs:href")
                 if (url.isBlank()) return@mapNotNull null
 
-                val title = link.text().trim().ifBlank {
+                val rawTitle = link.text().trim().ifBlank {
                     link.selectFirst("img")?.attr("alt")?.trim() ?: ""
-                }.ifBlank {
+                }
+                val title = if (rawTitle.isNotBlank()) HtmlClean.clean(rawTitle) else {
                     url.substringAfterLast("/").replace("-", " ")
                         .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
                 }
 
                 val img = link.selectFirst("img")
                 val thumb = img?.let {
-                    it.attr("data-src").ifBlank {
+                    HtmlClean.resolveUrl(link.baseUri(), it.attr("data-src").ifBlank {
                         it.attr("data-lazy-src").ifBlank {
                             it.attr("data-lazy").ifBlank {
                                 it.attr("data-original").ifBlank {
@@ -353,7 +355,7 @@ object DynamicParser {
                                 }
                             }
                         }
-                    }
+                    })
                 } ?: ""
 
                 val epNum = findEpisodeNum(link)
@@ -412,11 +414,11 @@ object DynamicParser {
         for (i in 0 until data.length()) {
             try {
                 val item = data.optJSONObject(i) ?: continue
-                val title = item.optString("title").trim()
-                val url = item.optString("url").trim()
+                val title = HtmlClean.clean(item.optString("title"))
+                val url = HtmlClean.resolveUrl(doc.baseUri(), item.optString("url"))
                 if (title.isBlank() || url.isBlank()) continue
-                val image = item.optString("image").trim()
-                val synopsis = item.optString("synopsis").trim()
+                val image = HtmlClean.resolveUrl(doc.baseUri(), item.optString("image"))
+                val synopsis = HtmlClean.clean(item.optString("synopsis"))
                 episodes.add(Episode(title, url, image, synopsis.take(80), siteName, ""))
             } catch (_: Exception) { }
         }
@@ -616,7 +618,7 @@ object DynamicParser {
                     img.attr("data-lazy-src").ifBlank { "" }
                 }
             }
-            if (src.isNotBlank() && !src.contains("logo") && !src.contains("icon") && !src.contains("banner")) return src
+            if (src.isNotBlank() && !src.contains("logo") && !src.contains("icon") && !src.contains("banner")) return HtmlClean.resolveUrl(doc.baseUri(), src)
         }
         return ""
     }
@@ -681,7 +683,7 @@ object DynamicParser {
                 seenUrls.add(href)
                 var text = link.text().trim()
                 if (text.isBlank()) {
-                    text = link.selectFirst("img")?.attr("alt")?.trim() ?: ""
+                    text = HtmlClean.clean(link.selectFirst("img")?.attr("alt") ?: "")
                 }
                 if (text.isBlank()) {
                     text = link.selectFirst("a")?.text()?.trim() ?: ""
@@ -694,7 +696,7 @@ object DynamicParser {
                     ?: Regex("""(\d+)""").find(text)?.groupValues?.get(1)
                     ?: ""
                 val thumb = link.selectFirst("img")?.let { img ->
-                    img.attr("data-src").ifBlank {
+                    HtmlClean.resolveUrl(link.baseUri(), img.attr("data-src").ifBlank {
                         img.attr("data-lazy-src").ifBlank {
                             img.attr("data-lazy").ifBlank {
                                 img.attr("data-original").ifBlank {
@@ -702,7 +704,7 @@ object DynamicParser {
                                 }
                             }
                         }
-                    }
+                    })
                 } ?: ""
                 episodes.add(Episode(title = text, url = href, thumbnailUrl = thumb, episodeNum = epNum, siteName = siteName))
             }
@@ -719,7 +721,7 @@ object DynamicParser {
                 seenUrls.add(href)
                 var text = link.text().trim()
                 if (text.isBlank()) {
-                    text = link.selectFirst("img")?.attr("alt")?.trim() ?: ""
+                    text = HtmlClean.clean(link.selectFirst("img")?.attr("alt") ?: "")
                 }
                 if (text.isBlank()) {
                     text = href.substringAfterLast("/").replace("-", " ")
@@ -729,7 +731,7 @@ object DynamicParser {
                     ?: Regex("""(\d+)""").find(text)?.groupValues?.get(1)
                     ?: ""
                 val thumb = link.selectFirst("img")?.let { img ->
-                    img.attr("data-src").ifBlank {
+                    HtmlClean.resolveUrl(link.baseUri(), img.attr("data-src").ifBlank {
                         img.attr("data-lazy-src").ifBlank {
                             img.attr("data-lazy").ifBlank {
                                 img.attr("data-original").ifBlank {
@@ -737,7 +739,7 @@ object DynamicParser {
                                 }
                             }
                         }
-                    }
+                    })
                 } ?: ""
                 episodes.add(Episode(title = text, url = href, thumbnailUrl = thumb, episodeNum = epNum, siteName = siteName))
             }

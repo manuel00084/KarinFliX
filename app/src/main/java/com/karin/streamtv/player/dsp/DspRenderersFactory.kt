@@ -6,15 +6,19 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 
 class DspRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
+
     override fun buildAudioSink(
         context: Context,
         enableFloatOutput: Boolean,
         enableAudioTrackPlaybackParams: Boolean
     ): AudioSink {
-        return DefaultAudioSink.Builder(context)
+        val dsp = AudioEnhanceProcessor(context)
+        val builder = DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .setAudioProcessors(arrayOf(AudioEnhanceProcessor(context)))
-            .build()
+        if (dsp.isActive()) {
+            builder.setAudioProcessors(arrayOf(dsp))
+        }
+        return builder.build()
     }
 }

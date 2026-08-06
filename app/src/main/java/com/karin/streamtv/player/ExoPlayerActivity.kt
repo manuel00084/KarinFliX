@@ -2,6 +2,8 @@ package com.karin.streamtv.player
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -20,6 +22,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import android.graphics.PixelFormat
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.karin.streamtv.R
@@ -62,8 +68,8 @@ class ExoPlayerActivity : AppCompatActivity() {
     private lateinit var btnAudioPreset: TextView
     private lateinit var btnInterp: TextView
     private lateinit var btnVideoProfile: TextView
-    private lateinit var btnColorProfile: TextView
     private lateinit var btnUpscaler: TextView
+    private lateinit var btnInfo: TextView
     private var seekDragging = false
     private var selectedHeight = -1
     private val controllerHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -81,6 +87,10 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
     private var animeId: String = ""
     private var episodeNumber: Int = 0
+    private var videoTitle: String = ""
+    private var serverName: String = ""
+    private var lastCpuTimeMs = 0L
+    private var lastCpuTicks = 0L
     private var currentEpisodeUrl: String = ""
     private var autoPlayTriggered: Boolean = false
     private var useEnhancedMode = false
@@ -93,6 +103,22 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var currentMegaResolved: com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo? = null
     private var pendingResumeMs = -1L
     private val fallbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private var retryCount = 0
+    private var isNetworkBack = true
+    private var wasInterrupted = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private val rebufferWatchdog = object : Runnable {
+        override fun run() {
+            val p = player
+            if (p != null && p.playbackState == Player.STATE_BUFFERING && isNetworkBack) {
+                Log.w(TAG, "Stalled in buffering > 15s - forcing recovery")
+                forceReconnect("buffering-watchdog")
+            }
+        }
+    }
 
     private lateinit var glSurface: android.opengl.GLSurfaceView
 
@@ -154,15 +180,15 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnAudioPreset = findViewById(R.id.btn_audio_preset)
         btnInterp = findViewById(R.id.btn_interp)
         btnVideoProfile = findViewById(R.id.btn_video_profile)
-        btnColorProfile = findViewById(R.id.btn_color_profile)
         btnUpscaler = findViewById(R.id.btn_upscaler)
+        btnInfo = findViewById(R.id.btn_info)
 
-        trackSelector = DefaultTrackSelector(this)
+        trackSelector = TrackSelectorFactory.create(this)
 
         val externalUri: Uri? = if (intent.action == Intent.ACTION_VIEW) intent.data else null
         val videoUrl = intent.getStringExtra("video_url") ?: externalUri?.toString()
         val embedUrl = intent.getStringExtra("embed_url")
-        val serverName = intent.getStringExtra("server_name") ?: ""
+        serverName = intent.getStringExtra("server_name") ?: ""
         val episodeUrl = intent.getStringExtra("episode_url") ?: ""
         val epNum = intent.getIntExtra("episode_number", 0)
 
@@ -175,7 +201,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             episodeNumber = epNum
         }
 
-        val videoTitle = intent.getStringExtra("video_title") ?: ""
+        videoTitle = intent.getStringExtra("video_title") ?: ""
         tvVideoTitle.text = videoTitle
         if (episodeNumber > 0) {
             tvEpisodeInfo.text = "Ep. $episodeNumber"
@@ -187,7 +213,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             ?: ""
         if (referer.startsWith("http://")) referer = "https://" + referer.substringAfter("http://")
 
-        useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled()
+        useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled() || VideoEnhanceConfig.isGlQualityMode()
 
         val dbgExtra = intent.getIntExtra("debug_mode", -1)
         if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
@@ -235,11 +261,10 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnAudioPreset.setOnClickListener { showDspDialog() }
         btnVideoProfile.setOnClickListener { showVideoProfileDialog() }
         updateVideoProfileButton()
-        btnColorProfile.setOnClickListener { showColorProfileDialog() }
-        updateColorProfileButton()
         btnInterp.setOnClickListener { showInterpolationDialog() }
         updateInterpButton()
         btnUpscaler.setOnClickListener { showUpscalerDialog() }
+        btnInfo.setOnClickListener { showInfoDialog() }
         updateUpscalerButton()
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
@@ -250,6 +275,56 @@ class ExoPlayerActivity : AppCompatActivity() {
             }
         })
         controllerHandler.post(progressRunnable)
+        registerNetworkMonitor()
+    }
+
+    private fun registerNetworkMonitor() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                runOnUiThread {
+                    isNetworkBack = true
+                    if (wasInterrupted) {
+                        wasInterrupted = false
+                        Log.i(TAG, "Network available - attempting resume")
+                        forceReconnect("network-available")
+                    }
+                }
+            }
+            override fun onLost(network: Network) {
+                runOnUiThread {
+                    isNetworkBack = false
+                    wasInterrupted = true
+                    Log.w(TAG, "Network lost - pausing playback")
+                    player?.pause()
+                    loadingText.visibility = View.VISIBLE
+                    loadingText.text = "Sin conexión - esperando red..."
+                    reconnectHandler.removeCallbacks(rebufferWatchdog)
+                }
+            }
+        }
+        networkCallback = callback
+        cm.registerDefaultNetworkCallback(callback)
+    }
+
+    private fun forceReconnect(reason: String) {
+        Log.w(TAG, "Reconnect triggered by: $reason")
+        val p = player ?: return
+        if (p.playbackState == Player.STATE_ENDED || p.playbackState == Player.STATE_IDLE) return
+        val pos = p.currentPosition.coerceAtLeast(0)
+        loadingText.visibility = View.VISIBLE
+        loadingText.text = "Reconectando..."
+        reconnectHandler.removeCallbacksAndMessages(null)
+        reconnectHandler.postDelayed({
+            val live = player ?: return@postDelayed
+            try {
+                live.seekTo(pos)
+                live.prepare()
+                live.playWhenReady = true
+            } catch (e: Exception) {
+                Log.e(TAG, "Reconnect prepare failed: ${e.message}")
+            }
+        }, 1200)
     }
 
     private fun showController() {
@@ -429,19 +504,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun updateVideoProfileButton() {
-        btnVideoProfile.text = if (VideoEnhanceConfig.isEnabled()) "Enhancement: ON" else "Enhancement: OFF"
-    }
-
-    private fun showColorProfileDialog() {
-        ColorProfileUi.show(this) {
-            updateColorProfileButton()
-            showController()
-        }
-    }
-
-    private fun updateColorProfileButton() {
-        val p = VideoEnhanceConfig.colorPreset()
-        btnColorProfile.text = if (p == VideoEnhanceConfig.ColorPreset.OFF) "Color" else "Color: ${p.label}"
+        btnVideoProfile.text = "Enhancement: ON"
     }
 
     private fun skipToPlaylist(delta: Int) {
@@ -519,32 +582,11 @@ if (which == 0) {
 
     private fun showUpscalerDialog() {
         val modes = VideoEnhanceConfig.mainUpscalers
-        val labels = modes.map { if (it == VideoEnhanceConfig.UpscalerMode.FSR) "FSR…" else it.label }.toTypedArray()
+        val labels = modes.map { it.label }.toTypedArray()
         val current = VideoEnhanceConfig.getUpscalerMode()
-        val selectedIdx = if (VideoEnhanceConfig.isFsr(current)) modes.indexOf(VideoEnhanceConfig.UpscalerMode.FSR)
-                          else modes.indexOfFirst { it.ordinal == current.ordinal }.coerceAtLeast(0)
+        val selectedIdx = modes.indexOfFirst { it == current }.coerceAtLeast(0)
         AlertDialog.Builder(this)
             .setTitle("Escalado de Video")
-            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
-                val chosen = modes[which]
-                if (chosen == VideoEnhanceConfig.UpscalerMode.FSR) {
-                    showFsrQualityDialog()
-                } else {
-                    VideoEnhanceConfig.setUpscalerMode(chosen)
-                    updateUpscalerButton()
-                    showController()
-                }
-            }
-            .setNegativeButton("Cerrar", null)
-            .show()
-    }
-
-    private fun showFsrQualityDialog() {
-        val modes = VideoEnhanceConfig.fsrQualities
-        val labels = modes.map { it.label }.toTypedArray()
-        val selectedIdx = modes.indexOf(VideoEnhanceConfig.currentFsr()).coerceAtLeast(0)
-        AlertDialog.Builder(this)
-            .setTitle("FSR · Calidad")
             .setSingleChoiceItems(labels, selectedIdx) { _, which ->
                 VideoEnhanceConfig.setUpscalerMode(modes[which])
                 updateUpscalerButton()
@@ -556,8 +598,173 @@ if (which == 0) {
 
     private fun updateUpscalerButton() {
         val mode = VideoEnhanceConfig.getUpscalerMode()
-        btnUpscaler.text = if (VideoEnhanceConfig.isFsr(mode)) "Escala: FSR · ${mode.label.removePrefix("FSR ")}"
-                           else "Escala: ${mode.label}"
+        btnUpscaler.text = "Escala: ${mode.label}"
+    }
+
+    private fun showInfoDialog() {
+        val p = player
+        val r = processor?.renderer
+        val cfg = com.karin.streamtv.player.VideoEnhanceConfig
+
+        // Datos de ExoPlayer (formato, codec, resolución, bitrate)
+        var videoFormat: androidx.media3.common.Format? = null
+        var audioFormat: androidx.media3.common.Format? = null
+        try {
+            p?.currentTracks?.groups?.forEach { group ->
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSupported(i)) continue
+                    val f = group.getTrackFormat(i)
+                    if (f.sampleMimeType?.startsWith("video/") == true && videoFormat == null) videoFormat = f
+                    if (f.sampleMimeType?.startsWith("audio/") == true && audioFormat == null) audioFormat = f
+                }
+            }
+        } catch (_: Throwable) {}
+
+        val vf = videoFormat
+        val codecName = try {
+            p?.videoFormat?.codecs ?: vf?.codecs ?: "—"
+        } catch (_: Throwable) { "—" }
+        val mime = vf?.sampleMimeType ?: "—"
+        val isLocal = isLocalUrl(currentVideoUrl)
+        val serverLabel = if (isLocal) "Video local (dispositivo)" else serverNameOrUrl()
+        val enhanced = useEnhancedMode && processor != null
+        val interpOn = r?.interpolationActive == true
+        val upscaler = cfg.getUpscalerMode()
+
+        val sb = StringBuilder()
+        sb.appendLine("🎬 ${if (videoTitle.isNotBlank()) videoTitle else "(sin título)"}")
+        if (episodeNumber > 0) sb.appendLine("   Episodio $episodeNumber")
+        sb.appendLine()
+
+        // Fuente
+        sb.appendLine("🌐 Fuente: $serverLabel")
+        if (!isLocal && serverName.isNotBlank()) sb.appendLine("   Servidor: $serverName")
+        sb.appendLine()
+
+        // Video
+        val inW = r?.videoInputWidth() ?: 0
+        val inH = r?.videoInputHeight() ?: 0
+        val outW = viewWidth()
+        val outH = viewHeight()
+        sb.appendLine("📹 VIDEO")
+        sb.appendLine("   Formato: ${formatShort(mime)}")
+        sb.appendLine("   Códec: ${codecName.ifBlank { "—" }}")
+        sb.appendLine("   Resolución entrada: ${if (inW > 0) "${inW}×${inH}" else vf?.let { "${it.width}×${it.height}" } ?: "—"}")
+        sb.appendLine("   Resolución salida: ${if (outW > 0) "${outW}×${outH}" else "—"}")
+        val bitrate = vf?.bitrate ?: -1
+        sb.appendLine("   Bitrate video: ${if (bitrate > 0) formatBytes(bitrate) + "/s" else "—"}")
+        sb.appendLine()
+
+        // Audio
+        sb.appendLine("🔊 AUDIO")
+        val aBitrate = audioFormat?.bitrate ?: -1
+        sb.appendLine("   Códec: ${audioFormat?.codecs?.ifBlank { "—" } ?: "—"}")
+        sb.appendLine("   Bitrate: ${if (aBitrate > 0) formatBytes(aBitrate) + "/s" else "—"}")
+        sb.appendLine()
+
+        // FPS
+        sb.appendLine("⏱ FPS")
+        sb.appendLine("   Entrada (fuente): ${"%.1f".format(r?.sourceFps ?: 0f)} fps")
+        sb.appendLine("   Salida (render): ${"%.1f".format(r?.outputFps ?: 0f)} fps")
+        sb.appendLine("   Tiempo frame: ${"%.2f".format(r?.frameMs ?: 0f)} ms")
+        sb.appendLine("   Interpolación: ${if (interpOn) "ACTIVA" else "inactiva"}")
+        sb.appendLine("   Frames caídos: ${r?.droppedFrames ?: 0}")
+        sb.appendLine()
+
+        // Recursos
+        val mem = runtimeMemInfo()
+        sb.appendLine("💾 RECURSOS")
+        sb.appendLine("   RAM (app): ${mem.first} MB  (heap ${mem.second}/${mem.third} MB)")
+        sb.appendLine("   CPU: ${cpuUsageString()}")
+        sb.appendLine("   VRAM: ${vramInfo(r)}")
+        sb.appendLine()
+
+        // Pipeline
+        sb.appendLine("⚙️ PIPELINE")
+        sb.appendLine("   Motor: ${if (enhanced) "Media3 + GL 60fps" else "ExoPlayer estándar"}")
+        sb.appendLine("   Upscaler: ${if (enhanced) upscaler.label else "—"}")
+        sb.appendLine("   Calidad: ${r?.qualityLabel ?: cfg.qualityLabel()}")
+        sb.appendLine("   FrameMs target: 16.6 ms")
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Análisis de reproducción")
+            .setMessage(sb.toString())
+            .setPositiveButton("Actualizar", { _, _ -> showInfoDialog() })
+            .setNegativeButton("Cerrar", null)
+            .setOnDismissListener(null)
+            .show()
+    }
+
+    private fun formatShort(mime: String): String = when {
+        mime.contains("av1") -> "AV1"
+        mime.contains("vp9") -> "VP9"
+        mime.contains("vp8") -> "VP8"
+        mime.contains("hevc") || mime.contains("h265") -> "HEVC (H.265)"
+        mime.contains("avc") || mime.contains("h264") -> "H.264 (AVC)"
+        mime.contains("mp4") -> "MP4"
+        mime.contains("webm") -> "WebM"
+        mime.contains("mpeg") -> "MPEG"
+        mime.contains("mp3") -> "MP3"
+        mime.contains("aac") -> "AAC"
+        mime.contains("opus") -> "Opus"
+        mime.contains("flac") -> "FLAC"
+        mime.contains("ac3") -> "AC-3"
+        mime.contains("eac3") -> "E-AC-3"
+        mime.contains("dts") -> "DTS"
+        else -> mime.ifBlank { "—" }
+    }
+
+    private fun formatBytes(bits: Int): String {
+        val b = bits / 8L
+        return when {
+            b >= 1_000_000 -> "%.1f MB".format(b / 1_000_000f)
+            b >= 1_000 -> "%.1f kB".format(b / 1_000f)
+            else -> "$b B"
+        }
+    }
+
+    private fun viewWidth(): Int = processor?.renderer?.viewWidth() ?: 0
+
+    private fun viewHeight(): Int = processor?.renderer?.viewHeight() ?: 0
+
+    private fun serverNameOrUrl(): String {
+        val raw = currentVideoUrl
+        if (raw.isBlank()) return "—"
+        return try {
+            android.net.Uri.parse(raw).host?.removePrefix("www.") ?: raw
+        } catch (_: Throwable) { raw }
+    }
+
+    private fun runtimeMemInfo(): Triple<String, Long, Long> {
+        val rt = Runtime.getRuntime()
+        val total = rt.totalMemory() / (1024 * 1024)
+        val free = rt.freeMemory() / (1024 * 1024)
+        val used = total - free
+        val max = rt.maxMemory() / (1024 * 1024)
+        return Triple("$used", used, max)
+    }
+
+    private fun cpuUsageString(): String {
+        return try {
+            // CPU usada por la app vía /proc/self/stat (user+system ticks)
+            val stat = java.io.File("/proc/self/stat").readText()
+            val fields = stat.split(" ")
+            // fields 14 (utime) y 15 (stime) - índices 13 y 14 en array de 1-based
+            val utime = fields.getOrNull(13)?.toLongOrNull() ?: 0L
+            val stime = fields.getOrNull(14)?.toLongOrNull() ?: 0L
+            val now = System.currentTimeMillis()
+            val dtMs = (now - lastCpuTimeMs).coerceAtLeast(1L)
+            val dTicks = ((utime + stime) - lastCpuTicks).coerceAtLeast(0L)
+            lastCpuTimeMs = now
+            lastCpuTicks = utime + stime
+            val pct = dTicks * 100f / dtMs
+            "%.1f%%".format(pct.coerceAtMost(100f))
+        } catch (_: Throwable) { "—" }
+    }
+
+    private fun vramInfo(r: com.karin.streamtv.player.Media3SixtyFpsProcessor.InterpolationRenderer?): String {
+        if (r == null) return "— (no GL)"
+        return "~${r.approxVramMb()} MB"
     }
 
     private fun applySavedVolume() {
@@ -584,7 +791,7 @@ if (which == 0) {
                 val extractor = VideoExtractorHelper(playerContainer)
                 try {
                     val url = withContext(Dispatchers.Main) {
-                        extractor.extractSuspend(embedUrl, serverName)
+                        extractor.extractSuspend(embedUrl, serverName, referer)
                     }
                     loadingText.visibility = View.GONE
                     if (!url.isNullOrBlank()) {
@@ -614,14 +821,35 @@ if (which == 0) {
             return
         }
         val megaFactory = androidx.media3.datasource.DataSource.Factory {
-            com.karin.streamtv.player.MegaDecryptingDataSource(key, resolved.megaCtrStart, resolved.extraHeaders)
+            com.karin.streamtv.player.MegaDecryptingDataSource(
+                key,
+                resolved.megaCtrStart,
+                VideoDataSource.create(this, referer)
+            )
         }
         if (useEnhancedMode && !isPlainFallback) {
             playWithEnhancedPipeline(resolved.url, megaFactory)
             return
         }
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                20000,
+                80000,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+            )
+            .build()
+
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, CodecSelectorFactory.renderersFactory(this))
+            .setLoadControl(loadControl)
             .setTrackSelector(trackSelector!!)
+            .setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.CONTENT_TYPE_MUSIC)
+                    .build(),
+                true
+            )
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
                     .setDataSourceFactory(megaFactory)
@@ -636,7 +864,10 @@ if (which == 0) {
             useController = false
             keepScreenOn = true
             player = exoPlayer
+            resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
+        (playerView.getVideoSurfaceView() as? SurfaceView)?.holder?.setFormat(PixelFormat.RGBA_8888)
+        exoPlayer.setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
         playerContainer.addView(playerView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -650,14 +881,23 @@ if (which == 0) {
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
-                    Player.STATE_READY -> loadingText.visibility = View.GONE
+                    Player.STATE_READY -> {
+                        loadingText.visibility = View.GONE
+                        retryCount = 0
+                        reconnectHandler.removeCallbacks(rebufferWatchdog)
+                    }
+                    Player.STATE_BUFFERING -> {
+                        loadingText.visibility = View.VISIBLE
+                        loadingText.text = if (isNetworkBack) "Cargando..." else "Sin conexión..."
+                        reconnectHandler.removeCallbacks(rebufferWatchdog)
+                        reconnectHandler.postDelayed(rebufferWatchdog, 15000)
+                    }
                     Player.STATE_ENDED -> onVideoEnded()
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "MEGA Playback error: ${error.message}")
-                Toast.makeText(this@ExoPlayerActivity, "Error: ${error.message}", Toast.LENGTH_LONG).show()
-                finish()
+                handlePlaybackError(error)
             }
         })
     }
@@ -716,7 +956,15 @@ if (which == 0) {
                 when (state) {
                     Player.STATE_READY -> {
                         loadingText.visibility = View.GONE
+                        retryCount = 0
+                        reconnectHandler.removeCallbacks(rebufferWatchdog)
                         Log.i(TAG, "Player STATE_READY - 60fps pipeline active")
+                    }
+                    Player.STATE_BUFFERING -> {
+                        loadingText.visibility = View.VISIBLE
+                        loadingText.text = if (isNetworkBack) "Cargando..." else "Sin conexión..."
+                        reconnectHandler.removeCallbacks(rebufferWatchdog)
+                        reconnectHandler.postDelayed(rebufferWatchdog, 15000)
                     }
                     Player.STATE_ENDED -> onVideoEnded()
                 }
@@ -730,8 +978,7 @@ if (which == 0) {
             }
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "Playback error: ${error.message}")
-                Toast.makeText(this@ExoPlayerActivity, "Error: ${error.message}", Toast.LENGTH_LONG).show()
-                finish()
+                handlePlaybackError(error)
             }
         })
     }
@@ -756,9 +1003,12 @@ if (which == 0) {
             override fun run() {
                 val r = processor?.renderer
                 if (r != null) {
-                    if (r.pipelineReady && r.interpolationActive) {
+                     if (r.pipelineReady && r.interpolationActive) {
                         fpsBadge.visibility = View.VISIBLE
                         fpsBadge.text = "Salida ${r.outputFps.toInt()} fps · Fuente ${r.sourceFps.toInt()} · ${r.frameMs}ms · Mov ${(r.motionLevel * 100).toInt()} · Drop ${r.droppedFrames} · ${r.qualityLabel}"
+                    } else if (r.pipelineReady && com.karin.streamtv.player.VideoEnhanceConfig.isGlQualityMode() && !com.karin.streamtv.player.VideoEnhanceConfig.isEnabled() && !com.karin.streamtv.player.VideoEnhanceConfig.isInterpolationEnabled()) {
+                        fpsBadge.visibility = View.VISIBLE
+                        fpsBadge.text = "Calidad GL: activa"
                     } else {
                         fpsBadge.visibility = View.GONE
                     }
@@ -800,15 +1050,32 @@ if (which == 0) {
                 )
             } catch (_: Exception) {}
         }
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                20000,
+                80000,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+            )
+            .build()
+
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, CodecSelectorFactory.renderersFactory(this))
+            .setLoadControl(loadControl)
             .setTrackSelector(trackSelector!!)
+            .setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.CONTENT_TYPE_MUSIC)
+                    .build(),
+                true
+            )
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
                     .setDataSourceFactory(
                         if (isLocalUrl(url)) {
                             androidx.media3.datasource.DefaultDataSource.Factory(this)
                         } else {
-                            VideoDataSource.factory(referer)
+                            VideoDataSource.factory(this, referer)
                         }
                     )
             )
@@ -822,7 +1089,10 @@ if (which == 0) {
             useController = false
             keepScreenOn = true
             player = exoPlayer
+            resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
+        (playerView.getVideoSurfaceView() as? SurfaceView)?.holder?.setFormat(PixelFormat.RGBA_8888)
+        exoPlayer.setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
         playerContainer.addView(playerView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -836,7 +1106,17 @@ if (which == 0) {
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
-                    Player.STATE_READY -> loadingText.visibility = View.GONE
+                    Player.STATE_READY -> {
+                        loadingText.visibility = View.GONE
+                        retryCount = 0
+                        reconnectHandler.removeCallbacks(rebufferWatchdog)
+                    }
+                    Player.STATE_BUFFERING -> {
+                        loadingText.visibility = View.VISIBLE
+                        loadingText.text = if (isNetworkBack) "Cargando..." else "Sin conexión..."
+                        reconnectHandler.removeCallbacks(rebufferWatchdog)
+                        reconnectHandler.postDelayed(rebufferWatchdog, 15000)
+                    }
                     Player.STATE_ENDED -> onVideoEnded()
                 }
             }
@@ -847,10 +1127,41 @@ if (which == 0) {
             }
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "Playback error: ${error.message}")
-                Toast.makeText(this@ExoPlayerActivity, "Error: ${error.message}", Toast.LENGTH_LONG).show()
-                finish()
+                handlePlaybackError(error)
             }
         })
+    }
+
+    private fun handlePlaybackError(error: PlaybackException) {
+        Log.e(TAG, "handlePlaybackError: ${error.errorCodeName} - ${error.message}")
+        val transient =
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+        if (!transient || retryCount >= 3) {
+            Toast.makeText(this@ExoPlayerActivity, "Error: ${error.message}", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        retryCount++
+        val pos = player?.currentPosition?.coerceAtLeast(0) ?: 0L
+        loadingText.visibility = View.VISIBLE
+        loadingText.text = "Reconectando... (intento $retryCount/3)"
+        val delay = 1500L * retryCount
+        reconnectHandler.removeCallbacksAndMessages(null)
+        reconnectHandler.postDelayed({
+            val live = player ?: return@postDelayed
+            try {
+                Log.i(TAG, "Retry #$retryCount seeking to $pos")
+                live.seekTo(pos)
+                live.prepare()
+                live.playWhenReady = true
+            } catch (e: Exception) {
+                Log.e(TAG, "Retry prepare failed: ${e.message}")
+                finish()
+            }
+        }, delay)
     }
 
     private fun onVideoEnded() {
@@ -974,10 +1285,17 @@ if (which == 0) {
         saveProgress()
         fallbackHandler.removeCallbacksAndMessages(null)
         controllerHandler.removeCallbacksAndMessages(null)
-        processor?.release()
+        reconnectHandler.removeCallbacksAndMessages(null)
+        networkCallback?.let { cb ->
+            try {
+                (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {}
+        }
+        networkCallback = null
+        val proc = processor
         processor = null
         trackSelector = null
-        player?.release()
+        proc?.release() ?: player?.release()
         player = null
         super.onDestroy()
     }

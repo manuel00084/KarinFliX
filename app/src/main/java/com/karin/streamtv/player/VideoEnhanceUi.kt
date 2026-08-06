@@ -1,6 +1,8 @@
 package com.karin.streamtv.player
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -15,14 +17,11 @@ object VideoEnhanceUi {
             setPadding(56, 16, 56, 16)
         }
 
-        val master = CheckBox(context).apply {
-            text = "Activar mejora de video"
-            isChecked = VideoEnhanceConfig.isEnabled()
-            setPadding(0, 8, 0, 8)
-        }
-        container.addView(master)
+        val refreshers = ArrayList<() -> Unit>()
+        val handler = Handler(Looper.getMainLooper())
+        var refreshing = false
 
-        fun techniqueToggle(label: String, enabled: Boolean, value: Float, onStop: (Boolean, Int) -> Unit): Pair<CheckBox, SeekBar> {
+        fun techniqueToggle(label: String, enabled: () -> Boolean, value: () -> Float, onStop: (Boolean, Int) -> Unit) {
             container.addView(TextView(context).apply {
                 text = label
                 textSize = 15f
@@ -31,7 +30,7 @@ object VideoEnhanceUi {
             })
             val cb = CheckBox(context).apply {
                 text = "Activar"
-                isChecked = enabled
+                isChecked = enabled()
                 setPadding(0, 4, 0, 4)
             }
             container.addView(cb)
@@ -42,25 +41,32 @@ object VideoEnhanceUi {
             })
             val sb = SeekBar(context)
             sb.max = 100
-            sb.progress = (value * 100).toInt().coerceIn(0, 100)
+            sb.progress = (value() * 100).toInt().coerceIn(0, 100)
             sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
                 override fun onStartTrackingTouch(seekBar: SeekBar?) {}
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    if (refreshing) return
                     onStop(cb.isChecked, seekBar?.progress ?: 0)
                 }
             })
             container.addView(sb)
             cb.setOnCheckedChangeListener { _, isChecked ->
+                if (refreshing) return@setOnCheckedChangeListener
                 onStop(isChecked, sb.progress)
             }
-            return Pair(cb, sb)
+            refreshers.add {
+                val en = enabled()
+                val v = (value() * 100).toInt().coerceIn(0, 100)
+                if (cb.isChecked != en) cb.isChecked = en
+                if (sb.progress != v) sb.progress = v
+            }
         }
 
         techniqueToggle(
-            "Claridad",
-            VideoEnhanceConfig.superResEnabled(),
-            VideoEnhanceConfig.getSuperRes()
+            "Mejora baja calidad",
+            { VideoEnhanceConfig.superResEnabled() },
+            { VideoEnhanceConfig.getSuperRes() }
         ) { en, pr ->
             VideoEnhanceConfig.setSuperResEnabled(en)
             VideoEnhanceConfig.setSuperRes(pr / 100f)
@@ -68,8 +74,8 @@ object VideoEnhanceUi {
 
         techniqueToggle(
             "Detail Boost",
-            VideoEnhanceConfig.detailBoostEnabled(),
-            VideoEnhanceConfig.getDetailBoost()
+            { VideoEnhanceConfig.detailBoostEnabled() },
+            { VideoEnhanceConfig.getDetailBoost() }
         ) { en, pr ->
             VideoEnhanceConfig.setDetailBoostEnabled(en)
             VideoEnhanceConfig.setDetailBoost(pr / 100f)
@@ -77,8 +83,8 @@ object VideoEnhanceUi {
 
         techniqueToggle(
             "Light Boost",
-            VideoEnhanceConfig.lightBoostEnabled(),
-            VideoEnhanceConfig.getLightBoost()
+            { VideoEnhanceConfig.lightBoostEnabled() },
+            { VideoEnhanceConfig.getLightBoost() }
         ) { en, pr ->
             VideoEnhanceConfig.setLightBoostEnabled(en)
             VideoEnhanceConfig.setLightBoost(pr / 100f)
@@ -86,8 +92,8 @@ object VideoEnhanceUi {
 
         techniqueToggle(
             "HDR (Fake)",
-            VideoEnhanceConfig.hdrEnabled(),
-            VideoEnhanceConfig.getHdr()
+            { VideoEnhanceConfig.hdrEnabled() },
+            { VideoEnhanceConfig.getHdr() }
         ) { en, pr ->
             VideoEnhanceConfig.setHdrEnabled(en)
             VideoEnhanceConfig.setHdr(pr / 100f)
@@ -95,8 +101,8 @@ object VideoEnhanceUi {
 
         techniqueToggle(
             "Granulado fílmico",
-            VideoEnhanceConfig.grainEnabled(),
-            VideoEnhanceConfig.getGrain()
+            { VideoEnhanceConfig.grainEnabled() },
+            { VideoEnhanceConfig.getGrain() }
         ) { en, pr ->
             VideoEnhanceConfig.setGrainEnabled(en)
             VideoEnhanceConfig.setGrain(pr / 100f)
@@ -104,8 +110,8 @@ object VideoEnhanceUi {
 
         techniqueToggle(
             "Nitidez adaptativa",
-            VideoEnhanceConfig.adaptiveSharpEnabled(),
-            VideoEnhanceConfig.getAdaptiveSharp()
+            { VideoEnhanceConfig.adaptiveSharpEnabled() },
+            { VideoEnhanceConfig.getAdaptiveSharp() }
         ) { en, pr ->
             VideoEnhanceConfig.setAdaptiveSharpEnabled(en)
             VideoEnhanceConfig.setAdaptiveSharp(pr / 100f)
@@ -114,14 +120,24 @@ object VideoEnhanceUi {
         val scroll = ScrollView(context).apply {
             addView(container)
         }
-        AlertDialog.Builder(context)
+        var dialog: AlertDialog? = null
+        val refresh = object : Runnable {
+            override fun run() {
+                refreshing = true
+                for (r in refreshers) r()
+                refreshing = false
+                handler.postDelayed(this, 1200)
+            }
+        }
+        dialog = AlertDialog.Builder(context)
             .setTitle("Mejora de video")
             .setView(scroll)
             .setNegativeButton("Cerrar", null)
             .setOnDismissListener {
-                VideoEnhanceConfig.setEnabled(master.isChecked)
+                handler.removeCallbacks(refresh)
                 onClosed.invoke()
             }
             .show()
+        refresh.run()
     }
 }

@@ -6,6 +6,8 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.util.Log
 import android.view.Surface
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -32,18 +34,17 @@ class Media3SixtyFpsProcessor(
     private var player: ExoPlayer? = null
     var renderer: InterpolationRenderer? = null
         private set
-    private var inputSurface: Surface? = null
+    @Volatile private var inputSurface: Surface? = null
     var onGlFailure: (() -> Unit)? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     fun createPlayer(trackSelector: DefaultTrackSelector? = null, dataSourceFactory: androidx.media3.datasource.DataSource.Factory? = null): ExoPlayer {
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        val renderersFactory = CodecSelectorFactory.renderersFactory(context)
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15000,
-                50000,
+                20000,
+                80000,
                 DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
                 DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
             )
@@ -51,10 +52,17 @@ class Media3SixtyFpsProcessor(
 
         val exoPlayer = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
-            .setTrackSelector(trackSelector ?: DefaultTrackSelector(context))
+            .setTrackSelector(trackSelector ?: TrackSelectorFactory.create(context))
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.CONTENT_TYPE_MUSIC)
+                    .build(),
+                true
+            )
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
-                    .setDataSourceFactory(dataSourceFactory ?: VideoDataSource.factory(referer))
+                    .setDataSourceFactory(dataSourceFactory ?: VideoDataSource.factory(context, referer))
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(android.os.PowerManager.PARTIAL_WAKE_LOCK)
@@ -129,16 +137,21 @@ class Media3SixtyFpsProcessor(
                 mainHandler.post {
                     surface?.release()
                     p?.release()
-                    player = null
                     renderer = null
                 }
             }
+        } else if (r != null) {
+            try {
+                glSurface.queueEvent { r.cleanupGl() }
+            } catch (_: Exception) {}
+            surface?.release()
+            p?.release()
+            renderer = null
         } else {
             surface?.release()
             p?.release()
-            player = null
-            renderer = null
         }
+        player = null
     }
 
     inner class InterpolationRenderer(
@@ -165,6 +178,7 @@ class Media3SixtyFpsProcessor(
         private var motionFbo = 0
         private var motionW = 0
         private var motionH = 0
+        private var motionTexStorageAllocated = false
         private var motionAlpha = 0.6f
 
         private var staticTexId = 0
@@ -204,15 +218,15 @@ class Media3SixtyFpsProcessor(
         private var blitSamplerLoc = -1
         private var blitTexMatrixLoc = -1
         private var blitVFlipLoc = -1
-        private var fsrUpProgram = 0
-        private var fsrUpPosLoc = -1
-        private var fsrUpTexLoc = -1
-        private var fsrUpSamplerLoc = -1
-        private var fsrUpTexMatrixLoc = -1
-        private var fsrUpVFlipLoc = -1
-        private var fsrUpTexelLoc = -1
-        private var fsrUpSharpLoc = -1
-        private var fsrRenderScale = 0f
+        private var bicubicProgram = 0; private var bicubicPosLoc = -1; private var bicubicTexLoc = -1; private var bicubicSamplerLoc = -1; private var bicubicTexMatrixLoc = -1; private var bicubicVFlipLoc = -1; private var bicubicTexelLoc = -1
+        private var dogLumaProgram = 0; private var dogLumaPosLoc = -1; private var dogLumaTexLoc = -1; private var dogLumaSamplerLoc = -1; private var dogLumaTexMatrixLoc = -1; private var dogLumaVFlipLoc = -1
+        private var dogGaussXProgram = 0; private var dogGaussXPosLoc = -1; private var dogGaussXTexLoc = -1; private var dogGaussXSamplerLoc = -1; private var dogGaussXTexMatrixLoc = -1; private var dogGaussXVFlipLoc = -1; private var dogGaussXTexelLoc = -1
+        private var dogGaussYProgram = 0; private var dogGaussYPosLoc = -1; private var dogGaussYTexLoc = -1; private var dogGaussYSamplerLoc = -1; private var dogGaussYTexMatrixLoc = -1; private var dogGaussYVFlipLoc = -1; private var dogGaussYTexelLoc = -1
+        private var dogApplyProgram = 0; private var dogApplyPosLoc = -1; private var dogApplyTexLoc = -1; private var dogApplyInputSamplerLoc = -1; private var dogApplyGaussSamplerLoc = -1; private var dogApplyTexMatrixLoc = -1; private var dogApplyVFlipLoc = -1; private var dogApplyStrengthLoc = -1
+        private var fsrEasuProgram = 0; private var fsrEasuPosLoc = -1; private var fsrEasuTexLoc = -1; private var fsrEasuSamplerLoc = -1; private var fsrEasuTexMatrixLoc = -1; private var fsrEasuVFlipLoc = -1; private var fsrEasuInputSizeLoc = -1; private var fsrEasuOutputSizeLoc = -1
+        private var fsrRcasProgram = 0; private var fsrRcasPosLoc = -1; private var fsrRcasTexLoc = -1; private var fsrRcasSamplerLoc = -1; private var fsrRcasTexMatrixLoc = -1; private var fsrRcasVFlipLoc = -1; private var fsrRcasTexelLoc = -1; private var fsrRcasSharpLoc = -1
+        private var dogFBO1 = 0; private var dogTex1 = 0; private var dogFBO2 = 0; private var dogTex2 = 0
+        private var fsrIntermediateFBO = 0; private var fsrIntermediateTex = 0
         private var lowFpsStreak = 0
         private var highFpsStreak = 0
         private val identityMat = floatArrayOf(1f,0f,0f,0f, 0f,1f,0f,0f, 0f,0f,1f,0f, 0f,0f,0f,1f)
@@ -227,7 +241,186 @@ class Media3SixtyFpsProcessor(
             }
         """.trimIndent()
 
-        private val fsrUpFragmentShader = """
+        private val bicubicFragmentShader = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform sampler2D uTex;
+            uniform vec2 uTexel;
+            float cubic(float x) {
+                float x2 = x * x;
+                float x3 = x2 * x;
+                return -0.5*x3 + x2 - 0.5*x;
+            }
+            float cubic2(float x) {
+                float x2 = x * x;
+                float x3 = x2 * x;
+                return 1.5*x3 - 2.5*x2 + 1.0;
+            }
+            float cubic3(float x) {
+                float x2 = x * x;
+                float x3 = x2 * x;
+                return -1.5*x3 + 2.0*x2 + 0.5*x;
+            }
+            float cubic4(float x) {
+                float x2 = x * x;
+                float x3 = x2 * x;
+                return 0.5*x3 - 0.5*x2;
+            }
+            vec4 textureBicubic(sampler2D tex, vec2 texCoords, vec2 texelSize) {
+                vec2 texel = texCoords / texelSize - 0.5;
+                vec2 f = fract(texel);
+                vec2 texelFloor = floor(texel);
+                vec4 cx = vec4(cubic(f.x), cubic2(f.x), cubic3(f.x), cubic4(f.x));
+                vec4 cy = vec4(cubic(f.y), cubic2(f.y), cubic3(f.y), cubic4(f.y));
+                vec4 c = cx.x * (cy.x * texture2D(tex, (texelFloor + vec2(-1.0, -1.0)) * texelSize) +
+                                 cy.y * texture2D(tex, (texelFloor + vec2(-1.0, 0.0)) * texelSize) +
+                                 cy.z * texture2D(tex, (texelFloor + vec2(-1.0, 1.0)) * texelSize) +
+                                 cy.w * texture2D(tex, (texelFloor + vec2(-1.0, 2.0)) * texelSize));
+                c += cx.y * (cy.x * texture2D(tex, (texelFloor + vec2(0.0, -1.0)) * texelSize) +
+                             cy.y * texture2D(tex, (texelFloor + vec2(0.0, 0.0)) * texelSize) +
+                             cy.z * texture2D(tex, (texelFloor + vec2(0.0, 1.0)) * texelSize) +
+                             cy.w * texture2D(tex, (texelFloor + vec2(0.0, 2.0)) * texelSize));
+                c += cx.z * (cy.x * texture2D(tex, (texelFloor + vec2(1.0, -1.0)) * texelSize) +
+                             cy.y * texture2D(tex, (texelFloor + vec2(1.0, 0.0)) * texelSize) +
+                             cy.z * texture2D(tex, (texelFloor + vec2(1.0, 1.0)) * texelSize) +
+                             cy.w * texture2D(tex, (texelFloor + vec2(1.0, 2.0)) * texelSize));
+                c += cx.w * (cy.x * texture2D(tex, (texelFloor + vec2(2.0, -1.0)) * texelSize) +
+                             cy.y * texture2D(tex, (texelFloor + vec2(2.0, 0.0)) * texelSize) +
+                             cy.z * texture2D(tex, (texelFloor + vec2(2.0, 1.0)) * texelSize) +
+                             cy.w * texture2D(tex, (texelFloor + vec2(2.0, 2.0)) * texelSize));
+                return c;
+            }
+            void main() {
+                gl_FragColor = textureBicubic(uTex, vTexCoord, uTexel);
+            }
+        """.trimIndent()
+
+        private val dogLumaShader = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform sampler2D uTex;
+            void main() {
+                vec4 c = texture2D(uTex, vTexCoord);
+                float luma = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+                gl_FragColor = vec4(luma, 0.0, 0.0, 1.0);
+            }
+        """.trimIndent()
+
+        private val dogGaussXShader = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform sampler2D uTex;
+            uniform vec2 uTexel;
+            float max3v(float a, float b, float c) { return max(max(a, b), c); }
+            float min3v(float a, float b, float c) { return min(min(a, b), c); }
+            vec2 minmax3(vec2 pos, vec2 d) {
+                float a = texture2D(uTex, pos - d).x;
+                float b = texture2D(uTex, pos).x;
+                float c = texture2D(uTex, pos + d).x;
+                return vec2(min3v(a, b, c), max3v(a, b, c));
+            }
+            float lumGaussian7(vec2 pos, vec2 d) {
+                float g = (texture2D(uTex, pos - (d + d)).x + texture2D(uTex, pos + (d + d)).x) * 0.06136;
+                g += (texture2D(uTex, pos - d).x + texture2D(uTex, pos + d).x) * 0.24477;
+                g += texture2D(uTex, pos).x * 0.38774;
+                return g;
+            }
+            void main() {
+                vec2 d = vec2(uTexel.x, 0.0);
+                gl_FragColor = vec4(lumGaussian7(vTexCoord, d), minmax3(vTexCoord, d), 1.0);
+            }
+        """.trimIndent()
+
+        private val dogGaussYShader = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform sampler2D uTex;
+            uniform vec2 uTexel;
+            float max3v(float a, float b, float c) { return max(max(a, b), c); }
+            float min3v(float a, float b, float c) { return min(min(a, b), c); }
+            vec2 minmax3(vec2 pos, vec2 d) {
+                float a0 = texture2D(uTex, pos - d).y;
+                float b0 = texture2D(uTex, pos).y;
+                float c0 = texture2D(uTex, pos + d).y;
+                float a1 = texture2D(uTex, pos - d).z;
+                float b1 = texture2D(uTex, pos).z;
+                float c1 = texture2D(uTex, pos + d).z;
+                return vec2(min3v(a0, b0, c0), max3v(a1, b1, c1));
+            }
+            float lumGaussian7(vec2 pos, vec2 d) {
+                float g = (texture2D(uTex, pos - (d + d)).x + texture2D(uTex, pos + (d + d)).x) * 0.06136;
+                g += (texture2D(uTex, pos - d).x + texture2D(uTex, pos + d).x) * 0.24477;
+                g += texture2D(uTex, pos).x * 0.38774;
+                return g;
+            }
+            void main() {
+                vec2 d = vec2(0.0, uTexel.y);
+                gl_FragColor = vec4(lumGaussian7(vTexCoord, d), minmax3(vTexCoord, d), 1.0);
+            }
+        """.trimIndent()
+
+        private val dogApplyShader = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform sampler2D uInput;
+            uniform sampler2D uGauss;
+            uniform float uStrength;
+            void main() {
+                float lumaOrig = dot(texture2D(uInput, vTexCoord).rgb, vec3(0.299, 0.587, 0.114));
+                vec4 gauss = texture2D(uGauss, vTexCoord);
+                float diff = lumaOrig - gauss.x;
+                float cc = clamp(diff * uStrength + lumaOrig, gauss.y, gauss.z) - lumaOrig;
+                vec4 inCol = texture2D(uInput, vTexCoord);
+                gl_FragColor = vec4(inCol.rgb + vec3(cc), 1.0);
+            }
+        """.trimIndent()
+
+        private val fsrEasuShader = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform sampler2D uTex;
+            uniform vec2 uInputSize;
+            uniform vec2 uOutputSize;
+            vec3 FsrEasuCF(vec2 p) { return texture2D(uTex, p).rgb; }
+            void main() {
+                vec2 pp = vTexCoord;
+                vec3 b = FsrEasuCF(pp + vec2(0.0, -1.0) / uInputSize);
+                vec3 l = FsrEasuCF(pp + vec2(-1.0, 0.0) / uInputSize);
+                vec3 g = FsrEasuCF(pp);
+                vec3 r = FsrEasuCF(pp + vec2(1.0, 0.0) / uInputSize);
+                vec3 t = FsrEasuCF(pp + vec2(0.0, 1.0) / uInputSize);
+                float bL = dot(b, vec3(0.2126, 0.7152, 0.0722));
+                float lL = dot(l, vec3(0.2126, 0.7152, 0.0722));
+                float gL = dot(g, vec3(0.2126, 0.7152, 0.0722));
+                float rL = dot(r, vec3(0.2126, 0.7152, 0.0722));
+                float tL = dot(t, vec3(0.2126, 0.7152, 0.0722));
+                vec2 dir = vec2((rL - lL), (tL - bL));
+                float d2 = dir.x * dir.x + dir.y * dir.y;
+                dir = dir * inversesqrt(max(d2, 0.00001));
+                vec3 sp1 = FsrEasuCF(pp + dir / uInputSize);
+                vec3 sp2 = FsrEasuCF(pp - dir / uInputSize);
+                vec3 mnv = min(g, min(min(b, l), min(r, t)));
+                vec3 mxv = max(g, max(max(b, l), max(r, t)));
+                vec3 result = g + (dir.x * (r - l) + dir.y * (t - b)) * 0.5;
+                result = clamp(result, mnv, mxv);
+                result = mix(g, result, 0.5);
+                gl_FragColor = vec4(result, 1.0);
+            }
+        """.trimIndent()
+
+        private val fsrRcasShader = """
             #ifdef GL_ES
             precision mediump float;
             #endif
@@ -235,53 +428,39 @@ class Media3SixtyFpsProcessor(
             uniform sampler2D uTex;
             uniform vec2 uTexel;
             uniform float uSharpness;
-
-            vec3 fsrUp(vec2 uv) {
-                vec2 texel = uTexel;
-                vec3 c = texture2D(uTex, uv).rgb;
-                vec3 t  = texture2D(uTex, uv + vec2(0.0, -texel.y)).rgb;
-                vec3 b  = texture2D(uTex, uv + vec2(0.0,  texel.y)).rgb;
-                vec3 l  = texture2D(uTex, uv + vec2(-texel.x, 0.0)).rgb;
-                vec3 r  = texture2D(uTex, uv + vec2( texel.x, 0.0)).rgb;
-                float lumaC = dot(c, vec3(0.2126, 0.7152, 0.0722));
-                float lumaT = dot(t, vec3(0.2126, 0.7152, 0.0722));
-                float lumaB = dot(b, vec3(0.2126, 0.7152, 0.0722));
-                float lumaL = dot(l, vec3(0.2126, 0.7152, 0.0722));
-                float lumaR = dot(r, vec3(0.2126, 0.7152, 0.0722));
-                float minLuma = min(min(min(lumaT, lumaB), min(lumaL, lumaR)), lumaC);
-                float maxLuma = max(max(max(lumaT, lumaB), max(lumaR, lumaL)), lumaC);
-                vec2 dirH = vec2(lumaR - lumaL, 0.0);
-                vec2 dirV = vec2(0.0, lumaT - lumaB);
-                float lenH = abs(dirH.x) + 0.001;
-                float lenV = abs(dirV.y) + 0.001;
-                vec2 dir = normalize(dirH * lenH + dirV * lenV + vec2(0.001));
-                float peak = -1.0 / mix(8.0, 5.0, uSharpness);
-                vec2 dir2 = dir * texel;
-                vec3 sp1 = texture2D(uTex, uv - dir2 * 1.0).rgb;
-                vec3 sp2 = texture2D(uTex, uv + dir2 * 1.0).rgb;
-                vec3 sp3 = texture2D(uTex, uv - dir2 * 2.0).rgb;
-                vec3 sp4 = texture2D(uTex, uv + dir2 * 2.0).rgb;
-                float lumaSp1 = dot(sp1, vec3(0.2126, 0.7152, 0.0722));
-                float lumaSp2 = dot(sp2, vec3(0.2126, 0.7152, 0.0722));
-                float lumaSp3 = dot(sp3, vec3(0.2126, 0.7152, 0.0722));
-                float lumaSp4 = dot(sp4, vec3(0.2126, 0.7152, 0.0722));
-                float clampRange1 = max(0.0, lumaC - minLuma);
-                float clampRange2 = max(0.0, maxLuma - lumaC);
-                float peakVal1 = clamp((lumaC - lumaSp1) * peak, 0.0, clampRange1);
-                float peakVal2 = clamp((lumaC - lumaSp2) * peak, 0.0, clampRange2);
-                float peakVal3 = clamp((lumaC - lumaSp3) * peak * 0.5, 0.0, clampRange1);
-                float peakVal4 = clamp((lumaC - lumaSp4) * peak * 0.5, 0.0, clampRange2);
-                vec3 result = c;
-                result -= (sp1 - c) * peakVal1;
-                result -= (sp2 - c) * peakVal2;
-                result -= (sp3 - c) * peakVal3;
-                result -= (sp4 - c) * peakVal4;
-                result = clamp(c + (result - c) * 1.3, vec3(0.0), vec3(1.0));
-                return result;
-            }
-
             void main() {
-                gl_FragColor = vec4(fsrUp(vTexCoord), 1.0);
+                vec2 sp = vTexCoord;
+                vec3 b = texture2D(uTex, sp + vec2(0.0, -uTexel.y)).rgb;
+                vec3 d = texture2D(uTex, sp + vec2(-uTexel.x, 0.0)).rgb;
+                vec3 e = texture2D(uTex, sp).rgb;
+                vec3 f = texture2D(uTex, sp + vec2(uTexel.x, 0.0)).rgb;
+                vec3 h = texture2D(uTex, sp + vec2(0.0, uTexel.y)).rgb;
+                float bL = b.b*0.5+(b.r*0.5+b.g);
+                float dL = d.b*0.5+(d.r*0.5+d.g);
+                float eL = e.b*0.5+(e.r*0.5+e.g);
+                float fL = f.b*0.5+(f.r*0.5+f.g);
+                float hL = h.b*0.5+(h.r*0.5+h.g);
+                float nz = 0.25*bL+0.25*dL+0.25*fL+0.25*hL-eL;
+                float maxL = max(max(bL, dL), max(fL, hL));
+                float minL = min(min(bL, dL), min(fL, hL));
+                nz = clamp(abs(nz)/max(maxL-minL, 0.0001), 0.0, 1.0);
+                nz = -0.5*nz+1.0;
+                float mn4R=min(min(b.r,d.r),min(f.r,h.r));
+                float mn4G=min(min(b.g,d.g),min(f.g,h.g));
+                float mn4B=min(min(b.b,d.b),min(f.b,h.b));
+                float mx4R=max(max(b.r,d.r),max(f.r,h.r));
+                float mx4G=max(max(b.g,d.g),max(f.g,h.g));
+                float mx4B=max(max(b.b,d.b),max(f.b,h.b));
+                float hitMinR=min(mn4R,e.r)/(4.0*mx4R+0.0001);
+                float hitMinG=min(mn4G,e.g)/(4.0*mx4G+0.0001);
+                float hitMinB=min(mn4B,e.b)/(4.0*mx4B+0.0001);
+                float hitMaxR=(1.0-max(mx4R,e.r))/(4.0*mn4R-4.0+0.0001);
+                float hitMaxG=(1.0-max(mx4G,e.g))/(4.0*mn4G-4.0+0.0001);
+                float hitMaxB=(1.0-max(mx4B,e.b))/(4.0*mn4B-4.0+0.0001);
+                float lobe=max(-0.25,min(max(max(max(-hitMinR,hitMaxR),max(-hitMinG,hitMaxG)),max(-hitMinB,hitMaxB)),0.0))*uSharpness;
+                lobe*=nz;
+                float rcpL=1.0/(4.0*lobe+1.0);
+                gl_FragColor=vec4((lobe*b.r+lobe*d.r+lobe*h.r+lobe*f.r+e.r)*rcpL,(lobe*b.g+lobe*d.g+lobe*h.g+lobe*f.g+e.g)*rcpL,(lobe*b.b+lobe*d.b+lobe*h.b+lobe*f.b+e.b)*rcpL,1.0);
             }
         """.trimIndent()
 
@@ -323,19 +502,17 @@ class Media3SixtyFpsProcessor(
         private var matrixLogged = false
         private var passthroughLatch = false
 
-        private var stopped = false
+        @Volatile private var stopped = false
 
         private var viewWidth = 0
         private var viewHeight = 0
-        private var videoWidth = 1920
-        private var videoHeight = 1080
-        private var hasNewFrame = false
+        @Volatile private var videoWidth = 1920
+        @Volatile private var videoHeight = 1080
         private var frameCount = 0L
         private val texMatrix = FloatArray(16)
         private val matrixOld = FloatArray(16)
         private var lastFpsTimeNs = 0L
         private var fpsFrames = 0
-        private var fpsTotalNs = 0L
         private var fpsRenderNs = 0L
 
         private val intervalNs: Long
@@ -377,11 +554,8 @@ class Media3SixtyFpsProcessor(
         private var hdrLoc = -1
         private var detailBoostLoc = -1
         private var lightBoostLoc = -1
-         private var clarityLoc = -1
+         private var lowBitrateBoostLoc = -1
         private var dbgLoc = -1
-        private var upscalerLoc = -1
-        private var fsrScaleLoc = -1
-        private var fsrSharpnessLoc = -1
         private var videoResLoc = -1
         private var texelSizeLoc = -1
         private var enabledLoc = -1
@@ -437,13 +611,12 @@ class Media3SixtyFpsProcessor(
 
         private fun trackOutputFps(frameStartNs: Long, now: Long) {
             fpsFrames++
-            fpsTotalNs += now - frameStartNs
             if (lastFpsTimeNs == 0L) lastFpsTimeNs = now
             val elapsed = now - lastFpsTimeNs
             if (elapsed >= 1_000_000_000L) {
                 outputFps = fpsFrames * 1_000_000_000f / elapsed
                 if (fpsFrames > 0) frameMs = (fpsRenderNs / 1_000_000f) / fpsFrames
-                if (!staticScene && fsrRenderScale <= 0f) {
+                if (!staticScene && VideoEnhanceConfig.getUpscalerMode() == VideoEnhanceConfig.UpscalerMode.OFF) {
                     if (!interpolationActive) {
                         if (renderScale < 1f) {
                             renderScale = 1f
@@ -474,7 +647,6 @@ class Media3SixtyFpsProcessor(
                 }
                 Log.i(TAG, "metrics out=${outputFps.toInt()}fps ms=${"%.1f".format(frameMs)} src=${sourceFps.toInt()}fps interp=$interpolationActive static=$staticScene mov=${(motionLevel * 100).toInt()} drop=$droppedFrames ${qualityLabel} gx=${"%.2f".format(globalVec[0])} gy=${"%.2f".format(globalVec[1])} prev=$prevReady srcF=$sourceFps dscale=${renderScale}")
                 fpsFrames = 0
-                fpsTotalNs = 0
                 fpsRenderNs = 0
                 lastFpsTimeNs = now
             }
@@ -493,7 +665,8 @@ class Media3SixtyFpsProcessor(
             if (globalProgram != 0) { GLES20.glDeleteProgram(globalProgram); globalProgram = 0 }
             if (coarseProgram != 0) { GLES20.glDeleteProgram(coarseProgram); coarseProgram = 0 }
             if (blitProgram != 0) { GLES20.glDeleteProgram(blitProgram); blitProgram = 0 }
-            if (fsrUpProgram != 0) { GLES20.glDeleteProgram(fsrUpProgram); fsrUpProgram = 0 }
+            listOf(bicubicProgram, dogLumaProgram, dogGaussXProgram, dogGaussYProgram, dogApplyProgram, fsrEasuProgram, fsrRcasProgram).forEach { if (it != 0) GLES20.glDeleteProgram(it) }
+            bicubicProgram = 0; dogLumaProgram = 0; dogGaussXProgram = 0; dogGaussYProgram = 0; dogApplyProgram = 0; fsrEasuProgram = 0; fsrRcasProgram = 0
             if (prevFbo != 0 || motionFbo != 0 || staticFbo != 0 || downFbo != 0 || globalFbo != 0 || drsFbo != 0) {
                 GLES20.glDeleteFramebuffers(6, intArrayOf(prevFbo, motionFbo, staticFbo, downFbo, globalFbo, drsFbo), 0)
                 prevFbo = 0; motionFbo = 0; staticFbo = 0; downFbo = 0; globalFbo = 0; drsFbo = 0
@@ -502,12 +675,19 @@ class Media3SixtyFpsProcessor(
                 GLES20.glDeleteTextures(11, intArrayOf(inputTexId, prevTexId, motionTexId, staticTexId, motionAccumId, downTexId, globalTexId, coarseTexId, motionBwdId, motionBwdAccumId, drsTexId), 0)
                 inputTexId = 0; prevTexId = 0; motionTexId = 0; staticTexId = 0; motionAccumId = 0; downTexId = 0; globalTexId = 0; coarseTexId = 0; motionBwdId = 0; motionBwdAccumId = 0; drsTexId = 0
             }
+            if (dogFBO1 != 0 || dogFBO2 != 0) { GLES20.glDeleteFramebuffers(2, intArrayOf(dogFBO1, dogFBO2), 0); dogFBO1 = 0; dogFBO2 = 0 }
+            if (dogTex1 != 0 || dogTex2 != 0) { GLES20.glDeleteTextures(2, intArrayOf(dogTex1, dogTex2), 0); dogTex1 = 0; dogTex2 = 0 }
+            if (fsrIntermediateFBO != 0) { GLES20.glDeleteFramebuffers(1, intArrayOf(fsrIntermediateFBO), 0); fsrIntermediateFBO = 0 }
+            if (fsrIntermediateTex != 0) { GLES20.glDeleteTextures(1, intArrayOf(fsrIntermediateTex), 0); fsrIntermediateTex = 0 }
             inputSurfaceTexture?.release()
             inputSurfaceTexture = null
             cachedOutputSurface?.release()
             cachedOutputSurface = null
+            inputSurface?.release()
+            inputSurface = null
             prevReady = false
             staticScene = false
+            motionTexStorageAllocated = false
             staticCheckCounter = 0
             staticReadCounter = 0
             staticFrames = 0
@@ -573,11 +753,8 @@ class Media3SixtyFpsProcessor(
             uniform float uHdr;
             uniform float uDetailBoost;
             uniform float uLightBoost;
-             uniform float uClarity;
+             uniform float uLowBitrateBoost;
             uniform float uDbgMode;
-            uniform float uUpscalerMode;
-            uniform float uFsrScale;
-            uniform float uFsrSharpness;
             uniform vec2 uVideoRes;
 
             vec3 adjustSaturation(vec3 c, float s) {
@@ -589,97 +766,43 @@ class Media3SixtyFpsProcessor(
                 return mix(sat, mix(vec3(g), c, 1.0 + (s - 1.0) * 0.6), skinProtect);
             }
 
+            float lumaOf(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+            // Gamut boost estilo Splash: expande la croma (gama de colores) con
+            // curva "vibrance" adaptativa. Protege highlights, sombras y piel, y
+            // evita recorte limitando el factor por pixel para que el color no se aplane.
+            vec3 gamutBoost(vec3 c, float s) {
+                if (abs(s - 1.0) < 0.001) return c;
+                float luma = lumaOf(c);
+                vec3 dev = c - vec3(luma);
+                float chroma = length(dev);
+                float sat = chroma / max(luma * 2.0, 0.0001);
+                // vibrance: colores apagados se expanden mucho, vivos apenas se tocan
+                float vibrance = 1.0 - smoothstep(0.25, 0.85, sat);
+                float f = 1.0 + (s - 1.0) * (0.6 + 0.4 * vibrance);
+                // proteccion highlights (evita quemar luces)
+                float hl = smoothstep(0.65, 0.9, luma);
+                f = mix(f, 1.0, hl * 0.6);
+                // proteccion sombras profundas (evita ruido en oscuros)
+                float sh = smoothstep(0.0, 0.1, luma);
+                f = mix(f, 1.0, (1.0 - sh) * 0.8);
+                // proteccion tonos de piel
+                float skinMask = smoothstep(0.15, 0.08, abs(c.r - c.g)) * smoothstep(0.15, 0.05, c.r - c.b);
+                skinMask *= step(0.3, c.r) * step(c.r, 0.75) * step(0.15, c.g) * step(c.g, 0.65);
+                f = mix(f, 1.0 + (s - 1.0) * 0.35, skinMask);
+                // limite de gama por pixel: no deja que ningun canal rebase [0,1]
+                float maxDev = max(dev.r, max(dev.g, dev.b));
+                float minDev = min(dev.r, min(dev.g, dev.b));
+                float fUp = (1.0 - luma) / max(maxDev, 0.00001);
+                float fDn = luma / max(-minDev, 0.00001);
+                f = min(f, min(fUp, fDn));
+                vec3 outC = vec3(luma) + dev * f;
+                return clamp(outC, 0.0, 1.0);
+            }
+
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
             }
-
-            vec3 anime4kEdge(vec3 color, vec2 uv, vec2 inputTexel) {
-                vec3 t = texture2D(uCurrTex, uv + vec2(0.0, inputTexel.y)).rgb;
-                vec3 b = texture2D(uCurrTex, uv - vec2(0.0, inputTexel.y)).rgb;
-                vec3 l = texture2D(uCurrTex, uv - vec2(inputTexel.x, 0.0)).rgb;
-                vec3 r = texture2D(uCurrTex, uv + vec2(inputTexel.x, 0.0)).rgb;
-                vec3 tl = texture2D(uCurrTex, uv + vec2(-inputTexel.x, inputTexel.y)).rgb;
-                vec3 tr = texture2D(uCurrTex, uv + vec2(inputTexel.x, inputTexel.y)).rgb;
-                vec3 bl = texture2D(uCurrTex, uv + vec2(-inputTexel.x, -inputTexel.y)).rgb;
-                vec3 br = texture2D(uCurrTex, uv + vec2(inputTexel.x, -inputTexel.y)).rgb;
-                float lumaC = dot(color, vec3(0.299, 0.587, 0.114));
-                float lumaT = dot(t, vec3(0.299, 0.587, 0.114));
-                float lumaB = dot(b, vec3(0.299, 0.587, 0.114));
-                float lumaL = dot(l, vec3(0.299, 0.587, 0.114));
-                float lumaR = dot(r, vec3(0.299, 0.587, 0.114));
-                float gx = lumaR - lumaL;
-                float gy = lumaT - lumaB;
-                float edgeStrength = sqrt(gx * gx + gy * gy);
-                vec3 result = color;
-                if (edgeStrength > 0.03) {
-                    float strength = clamp(edgeStrength * 4.0, 0.0, 1.0);
-                    vec3 avg4 = (t + b + l + r) * 0.25;
-                    vec3 avgDiag = (tl + tr + bl + br) * 0.25;
-                    vec3 sharpened = 2.5 * color - 0.75 * avg4 - 0.25 * avgDiag;
-                    result = mix(color, sharpened, strength);
-                }
-                result = color + (result - color) * 0.85;
-                return result;
-            }
-
-            vec3 fsrEasu(vec2 uv, vec2 inputTexel) {
-                // Adjust input texel for FSR scale factor (lower render resolution = larger texels)
-                vec2 fsrTexel = inputTexel * uFsrScale;
-                vec3 c = texture2D(uCurrTex, uv).rgb;
-                vec3 t  = texture2D(uCurrTex, uv + vec2(0.0, -fsrTexel.y)).rgb;
-                vec3 b  = texture2D(uCurrTex, uv + vec2(0.0,  fsrTexel.y)).rgb;
-                vec3 l  = texture2D(uCurrTex, uv + vec2(-fsrTexel.x, 0.0)).rgb;
-                vec3 r  = texture2D(uCurrTex, uv + vec2( fsrTexel.x, 0.0)).rgb;
-                float lumaC = dot(c, vec3(0.2126, 0.7152, 0.0722));
-                float lumaT = dot(t, vec3(0.2126, 0.7152, 0.0722));
-                float lumaB = dot(b, vec3(0.2126, 0.7152, 0.0722));
-                float lumaL = dot(l, vec3(0.2126, 0.7152, 0.0722));
-                float lumaR = dot(r, vec3(0.2126, 0.7152, 0.0722));
-                float minLuma = min(min(min(lumaT, lumaB), min(lumaL, lumaR)), lumaC);
-                float maxLuma = max(max(max(lumaT, lumaB), max(lumaR, lumaL)), lumaC);
-                vec2 dirH = vec2(lumaR - lumaL, 0.0);
-                vec2 dirV = vec2(0.0, lumaT - lumaB);
-                float lenH = abs(dirH.x) + 0.001;
-                float lenV = abs(dirV.y) + 0.001;
-                vec2 dir = normalize(dirH * lenH + dirV * lenV + vec2(0.001));
-                // Use uniform sharpness (AMD FSR quality preset values)
-                float sharpness = uFsrSharpness;
-                float peak = -1.0 / mix(8.0, 5.0, sharpness);
-                vec2 dir2 = dir * fsrTexel;
-                vec3 sp1 = texture2D(uCurrTex, uv - dir2 * 1.0).rgb;
-                vec3 sp2 = texture2D(uCurrTex, uv + dir2 * 1.0).rgb;
-                vec3 sp3 = texture2D(uCurrTex, uv - dir2 * 2.0).rgb;
-                vec3 sp4 = texture2D(uCurrTex, uv + dir2 * 2.0).rgb;
-                float lumaSp1 = dot(sp1, vec3(0.2126, 0.7152, 0.0722));
-                float lumaSp2 = dot(sp2, vec3(0.2126, 0.7152, 0.0722));
-                float lumaSp3 = dot(sp3, vec3(0.2126, 0.7152, 0.0722));
-                float lumaSp4 = dot(sp4, vec3(0.2126, 0.7152, 0.0722));
-                float clampRange1 = max(0.0, lumaC - minLuma);
-                float clampRange2 = max(0.0, maxLuma - lumaC);
-                float peakVal1 = clamp((lumaC - lumaSp1) * peak, 0.0, clampRange1);
-                float peakVal2 = clamp((lumaC - lumaSp2) * peak, 0.0, clampRange2);
-                float peakVal3 = clamp((lumaC - lumaSp3) * peak * 0.5, 0.0, clampRange1);
-                float peakVal4 = clamp((lumaC - lumaSp4) * peak * 0.5, 0.0, clampRange2);
-                vec3 result = c;
-                result -= (sp1 - c) * peakVal1;
-                result -= (sp2 - c) * peakVal2;
-                result -= (sp3 - c) * peakVal3;
-                result = clamp(c + (result - c) * 1.3, vec3(0.0), vec3(1.0));
-                return result;
-            }
-
-            vec3 bilinearRescale(vec2 uv, vec2 inputTexel) {
-                // Rejilla explícita por píxel de origen (rescalado bilineal suave)
-                vec3 c  = texture2D(uCurrTex, uv).rgb;
-                vec3 t  = texture2D(uCurrTex, uv + vec2(0.0, -inputTexel.y)).rgb;
-                vec3 b  = texture2D(uCurrTex, uv + vec2(0.0,  inputTexel.y)).rgb;
-                vec3 l  = texture2D(uCurrTex, uv + vec2(-inputTexel.x, 0.0)).rgb;
-                vec3 r  = texture2D(uCurrTex, uv + vec2( inputTexel.x, 0.0)).rgb;
-                vec3 box = (c + t + b + l + r) * 0.2;
-                return mix(c, box, 0.5);
-            }
-
-            float lumaOf(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
             // Quita el "ringing" (halo/ecos) alrededor de bordes: detecta oscilación de luma en la dirección del gradiente.
             vec3 desRinging(vec3 color, vec2 uv, vec2 texel, float strength) {
@@ -724,8 +847,16 @@ class Media3SixtyFpsProcessor(
                 return clamp(c, 0.0, 1.0);
             }
 
-            // Suaviza nodos de bloques de compresión detectados por CONTENIDO (discontinuidad de luma),
-            // nunca por posición fija de rejilla, para no dibujar una malla visible.
+            // Deblock por CONTENIDO y periodicidad: detecta el nodo de bloque (borde de celda
+            // de 8px) por salto de luma a 1px + planitud interna de cada celda + repetición del
+            // salto a ±8px (firma de rejilla). Suaviza hacia la media de ambas celdas con clamp
+            // al rango local: no dibuja malla sobre textura real ni crea halos.
+            float gridScore(float stepC, float cellFlat, float periodic) {
+                float flatFactor = 1.0 - smoothstep(0.002, 0.03, cellFlat);
+                float perFactor = clamp((periodic - stepC * 0.3) / (stepC * 0.55 + 0.0001), 0.0, 1.0);
+                return stepC * flatFactor * perFactor;
+            }
+
             vec3 deblock(vec3 color, vec2 uv, vec2 texel, float strength) {
                 vec2 m = 1.0 / uVideoRes;
                 vec3 n1 = texture2D(uCurrTex, uv + vec2(0.0, m.y)).rgb;
@@ -736,16 +867,28 @@ class Media3SixtyFpsProcessor(
                 vec3 f2 = texture2D(uCurrTex, uv - vec2(0.0, m.y * 4.0)).rgb;
                 vec3 f3 = texture2D(uCurrTex, uv + vec2(m.x * 4.0, 0.0)).rgb;
                 vec3 f4 = texture2D(uCurrTex, uv - vec2(m.x * 4.0, 0.0)).rgb;
+                vec3 g1 = texture2D(uCurrTex, uv + vec2(0.0, m.y * 8.0)).rgb;
+                vec3 g2 = texture2D(uCurrTex, uv - vec2(0.0, m.y * 8.0)).rgb;
+                vec3 g3 = texture2D(uCurrTex, uv + vec2(m.x * 8.0, 0.0)).rgb;
+                vec3 g4 = texture2D(uCurrTex, uv - vec2(m.x * 8.0, 0.0)).rgb;
+
                 float stepV = abs(lumaOf(n1) - lumaOf(n2));
                 float stepH = abs(lumaOf(n3) - lumaOf(n4));
-                float flatV = max(abs(lumaOf(f1) - lumaOf(f2)), abs(lumaOf(n1) - lumaOf(f1)));
-                float flatH = max(abs(lumaOf(f3) - lumaOf(f4)), abs(lumaOf(n3) - lumaOf(f3)));
-                float blockV = stepV * (1.0 - smoothstep(0.004, 0.03, flatV));
-                float blockH = stepH * (1.0 - smoothstep(0.004, 0.03, flatH));
+                // Planitud DENTRO de cada celda (1px vs 4px, misma celda de 8px).
+                float cellFlatV = max(abs(lumaOf(n1) - lumaOf(f1)), abs(lumaOf(n2) - lumaOf(f2)));
+                float cellFlatH = max(abs(lumaOf(n3) - lumaOf(f3)), abs(lumaOf(n4) - lumaOf(f4)));
+                // Periodicidad: el mismo salto se repite a ±8px (siguientes nodos de rejilla).
+                float periodicV = max(abs(lumaOf(f1) - lumaOf(g1)), abs(lumaOf(f2) - lumaOf(g2)));
+                float periodicH = max(abs(lumaOf(f3) - lumaOf(g3)), abs(lumaOf(f4) - lumaOf(g4)));
+
+                float blockV = gridScore(stepV, cellFlatV, periodicV);
+                float blockH = gridScore(stepH, cellFlatH, periodicH);
                 float blockiness = max(blockV, blockH);
-                float amount = smoothstep(0.015, 0.08, blockiness) * strength;
-                vec3 blendV = (n1 + n2) * 0.5;
-                vec3 blendH = (n3 + n4) * 0.5;
+                float amount = smoothstep(0.015, 0.09, blockiness) * strength;
+                amount = min(amount, 0.85);
+                // Media de las dos celdas (muestreo a 4px) con clamp al rango local para no crear halo.
+                vec3 blendV = clamp((f1 + f2) * 0.5, min(min(n1, n2), min(f1, f2)), max(max(n1, n2), max(f1, f2)));
+                vec3 blendH = clamp((f3 + f4) * 0.5, min(min(n3, n4), min(f3, f4)), max(max(n3, n4), max(f3, f4)));
                 float wV = stepV / (stepV + stepH + 0.0001);
                 vec3 result = color;
                 result = mix(result, blendV, amount * wV);
@@ -841,16 +984,40 @@ class Media3SixtyFpsProcessor(
                 return clamp(result, 0.0, 1.0);
             }
 
-            // Detail Boost estilo Splash: realza el detalle de color y micro-contraste.
+            // Detail Boost estilo Splash: smart sharpening espacial + realce de color y micro-contraste.
             vec3 detailBoost(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec2 txl = texel;
+                vec3 n  = texture2D(uCurrTex, uv + vec2(0.0, -txl.y)).rgb;
+                vec3 s  = texture2D(uCurrTex, uv + vec2(0.0,  txl.y)).rgb;
+                vec3 w  = texture2D(uCurrTex, uv + vec2(-txl.x, 0.0)).rgb;
+                vec3 e  = texture2D(uCurrTex, uv + vec2( txl.x, 0.0)).rgb;
+                vec3 nw = texture2D(uCurrTex, uv + vec2(-txl.x, -txl.y)).rgb;
+                vec3 ne = texture2D(uCurrTex, uv + vec2( txl.x, -txl.y)).rgb;
+                vec3 sw = texture2D(uCurrTex, uv + vec2(-txl.x,  txl.y)).rgb;
+                vec3 se = texture2D(uCurrTex, uv + vec2( txl.x,  txl.y)).rgb;
+
+                vec3 mean = (n + s + w + e) * 0.25;
+                vec3 localMin = min(min(min(n, s), min(w, e)), min(min(nw, ne), min(sw, se)));
+                vec3 localMax = max(max(max(n, s), max(w, e)), max(max(nw, ne), max(sw, se)));
+
                 float luma = lumaOf(color);
-                float rDev = color.r - luma;
-                float gDev = color.g - luma;
-                float bDev = color.b - luma;
+                vec3 hi = color - mean;
+                float detail = length(hi);
+                float range = lumaOf(localMax) - lumaOf(localMin);
+                float edgeMask = smoothstep(0.01, 0.08, range);
+                float detailMask = smoothstep(0.004, 0.03, detail);
+                float mask = detailMask * edgeMask;
+
+                vec3 sharpened = color + hi * (strength * 0.5) * mask;
+                sharpened = clamp(sharpened, localMin, localMax);
+
+                float rDev = sharpened.r - luma;
+                float gDev = sharpened.g - luma;
+                float bDev = sharpened.b - luma;
                 float colorDetail = sqrt(rDev * rDev + gDev * gDev + bDev * bDev);
-                float detailMask = smoothstep(0.005, 0.05, colorDetail);
-                vec3 enhanced = color + vec3(rDev, gDev, bDev) * detailMask * strength * 0.8;
-                float micro = 1.0 + strength * 0.15 * detailMask;
+                float colorMask = smoothstep(0.005, 0.05, colorDetail);
+                vec3 enhanced = sharpened + vec3(rDev, gDev, bDev) * colorMask * strength * 0.6;
+                float micro = 1.0 + strength * 0.12 * colorMask;
                 enhanced = mix(vec3(0.5), enhanced, micro);
                 float hl = smoothstep(0.8, 1.0, luma);
                 enhanced = mix(enhanced, color, hl * strength * 0.5);
@@ -858,94 +1025,178 @@ class Media3SixtyFpsProcessor(
                 return clamp(enhanced, 0.0, 1.0);
             }
 
-            // Light Boost estilo Splash: look vívido y brillante global.
+            // Light Boost estilo Splash: "iluminación inteligente y color vivo".
+            // Es DINÁMICO: estima la luminancia media de la escena en cada frame
+            // (muestreo en malla 3x3) y modula la fuerza. Si el video ya es muy
+            // brillante reduce la elevación y la saturación, para jamás lavar
+            // luces ni quemar highlights.
             vec3 lightBoost(vec3 color, vec2 uv, vec2 texel, float strength) {
                 float luma = lumaOf(color);
-                float shadowLift = (1.0 - smoothstep(0.1, 0.5, luma)) * strength * 0.6;
-                vec3 result = color * (1.0 + shadowLift) + shadowLift * 0.06;
-                float vividSat = 1.0 + strength * 0.7 * (1.0 - smoothstep(0.08, 0.4, luma));
-                result = mix(vec3(lumaOf(result)), result, vividSat);
-                result = result * result * (3.0 - 2.0 * result);
-                result = mix(vec3(0.5), result, 1.0 + strength * 0.22);
-                float hl = smoothstep(0.8, 0.95, luma);
-                result = mix(result, color, hl * strength * 0.4);
-                result = pow(clamp(result, 0.0, 1.0), vec3(1.0 - strength * 0.04));
+                // Estimación del brillo global de la escena, en coords absolutas
+                // (siempre dentro del frame, sin depender del texel).
+                float s00 = lumaOf(texture2D(uCurrTex, vec2(0.18, 0.18)).rgb);
+                float s01 = lumaOf(texture2D(uCurrTex, vec2(0.50, 0.18)).rgb);
+                float s02 = lumaOf(texture2D(uCurrTex, vec2(0.82, 0.18)).rgb);
+                float s10 = lumaOf(texture2D(uCurrTex, vec2(0.18, 0.50)).rgb);
+                float s11 = lumaOf(texture2D(uCurrTex, vec2(0.50, 0.50)).rgb);
+                float s12 = lumaOf(texture2D(uCurrTex, vec2(0.82, 0.50)).rgb);
+                float s20 = lumaOf(texture2D(uCurrTex, vec2(0.18, 0.82)).rgb);
+                float s21 = lumaOf(texture2D(uCurrTex, vec2(0.50, 0.82)).rgb);
+                float s22 = lumaOf(texture2D(uCurrTex, vec2(0.82, 0.82)).rgb);
+                float sceneLuma = (s00 + s01 + s02 + s10 + s11 + s12 + s20 + s21 + s22) / 9.0;
+                // Factor dinámico: 1.0 en escenas normales/oscuras, se degrada
+                // hacia ~0.4 cuando la escena ya es muy brillante (evita quemar).
+                float dyn = 1.0 - smoothstep(0.5, 0.82, sceneLuma) * 0.6;
+                float s = strength * dyn;
+                // Elevación suave de sombras y medios, sin tocar brillos.
+                float lift = (1.0 - smoothstep(0.12, 0.6, luma)) * s * 0.45;
+                // Contraste real centrado en 0.5 (S-curve leve), no encendido bruto.
+                float contrast = 1.0 + s * 0.18;
+                vec3 result = color * (1.0 + lift) + lift * 0.05;
+                result = (result - vec3(0.5)) * contrast + vec3(0.5);
+                // Saturación "vibrance": mucha en tonos apagados, un toque en luces,
+                // pero SIEMPRE presente para que las escenas claras no pierdan color.
+                float chromaDev = length(result - vec3(lumaOf(result)));
+                float vibrance = 1.0 - smoothstep(0.15, 0.7, chromaDev);
+                float sat = 1.0 + s * (0.55 + 0.25 * vibrance);
+                result = mix(vec3(lumaOf(result)), result, sat);
+                // Protección de highlights: el brillo NO debe lavar el tono.
+                float hl = smoothstep(0.75, 0.98, luma);
+                result = mix(result, color, hl * strength * 0.55);
+                // Proteje piel para no volverla anaranjada.
+                float skinMask = smoothstep(0.15, 0.08, abs(color.r - color.g))
+                               * smoothstep(0.15, 0.05, color.r - color.b);
+                skinMask *= step(0.3, color.r) * step(color.r, 0.75)
+                          * step(0.15, color.g) * step(color.g, 0.65);
+                result = mix(result, color, skinMask * strength * 0.5);
+                result = pow(clamp(result, 0.0, 1.0), vec3(1.0 - strength * 0.05));
                 return clamp(result, 0.0, 1.0);
             }
 
-             vec3 clarityBoost(vec3 color, vec2 uv, vec2 texel, float strength) {
-                 vec2 txl = texel;
-                 vec3 c = texture2D(uCurrTex, uv).rgb;
-                 vec3 n  = texture2D(uCurrTex, uv + vec2(0.0, -txl.y)).rgb;
-                 vec3 s  = texture2D(uCurrTex, uv + vec2(0.0,  txl.y)).rgb;
-                 vec3 w  = texture2D(uCurrTex, uv + vec2(-txl.x, 0.0)).rgb;
-                 vec3 e  = texture2D(uCurrTex, uv + vec2( txl.x, 0.0)).rgb;
-                 vec3 nw = texture2D(uCurrTex, uv + vec2(-txl.x, -txl.y)).rgb;
-                 vec3 ne = texture2D(uCurrTex, uv + vec2( txl.x, -txl.y)).rgb;
-                 vec3 sw = texture2D(uCurrTex, uv + vec2(-txl.x,  txl.y)).rgb;
-                 vec3 se = texture2D(uCurrTex, uv + vec2( txl.x,  txl.y)).rgb;
-                 float lc = lumaOf(c);
-                 float ln = lumaOf(n); float ls = lumaOf(s);
-                 float lw = lumaOf(w); float le = lumaOf(e);
-                 float lnw = lumaOf(nw); float lne = lumaOf(ne);
-                 float lsw = lumaOf(sw); float lse = lumaOf(se);
+            // Mejora baja calidad: reparación de artefactos de compresión de bajo bitrate.
+            // Solo técnicas que ayudan a vídeos pobres: 1) anti-mosquito bilateral (quita el
+            // "crawl" de ruido en bordes y planos sin desenfocar), 2) deblock dirigido (suaviza
+            // a través de los nodos de rejilla de 8px detectados por periodicidad) y 3)
+            // recuperación de detalle real en banda 2px sin amplificar ruido de 1px ni rejilla.
+            vec3 lowBitrateBoost(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec2 txl = texel;
+                vec2 t2 = txl * 2.0;
+                vec3 c = texture2D(uCurrTex, uv).rgb;
+                vec3 n1 = texture2D(uCurrTex, uv + vec2(0.0, -txl.y)).rgb;
+                vec3 s1 = texture2D(uCurrTex, uv + vec2(0.0,  txl.y)).rgb;
+                vec3 w1 = texture2D(uCurrTex, uv + vec2(-txl.x, 0.0)).rgb;
+                vec3 e1 = texture2D(uCurrTex, uv + vec2( txl.x, 0.0)).rgb;
+                vec3 n2 = texture2D(uCurrTex, uv + vec2(0.0, -t2.y)).rgb;
+                vec3 s2 = texture2D(uCurrTex, uv + vec2(0.0,  t2.y)).rgb;
+                vec3 w2 = texture2D(uCurrTex, uv + vec2(-t2.x, 0.0)).rgb;
+                vec3 e2 = texture2D(uCurrTex, uv + vec2( t2.x, 0.0)).rgb;
+                float lc = lumaOf(c);
+                float ln = lumaOf(n1); float ls = lumaOf(s1);
+                float lw = lumaOf(w1); float le = lumaOf(e1);
 
-                 float edgeH = abs(le - lw);
-                 float edgeV = abs(ln - ls);
-                 float edgeD1 = abs(lne - lsw);
-                 float edgeD2 = abs(lnw - lse);
-                 float edgeStrength = max(max(edgeH, edgeV), max(edgeD1, edgeD2));
-                 float edgeMask = smoothstep(0.02, 0.15, edgeStrength);
+                // Bordes reales (para no dañarlos).
+                float edgeMask = smoothstep(0.02, 0.14, max(abs(le - lw), abs(ln - ls)));
 
-                 vec2 h8 = txl * 8.0;
-                 float stepBlockH = abs(lumaOf(texture2D(uCurrTex, uv + vec2(h8.x, 0.0)).rgb) -
-                                        lumaOf(texture2D(uCurrTex, uv - vec2(h8.x, 0.0)).rgb));
-                 float stepBlockV = abs(lumaOf(texture2D(uCurrTex, uv + vec2(0.0, h8.y)).rgb) -
-                                        lumaOf(texture2D(uCurrTex, uv - vec2(0.0, h8.y)).rgb));
-                 float blockDiscontinuity = max(stepBlockH, stepBlockV);
-                 float localVar = (abs(lc - ln) + abs(lc - ls) + abs(lc - lw) + abs(lc - le)) * 0.25;
-                 float isFlat = smoothstep(0.0, 0.03, localVar);
-                 float blockEdge = smoothstep(0.02, 0.12, blockDiscontinuity) * isFlat;
+                // Nodos de rejilla de bloque (8px nativos) por periodicidad: el salto a 1px
+                // debe repetirse a 8px para ser rejilla de compresión y no textura real.
+                vec2 gm = 1.0 / uVideoRes;
+                float gH1 = abs(lumaOf(texture2D(uCurrTex, uv + vec2(gm.x, 0.0)).rgb) -
+                                lumaOf(texture2D(uCurrTex, uv - vec2(gm.x, 0.0)).rgb));
+                float gV1 = abs(lumaOf(texture2D(uCurrTex, uv + vec2(0.0, gm.y)).rgb) -
+                                lumaOf(texture2D(uCurrTex, uv - vec2(0.0, gm.y)).rgb));
+                float gH8 = abs(lumaOf(texture2D(uCurrTex, uv + vec2(gm.x * 8.0, 0.0)).rgb) -
+                                lumaOf(texture2D(uCurrTex, uv + vec2(gm.x * 7.0, 0.0)).rgb));
+                float gV8 = abs(lumaOf(texture2D(uCurrTex, uv + vec2(0.0, gm.y * 8.0)).rgb) -
+                                lumaOf(texture2D(uCurrTex, uv + vec2(0.0, gm.y * 7.0)).rgb));
+                float gridH = gH1 * clamp((gH8 - gH1 * 0.4) / (gH1 * 0.5 + 0.0001), 0.0, 1.0);
+                float gridV = gV1 * clamp((gV8 - gV1 * 0.4) / (gV1 * 0.5 + 0.0001), 0.0, 1.0);
+                float gridMask = smoothstep(0.02, 0.08, max(gridH, gridV));
 
-                 vec3 smoothH = (w + c + e) * 0.333;
-                 vec3 smoothV = (n + c + s) * 0.333;
-                 vec3 smoothD = (nw + ne + sw + se + c * 2.0) * 0.2;
-                 vec3 smoothAvg = (smoothH + smoothV + smoothD) * 0.333;
-                 float deblockAmount = blockEdge * strength * 1.2;
-                 vec3 deblocked = mix(c, smoothAvg, deblockAmount);
+                // Anti-mosquito bilateral 1px: promedia solo vecinos parecidos (exp de la
+                // diferencia de luma), así elimina el crawl de ruido sin desenfocar detalle.
+                float wN = exp(-abs(ln - lc) * 12.0);
+                float wS = exp(-abs(ls - lc) * 12.0);
+                float wW = exp(-abs(lw - lc) * 12.0);
+                float wE = exp(-abs(le - lc) * 12.0);
+                vec3 smooth1 = (c + n1*wN + s1*wS + w1*wW + e1*wE) / (1.0 + wN + wS + wW + wE);
+                float noiseAmt = smoothstep(0.008, 0.05, length(smooth1 - c)) * (1.0 - edgeMask * 0.6);
+                vec3 deblocked = mix(c, smooth1, noiseAmt * strength * 0.8);
 
-                 vec3 edgeDir;
-                 if (edgeH > edgeV && edgeH > edgeD1 && edgeH > edgeD2) {
-                     edgeDir = (e - w);
-                 } else if (edgeV > edgeD1 && edgeV > edgeD2) {
-                     edgeDir = (n - s);
-                 } else if (edgeD1 > edgeD2) {
-                     edgeDir = (ne - sw);
-                 } else {
-                     edgeDir = (nw - se);
-                 }
-                 vec3 edgeRecon = deblocked + edgeDir * edgeMask * strength * 0.7;
+                // Deblock dirigido: en nodos de rejilla sobre contenido plano, suaviza a través
+                // del borde (media de vecinos) en vez de dejar la línea dura de bloque.
+                float localVar = (abs(lc - ln) + abs(lc - ls) + abs(lc - lw) + abs(lc - le)) * 0.25;
+                float isFlatish = 1.0 - smoothstep(0.03, 0.12, localVar);
+                vec3 blendLine = (n1 + s1 + w1 + e1) * 0.25;
+                deblocked = mix(deblocked, blendLine, gridMask * isFlatish * strength * 0.6);
 
-                 vec3 highFreqH = deblocked - (w + e) * 0.5;
-                 vec3 highFreqV = deblocked - (n + s) * 0.5;
-                 vec3 highFreqD = deblocked - (nw + ne + sw + se) * 0.25;
-                 vec3 highFreq = (highFreqH + highFreqV + highFreqD) * 0.333;
-                 float textureMask = edgeMask * 0.7 + 0.15;
-                 vec3 textureRecovered = deblocked + highFreq * strength * 2.5 * textureMask;
+                // Recuperación de detalle en banda 2px (detalle real del contenido), sin
+                // rejilla (8px) ni ruido (1px); clamp al rango local para no crear halos.
+                vec3 hi = deblocked - (n2 + s2 + w2 + e2) * 0.25;
+                float detailMask = smoothstep(0.004, 0.03, length(hi));
+                float mask = detailMask * edgeMask * (1.0 - gridMask * 0.9);
+                vec3 result = deblocked + hi * strength * 1.6 * mask;
+                result = clamp(result, min(min(n1, s1), min(w1, e1)), max(max(n1, s1), max(w1, e1)));
+                return clamp(result, 0.0, 1.0);
+            }
 
-                 vec3 sharpened = deblocked + (deblocked - smoothAvg) * strength * 2.5;
-                 float sharpenMask = edgeMask * 0.7 + 0.3;
-                 vec3 detail = mix(textureRecovered, sharpened, sharpenMask);
+            // Denoise espacial-temporal: bilateral 3x3 + muestreo del frame anterior
+            // compensado por movimiento (solo cuando hay interpolación activa).
+            vec3 denoisePass(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec3 n1 = texture2D(uCurrTex, uv + vec2(texel.x, 0.0)).rgb;
+                vec3 n2 = texture2D(uCurrTex, uv - vec2(texel.x, 0.0)).rgb;
+                vec3 n3 = texture2D(uCurrTex, uv + vec2(0.0, texel.y)).rgb;
+                vec3 n4 = texture2D(uCurrTex, uv - vec2(0.0, texel.y)).rgb;
+                vec3 n5 = texture2D(uCurrTex, uv + vec2(texel.x, texel.y)).rgb;
+                vec3 n6 = texture2D(uCurrTex, uv - vec2(texel.x, texel.y)).rgb;
+                vec3 n7 = texture2D(uCurrTex, uv + vec2(-texel.x, texel.y)).rgb;
+                vec3 n8 = texture2D(uCurrTex, uv + vec2(texel.x, -texel.y)).rgb;
+                float w1 = exp(-length(n1 - color) * 8.0);
+                float w2 = exp(-length(n2 - color) * 8.0);
+                float w3 = exp(-length(n3 - color) * 8.0);
+                float w4 = exp(-length(n4 - color) * 8.0);
+                float w5 = exp(-length(n5 - color) * 8.0) * 0.7;
+                float w6 = exp(-length(n6 - color) * 8.0) * 0.7;
+                float w7 = exp(-length(n7 - color) * 8.0) * 0.7;
+                float w8 = exp(-length(n8 - color) * 8.0) * 0.7;
+                float wSum = 1.0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8;
+                vec3 bilateral = (color + n1*w1 + n2*w2 + n3*w3 + n4*w4 + n5*w5 + n6*w6 + n7*w7 + n8*w8) / wSum;
+                vec3 result = color;
+                if (uInterpEnabled > 0.5) {
+                    vec4 mN = texture2D(uMotionTex, vTexCoord);
+                    float mConf = clamp(mN.b * mN.a, 0.0, 1.0);
+                    vec2 mvN = mix(uGlobalVec, mN.xy * 2.0 - 1.0, mConf) * 16.0 * uMotionScale;
+                    vec2 nUV = clamp(vTexCoord - mvN * 0.5, vec2(0.0), vec2(1.0));
+                    vec3 nPrev = texture2D(uPrevTex, nUV).rgb;
+                    float diff = length(nPrev - bilateral);
+                    float trust = 1.0 - smoothstep(0.03, 0.22, diff);
+                    vec3 den = mix(bilateral, nPrev, 0.65);
+                    result = mix(result, den, trust * strength);
+                } else {
+                    result = mix(result, bilateral, strength * 0.7);
+                }
+                return clamp(result, 0.0, 1.0);
+            }
 
-                 vec3 result = mix(deblocked, detail, 0.5 + edgeMask * 0.5);
-
-                 float microContrast = (lc - lumaOf(smoothAvg)) * strength * 0.5;
-                 result = mix(vec3(0.5), result, 1.0 + microContrast);
-                 result = result * result * (3.0 - 2.0 * result);
-                 float gamma = 1.0 - strength * 0.02;
-                 result = pow(clamp(result, 0.0, 1.0), vec3(gamma));
-                 return clamp(result, 0.0, 1.0);
-             }
+            // Deband: difumina gradientes planos y añade dither azul sin tocar bordes reales.
+            vec3 debandPass(vec3 color, vec2 uv, vec2 texel, float strength) {
+                vec2 h2 = texel * 3.0;
+                vec3 avg = (texture2D(uCurrTex, uv + vec2(h2.x, 0.0)).rgb
+                         + texture2D(uCurrTex, uv - vec2(h2.x, 0.0)).rgb
+                         + texture2D(uCurrTex, uv + vec2(0.0, h2.y)).rgb
+                         + texture2D(uCurrTex, uv - vec2(0.0, h2.y)).rgb
+                         + texture2D(uCurrTex, uv + vec2(h2.x, h2.y)).rgb
+                         + texture2D(uCurrTex, uv - vec2(h2.x, h2.y)).rgb
+                         + texture2D(uCurrTex, uv + vec2(h2.x, -h2.y)).rgb
+                         + texture2D(uCurrTex, uv - vec2(h2.x, -h2.y)).rgb) * 0.125;
+                float lDiff = abs(lumaOf(color) - lumaOf(avg));
+                // Difuminar en zonas planas/gradientes (banding); NO tocar bordes reales.
+                float bandMask = 1.0 - smoothstep(0.004, 0.03, lDiff);
+                float dither = (hash(vTexCoord * 437.58 + vec2(uGrainSeed, uGrainSeed * 0.7)) - 0.5);
+                vec3 result = color;
+                result += dither * strength * bandMask * 0.05;
+                result = mix(result, avg, bandMask * strength * 0.3);
+                return clamp(result, 0.0, 1.0);
+            }
 
             void main() {
                 vec4 curr = texture2D(uCurrTex, vTexCoord);
@@ -1017,34 +1268,24 @@ class Media3SixtyFpsProcessor(
                     color = mix(curr.rgb, interp, mask);
                 }
 
-                if (uUpscalerMode > 1.5) {
-                    color = anime4kEdge(color, vTexCoord, 1.0 / uVideoRes);
-                } else if (uUpscalerMode > 0.5) {
-                    color = bilinearRescale(vTexCoord, 1.0 / uVideoRes);
-                }
-
                 if (uEnabled > 0.5) {
-                     if (uClarity > 0.001) {
-                         color = clarityBoost(color, vTexCoord, uTexelSize, uClarity);
-                     }
+                    // Limpieza primero (denoise → deband → deblock): la reparación de
+                    // lowBitrateBoost debe operar sobre señal limpia, no amplificar artefactos.
+                    if (uDenoise > 0.001) {
+                        color = denoisePass(color, vTexCoord, uTexelSize, uDenoise);
+                    }
+
+                    if (uDeband > 0.001) {
+                        color = debandPass(color, vTexCoord, uTexelSize, uDeband);
+                    }
 
                     if (uDeblock > 0.001) {
                         color = deblock(color, vTexCoord, uTexelSize, uDeblock);
                     }
 
-                    if (uDesRinging > 0.001) {
-                        color = desRinging(color, vTexCoord, uTexelSize, uDesRinging);
+                    if (uLowBitrateBoost > 0.001) {
+                        color = lowBitrateBoost(color, vTexCoord, uTexelSize, uLowBitrateBoost);
                     }
-
-                    color = applyTint(color, uTint);
-                    float ct = (uContrast - 1.0) * 0.5;
-                    color = clamp(color, 0.0, 1.0);
-                    color = color * color * (3.0 - 2.0 * color);
-                    color = mix(color, color * color * (3.0 - 2.0 * color), ct);
-                    color = mix(vec3(0.5), color, uContrast);
-                    color = adjustSaturation(color, uSaturation);
-                    color *= uColorBoost;
-                    color += uBrightness * 0.3;
 
                     // Nitidez del perfil de color (básica, sobre luma)
                     if (uStatic < 0.5 && uSharpness > 0.001) {
@@ -1071,61 +1312,24 @@ class Media3SixtyFpsProcessor(
                     color = mix(color, sharpened, uAdaptiveSharp * 0.5 * edge);
                     }
 
-                    if (uDenoise > 0.001) {
-                        vec2 txn = uTexelSize;
-                        vec3 n1 = texture2D(uCurrTex, vTexCoord + vec2(txn.x, 0.0)).rgb;
-                        vec3 n2 = texture2D(uCurrTex, vTexCoord - vec2(txn.x, 0.0)).rgb;
-                        vec3 n3 = texture2D(uCurrTex, vTexCoord + vec2(0.0, txn.y)).rgb;
-                        vec3 n4 = texture2D(uCurrTex, vTexCoord - vec2(0.0, txn.y)).rgb;
-                        vec3 n5 = texture2D(uCurrTex, vTexCoord + vec2(txn.x, txn.y)).rgb;
-                        vec3 n6 = texture2D(uCurrTex, vTexCoord - vec2(txn.x, txn.y)).rgb;
-                        vec3 n7 = texture2D(uCurrTex, vTexCoord + vec2(-txn.x, txn.y)).rgb;
-                        vec3 n8 = texture2D(uCurrTex, vTexCoord + vec2(txn.x, -txn.y)).rgb;
-                        float w1 = exp(-length(n1 - color) * 8.0);
-                        float w2 = exp(-length(n2 - color) * 8.0);
-                        float w3 = exp(-length(n3 - color) * 8.0);
-                        float w4 = exp(-length(n4 - color) * 8.0);
-                        float w5 = exp(-length(n5 - color) * 8.0) * 0.7;
-                        float w6 = exp(-length(n6 - color) * 8.0) * 0.7;
-                        float w7 = exp(-length(n7 - color) * 8.0) * 0.7;
-                        float w8 = exp(-length(n8 - color) * 8.0) * 0.7;
-                        float wSum = 1.0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8;
-                        vec3 bilateral = (color + n1*w1 + n2*w2 + n3*w3 + n4*w4 + n5*w5 + n6*w6 + n7*w7 + n8*w8) / wSum;
-                        if (uInterpEnabled > 0.5) {
-                            vec4 mN = texture2D(uMotionTex, vTexCoord);
-                            float mConf = clamp(mN.b * mN.a, 0.0, 1.0);
-                            vec2 mvN = mix(uGlobalVec, mN.xy * 2.0 - 1.0, mConf) * 16.0 * uMotionScale;
-                            vec2 nUV = clamp(vTexCoord - mvN * 0.5, vec2(0.0), vec2(1.0));
-                            vec3 nPrev = texture2D(uPrevTex, nUV).rgb;
-                            float diff = length(nPrev - bilateral);
-                            float trust = 1.0 - smoothstep(0.03, 0.22, diff);
-                            vec3 den = mix(bilateral, nPrev, 0.65);
-                            color = mix(color, den, trust * uDenoise);
-                        } else {
-                            color = mix(color, bilateral, uDenoise * 0.7);
-                        }
-                    }
-
                     if (uLocalContrast > 0.001) {
                         color = localContrast(color, vTexCoord, uTexelSize, uLocalContrast);
                     }
 
-                    if (uDeband > 0.001) {
-                        vec2 h = uTexelSize * 2.0;
-                        vec3 avg = (texture2D(uCurrTex, vTexCoord + vec2(h.x, 0.0)).rgb
-                                 + texture2D(uCurrTex, vTexCoord - vec2(h.x, 0.0)).rgb
-                                 + texture2D(uCurrTex, vTexCoord + vec2(0.0, h.y)).rgb
-                                 + texture2D(uCurrTex, vTexCoord - vec2(0.0, h.y)).rgb) * 0.25;
-                        float lDiff = abs(lumaOf(color) - lumaOf(avg));
-                        float bandMask = smoothstep(0.004, 0.02, lDiff);
-                        float dither = (hash(vTexCoord * 437.58 + vec2(uGrainSeed, uGrainSeed * 0.7)) - 0.5);
-                        color += dither * uDeband * bandMask * 0.04;
-                        color = mix(color, avg, bandMask * uDeband * 0.2);
+                    // Limpieza de halos tras TODO el afilado (lowBitrateBoost, sharpness, adaptive, local).
+                    if (uDesRinging > 0.001) {
+                        color = desRinging(color, vTexCoord, uTexelSize, uDesRinging);
                     }
 
-                    if (uGrain > 0.001) {
-                        color = addGrain(color, vTexCoord, uGrain);
-                    }
+                    color = applyTint(color, uTint);
+                    float ct = (uContrast - 1.0) * 0.5;
+                    color = clamp(color, 0.0, 1.0);
+                    color = color * color * (3.0 - 2.0 * color);
+                    color = mix(color, color * color * (3.0 - 2.0 * color), ct);
+                    color = mix(vec3(0.5), color, uContrast);
+                    color = adjustSaturation(color, uSaturation);
+                    color = gamutBoost(color, uColorBoost);
+                    color += uBrightness * 0.3;
 
                     if (uDehaze > 0.001) {
                         color = dehaze(color, vTexCoord, uTexelSize, uDehaze);
@@ -1141,6 +1345,12 @@ class Media3SixtyFpsProcessor(
 
                     if (uDetailBoost > 0.001) {
                         color = detailBoost(color, vTexCoord, uTexelSize, uDetailBoost);
+                    }
+
+                    // Grano fílmico SIEMPRE al final: ningún lift/tone-mapping posterior lo
+                    // amplifica y el afilado no lo endurece.
+                    if (uGrain > 0.001) {
+                        color = addGrain(color, vTexCoord, uGrain);
                     }
                 }
 
@@ -1547,11 +1757,8 @@ class Media3SixtyFpsProcessor(
             hdrLoc = GLES20.glGetUniformLocation(program, "uHdr")
             detailBoostLoc = GLES20.glGetUniformLocation(program, "uDetailBoost")
             lightBoostLoc = GLES20.glGetUniformLocation(program, "uLightBoost")
-             clarityLoc = GLES20.glGetUniformLocation(program, "uClarity")
+             lowBitrateBoostLoc = GLES20.glGetUniformLocation(program, "uLowBitrateBoost")
             dbgLoc = GLES20.glGetUniformLocation(program, "uDbgMode")
-            upscalerLoc = GLES20.glGetUniformLocation(program, "uUpscalerMode")
-            fsrScaleLoc = GLES20.glGetUniformLocation(program, "uFsrScale")
-            fsrSharpnessLoc = GLES20.glGetUniformLocation(program, "uFsrSharpness")
             videoResLoc = GLES20.glGetUniformLocation(program, "uVideoRes")
             posLoc = GLES20.glGetAttribLocation(program, "aPosition")
             texLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
@@ -1612,34 +1819,13 @@ class Media3SixtyFpsProcessor(
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, downTexId)
                 GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, (pw / 2).coerceAtLeast(2), (ph / 2).coerceAtLeast(2), 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
 
+                // Las texturas de motion/coarse se asignan de forma perezosa (solo
+                // cuando hay interpolación), para ahorrar VRAM y setup si no se usan.
                 motionW = (w / 4).coerceIn(32, 480)
                 motionH = (h / 4).coerceIn(32, 270)
                 coarseW = (motionW / 2).coerceAtLeast(8)
                 coarseH = (motionH / 2).coerceAtLeast(8)
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionTexId)
-                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionAccumId)
-                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionBwdId)
-                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionBwdAccumId)
-                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, coarseTexId)
-                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, coarseW, coarseH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
-                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
-                GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, coarseTexId, 0)
-                GLES20.glViewport(0, 0, coarseW, coarseH)
-                GLES20.glClearColor(0.5f, 0.5f, 0f, 0f)
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionTexId, 0)
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionAccumId, 0)
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionBwdId, 0)
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionBwdAccumId, 0)
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                GLES20.glClearColor(0f, 0f, 0f, 1f)
+                motionTexStorageAllocated = false
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
                 GLES20.glViewport(0, 0, viewWidth, viewHeight)
             } catch (t: Throwable) {
@@ -1694,7 +1880,7 @@ class Media3SixtyFpsProcessor(
                             if (!staticScene || debugNeedsPrev) {
                                 buildMotionMap()
                                 globalCounter++
-                                if (globalCounter % 5 == 0) computeGlobalMotion()
+                                if (globalCounter % 12 == 0) computeGlobalMotion()
                                 staticReadCounter++
                                 if (staticReadCounter >= STATIC_READ_INTERVAL) {
                                     staticReadCounter = 0
@@ -1730,7 +1916,6 @@ class Media3SixtyFpsProcessor(
                         }
                         if (cfg.isEnabled() && !staticScene && cfg.getSharpness() > 0.001f) downscaleCurr()
                         frameAvailable = false
-                        hasNewFrame = true
                         frameCount++
                         lastRenderedFrameNs = System.nanoTime()
                         latched = true
@@ -1870,10 +2055,12 @@ class Media3SixtyFpsProcessor(
         private fun renderFrame(texMatrix: FloatArray, factor: Float, cfg: VideoEnhanceConfig, interpolating: Boolean, mode: Int) {
             if (program == 0) return
             val upscalerMode = cfg.getUpscalerMode()
-            val fsrActive = upscalerMode.value >= 4f
-            fsrRenderScale = if (fsrActive) (1f / upscalerMode.scaleFactor) else 0f
-            val effScale = if (fsrActive) fsrRenderScale else renderScale
-            val offscreen = fsrActive || effScale < 1f
+            val needsUpscale = videoWidth > 0 && videoHeight > 0 &&
+                (viewWidth.toFloat() / videoWidth > 1.25f || viewHeight.toFloat() / videoHeight > 1.25f)
+            val effUpscaler = if (needsUpscale) upscalerMode else VideoEnhanceConfig.UpscalerMode.OFF
+            val upscalerActive = effUpscaler != VideoEnhanceConfig.UpscalerMode.OFF
+            val offscreen = upscalerActive || renderScale < 1f
+            val effScale = if (upscalerActive) 0.5f else renderScale
             val rect = aspectRect()
             val rw = if (offscreen) ((rect[2] * effScale).toInt()).coerceAtLeast(2) else rect[2]
             val rh = if (offscreen) ((rect[3] * effScale).toInt()).coerceAtLeast(2) else rect[3]
@@ -1881,6 +2068,11 @@ class Media3SixtyFpsProcessor(
                 ensureDrsTarget(rw, rh)
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, drsFbo)
                 GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, drsTexId, 0)
+                if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+                    glFailed("drsFBO incomplete")
+                    return
+                }
                 GLES20.glViewport(0, 0, rw, rh)
             } else {
                 GLES20.glViewport(rect[0], rect[1], rect[2], rect[3])
@@ -1938,53 +2130,21 @@ class Media3SixtyFpsProcessor(
             GLES20.glUniform1f(hdrLoc, if (cfg.hdrEnabled()) cfg.getHdr() else 0f)
             GLES20.glUniform1f(detailBoostLoc, if (cfg.detailBoostEnabled()) cfg.getDetailBoost() else 0f)
             GLES20.glUniform1f(lightBoostLoc, if (cfg.lightBoostEnabled()) cfg.getLightBoost() else 0f)
-             GLES20.glUniform1f(clarityLoc, if (cfg.superResEnabled()) cfg.getSuperRes() else 0f)
+             GLES20.glUniform1f(lowBitrateBoostLoc, if (cfg.superResEnabled()) cfg.getSuperRes() else 0f)
             GLES20.glUniform1f(dbgLoc, debugMode.toFloat())
-            GLES20.glUniform1f(upscalerLoc, if (fsrActive) 0f else upscalerMode.value)
-            GLES20.glUniform1f(fsrScaleLoc, upscalerMode.scaleFactor)
-            GLES20.glUniform1f(fsrSharpnessLoc, upscalerMode.sharpness)
-            GLES20.glUniform2f(videoResLoc, videoWidth.toFloat(), videoHeight.toFloat())
+            GLES20.glUniform2f(videoResLoc, videoWidth.coerceAtLeast(1).toFloat(), videoHeight.coerceAtLeast(1).toFloat())
 
             drawQuad(posLoc, texLoc)
 
             if (offscreen) {
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
                 GLES20.glViewport(rect[0], rect[1], rect[2], rect[3])
-                if (fsrActive) {
-                    ensureFsrUpProgram()
-                    if (fsrUpProgram != 0) {
-                        GLES20.glUseProgram(fsrUpProgram)
-                        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
-                        GLES20.glUniform1i(fsrUpSamplerLoc, 0)
-                        GLES20.glUniformMatrix4fv(fsrUpTexMatrixLoc, 1, false, identityMat, 0)
-                        GLES20.glUniform1f(fsrUpVFlipLoc, 1f)
-                        GLES20.glUniform2f(fsrUpTexelLoc, 1f / rw.coerceAtLeast(1), 1f / rh.coerceAtLeast(1))
-                        GLES20.glUniform1f(fsrUpSharpLoc, upscalerMode.sharpness)
-                        drawQuad(fsrUpPosLoc, fsrUpTexLoc)
-                    } else {
-                        ensureBlitProgram()
-                        if (blitProgram != 0) {
-                            GLES20.glUseProgram(blitProgram)
-                            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
-                            GLES20.glUniform1i(blitSamplerLoc, 0)
-                            GLES20.glUniformMatrix4fv(blitTexMatrixLoc, 1, false, identityMat, 0)
-                            GLES20.glUniform1f(blitVFlipLoc, 1f)
-                            drawQuad(blitPosLoc, blitTexLoc)
-                        }
-                    }
-                } else {
-                    ensureBlitProgram()
-                    if (blitProgram != 0) {
-                        GLES20.glUseProgram(blitProgram)
-                        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
-                        GLES20.glUniform1i(blitSamplerLoc, 0)
-                        GLES20.glUniformMatrix4fv(blitTexMatrixLoc, 1, false, identityMat, 0)
-                        GLES20.glUniform1f(blitVFlipLoc, 1f)
-                        drawQuad(blitPosLoc, blitTexLoc)
-                    }
+                when (effUpscaler) {
+                    VideoEnhanceConfig.UpscalerMode.BILINEAR -> renderBlit()
+                    VideoEnhanceConfig.UpscalerMode.BICUBIC -> renderBicubic(rw, rh)
+                    VideoEnhanceConfig.UpscalerMode.DOG -> renderDoG(rw, rh, cfg)
+                    VideoEnhanceConfig.UpscalerMode.FSR -> renderFSR(rw, rh, cfg)
+                    else -> renderBlit()
                 }
             }
         }
@@ -2010,9 +2170,6 @@ class Media3SixtyFpsProcessor(
             GLES20.glUniform1f(enabledLoc, 0f)
             GLES20.glUniform1f(interpEnabledLoc, 0f)
             GLES20.glUniform1f(staticFlagLoc, 0f)
-            GLES20.glUniform1f(upscalerLoc, 0f)
-            GLES20.glUniform1f(fsrScaleLoc, 1f)
-            GLES20.glUniform1f(fsrSharpnessLoc, 0.8f)
             drawQuad(posLoc, texLoc)
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
             GLES20.glViewport(0, 0, viewWidth, viewHeight)
@@ -2039,9 +2196,6 @@ class Media3SixtyFpsProcessor(
             GLES20.glUniform1f(enabledLoc, 0f)
             GLES20.glUniform1f(interpEnabledLoc, 0f)
             GLES20.glUniform1f(staticFlagLoc, 0f)
-            GLES20.glUniform1f(upscalerLoc, 0f)
-            GLES20.glUniform1f(fsrScaleLoc, 1f)
-            GLES20.glUniform1f(fsrSharpnessLoc, 0.8f)
             drawQuad(posLoc, texLoc)
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
             GLES20.glViewport(0, 0, viewWidth, viewHeight)
@@ -2049,6 +2203,7 @@ class Media3SixtyFpsProcessor(
 
         private fun buildMotionMap() {
             if (motionProgram == 0 || motionW == 0 || motionH == 0) return
+            if (!motionTexStorageAllocated) ensureMotionStorage()
             if (coarseProgram != 0 && coarseTexId != 0 && coarseW > 0 && coarseH > 0) {
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
                 GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, coarseTexId, 0)
@@ -2070,8 +2225,10 @@ class Media3SixtyFpsProcessor(
                     try {
                         val mw = coarseW.coerceAtLeast(2)
                         val mh = coarseH.coerceAtLeast(2)
-                        val buf = coarseProbeBuf
-                            ?: java.nio.ByteBuffer.allocateDirect(mw * mh * 4).also { coarseProbeBuf = it }
+                        if (coarseProbeBuf == null || coarseProbeBuf!!.capacity() < mw * mh * 4) {
+                            coarseProbeBuf = java.nio.ByteBuffer.allocateDirect(mw * mh * 4)
+                        }
+                        val buf = coarseProbeBuf!!
                         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
                         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, coarseTexId, 0)
                         GLES20.glViewport(0, 0, mw, mh)
@@ -2149,8 +2306,10 @@ class Media3SixtyFpsProcessor(
                 try {
                     val mw = motionW.coerceAtLeast(2)
                     val mh = motionH.coerceAtLeast(2)
-                    val buf = mvProbeBuf
-                        ?: java.nio.ByteBuffer.allocateDirect(mw * mh * 4).also { mvProbeBuf = it }
+                    if (mvProbeBuf == null || mvProbeBuf!!.capacity() < mw * mh * 4) {
+                        mvProbeBuf = java.nio.ByteBuffer.allocateDirect(mw * mh * 4)
+                    }
+                    val buf = mvProbeBuf!!
                     GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
                     GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionTexId, 0)
                     GLES20.glViewport(0, 0, mw, mh)
@@ -2222,8 +2381,10 @@ class Media3SixtyFpsProcessor(
                 try {
                     val mw = motionW.coerceAtLeast(2)
                     val mh = motionH.coerceAtLeast(2)
-                    val buf = bwdProbeBuf
-                        ?: java.nio.ByteBuffer.allocateDirect(mw * mh * 4).also { bwdProbeBuf = it }
+                    if (bwdProbeBuf == null || bwdProbeBuf!!.capacity() < mw * mh * 4) {
+                        bwdProbeBuf = java.nio.ByteBuffer.allocateDirect(mw * mh * 4)
+                    }
+                    val buf = bwdProbeBuf!!
                     GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
                     GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionBwdId, 0)
                     GLES20.glViewport(0, 0, mw, mh)
@@ -2250,6 +2411,39 @@ class Media3SixtyFpsProcessor(
                     Log.w(TAG, "bwdProbe failed: ${t.message}")
                 }
             }
+        }
+
+        // Asigna de forma perezosa el storage de las texturas de motion/coarse.
+        // Solo se llama cuando hay interpolación activa; si no, se ahorra VRAM y setup.
+        private fun ensureMotionStorage() {
+            if (motionTexStorageAllocated) return
+            motionTexStorageAllocated = true
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionTexId)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionAccumId)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionBwdId)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, motionBwdAccumId)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, motionW, motionH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, coarseTexId)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, coarseW, coarseH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, coarseTexId, 0)
+            GLES20.glViewport(0, 0, coarseW, coarseH)
+            GLES20.glClearColor(0.5f, 0.5f, 0f, 0f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionTexId, 0)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionAccumId, 0)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionBwdId, 0)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionBwdAccumId, 0)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            GLES20.glViewport(0, 0, viewWidth, viewHeight)
         }
 
         private fun computeGlobalMotion() {
@@ -2301,24 +2495,36 @@ class Media3SixtyFpsProcessor(
         }
 
         private fun weightedMedian(vals: FloatArray, n: Int, half: Float): Float {
+            if (n <= 0) return 0f
+            if (n == 1) return vals[0]
             for (i in 0 until n) globalIdx[i] = i
-            var i = 1
-            while (i < n) {
-                val key = globalIdx[i]
-                var j = i - 1
-                while (j >= 0 && vals[globalIdx[j]] > vals[key]) {
-                    globalIdx[j + 1] = globalIdx[j]
-                    j--
-                }
-                globalIdx[j + 1] = key
-                i++
-            }
+            // Ordena el array de índices (n <= 256) con quicksort: O(n log n)
+            // en vez del insertion sort O(n²) previo. Solo ordena el índice.
+            quicksortIdx(vals, 0, n - 1)
             var acc = 0f
             for (i in 0 until n) {
                 acc += globalWs[globalIdx[i]]
                 if (acc >= half) return vals[globalIdx[i]]
             }
             return vals[globalIdx[n - 1]]
+        }
+
+        // Quicksort clásico sobre globalIdx[] comparando vals[] (no copia datos).
+        private fun quicksortIdx(vals: FloatArray, lo: Int, hi: Int) {
+            if (lo >= hi) return
+            var i = lo
+            var j = hi
+            val pivot = vals[globalIdx[lo + ((hi - lo) / 2)]]
+            while (i <= j) {
+                while (vals[globalIdx[i]] < pivot) i++
+                while (vals[globalIdx[j]] > pivot) j--
+                if (i <= j) {
+                    val tmp = globalIdx[i]; globalIdx[i] = globalIdx[j]; globalIdx[j] = tmp
+                    i++; j--
+                }
+            }
+            quicksortIdx(vals, lo, j)
+            quicksortIdx(vals, i, hi)
         }
 
         private fun readStaticLevel(): Float {
@@ -2347,6 +2553,7 @@ class Media3SixtyFpsProcessor(
         }
 
         private fun drawQuad(pos: Int, tex: Int) {
+            if (pos < 0 || tex < 0) return
             GLES20.glEnableVertexAttribArray(pos)
             GLES20.glVertexAttribPointer(pos, 2, GLES20.GL_FLOAT, false, 0, quadVerts)
             GLES20.glEnableVertexAttribArray(tex)
@@ -2390,18 +2597,264 @@ class Media3SixtyFpsProcessor(
             }
         }
 
-        private fun ensureFsrUpProgram() {
-            if (fsrUpProgram != 0) return
-            fsrUpProgram = buildProgram(vertexShader, fsrUpFragmentShader)
-            if (fsrUpProgram != 0) {
-                fsrUpPosLoc = GLES20.glGetAttribLocation(fsrUpProgram, "aPosition")
-                fsrUpTexLoc = GLES20.glGetAttribLocation(fsrUpProgram, "aTexCoord")
-                fsrUpSamplerLoc = GLES20.glGetUniformLocation(fsrUpProgram, "uTex")
-                fsrUpTexMatrixLoc = GLES20.glGetUniformLocation(fsrUpProgram, "uTexMatrix")
-                fsrUpVFlipLoc = GLES20.glGetUniformLocation(fsrUpProgram, "uVFlip")
-                fsrUpTexelLoc = GLES20.glGetUniformLocation(fsrUpProgram, "uTexel")
-                fsrUpSharpLoc = GLES20.glGetUniformLocation(fsrUpProgram, "uSharpness")
+        private fun ensureBicubicProgram() {
+            if (bicubicProgram != 0) return
+            bicubicProgram = buildProgram(vertexShader, bicubicFragmentShader)
+            if (bicubicProgram != 0) {
+                bicubicPosLoc = GLES20.glGetAttribLocation(bicubicProgram, "aPosition")
+                bicubicTexLoc = GLES20.glGetAttribLocation(bicubicProgram, "aTexCoord")
+                bicubicSamplerLoc = GLES20.glGetUniformLocation(bicubicProgram, "uTex")
+                bicubicTexMatrixLoc = GLES20.glGetUniformLocation(bicubicProgram, "uTexMatrix")
+                bicubicVFlipLoc = GLES20.glGetUniformLocation(bicubicProgram, "uVFlip")
+                bicubicTexelLoc = GLES20.glGetUniformLocation(bicubicProgram, "uTexel")
             }
+        }
+
+        private fun ensureDogPrograms() {
+            if (dogLumaProgram == 0) {
+                dogLumaProgram = buildProgram(vertexShader, dogLumaShader)
+                if (dogLumaProgram != 0) {
+                    dogLumaPosLoc = GLES20.glGetAttribLocation(dogLumaProgram, "aPosition")
+                    dogLumaTexLoc = GLES20.glGetAttribLocation(dogLumaProgram, "aTexCoord")
+                    dogLumaSamplerLoc = GLES20.glGetUniformLocation(dogLumaProgram, "uTex")
+                    dogLumaTexMatrixLoc = GLES20.glGetUniformLocation(dogLumaProgram, "uTexMatrix")
+                    dogLumaVFlipLoc = GLES20.glGetUniformLocation(dogLumaProgram, "uVFlip")
+                }
+            }
+            if (dogGaussXProgram == 0) {
+                dogGaussXProgram = buildProgram(vertexShader, dogGaussXShader)
+                if (dogGaussXProgram != 0) {
+                    dogGaussXPosLoc = GLES20.glGetAttribLocation(dogGaussXProgram, "aPosition")
+                    dogGaussXTexLoc = GLES20.glGetAttribLocation(dogGaussXProgram, "aTexCoord")
+                    dogGaussXSamplerLoc = GLES20.glGetUniformLocation(dogGaussXProgram, "uTex")
+                    dogGaussXTexMatrixLoc = GLES20.glGetUniformLocation(dogGaussXProgram, "uTexMatrix")
+                    dogGaussXVFlipLoc = GLES20.glGetUniformLocation(dogGaussXProgram, "uVFlip")
+                    dogGaussXTexelLoc = GLES20.glGetUniformLocation(dogGaussXProgram, "uTexel")
+                }
+            }
+            if (dogGaussYProgram == 0) {
+                dogGaussYProgram = buildProgram(vertexShader, dogGaussYShader)
+                if (dogGaussYProgram != 0) {
+                    dogGaussYPosLoc = GLES20.glGetAttribLocation(dogGaussYProgram, "aPosition")
+                    dogGaussYTexLoc = GLES20.glGetAttribLocation(dogGaussYProgram, "aTexCoord")
+                    dogGaussYSamplerLoc = GLES20.glGetUniformLocation(dogGaussYProgram, "uTex")
+                    dogGaussYTexMatrixLoc = GLES20.glGetUniformLocation(dogGaussYProgram, "uTexMatrix")
+                    dogGaussYVFlipLoc = GLES20.glGetUniformLocation(dogGaussYProgram, "uVFlip")
+                    dogGaussYTexelLoc = GLES20.glGetUniformLocation(dogGaussYProgram, "uTexel")
+                }
+            }
+            if (dogApplyProgram == 0) {
+                dogApplyProgram = buildProgram(vertexShader, dogApplyShader)
+                if (dogApplyProgram != 0) {
+                    dogApplyPosLoc = GLES20.glGetAttribLocation(dogApplyProgram, "aPosition")
+                    dogApplyTexLoc = GLES20.glGetAttribLocation(dogApplyProgram, "aTexCoord")
+                    dogApplyInputSamplerLoc = GLES20.glGetUniformLocation(dogApplyProgram, "uInput")
+                    dogApplyGaussSamplerLoc = GLES20.glGetUniformLocation(dogApplyProgram, "uGauss")
+                    dogApplyTexMatrixLoc = GLES20.glGetUniformLocation(dogApplyProgram, "uTexMatrix")
+                    dogApplyVFlipLoc = GLES20.glGetUniformLocation(dogApplyProgram, "uVFlip")
+                    dogApplyStrengthLoc = GLES20.glGetUniformLocation(dogApplyProgram, "uStrength")
+                }
+            }
+        }
+
+        private fun ensureFsrPrograms() {
+            if (fsrEasuProgram == 0) {
+                fsrEasuProgram = buildProgram(vertexShader, fsrEasuShader)
+                if (fsrEasuProgram != 0) {
+                    fsrEasuPosLoc = GLES20.glGetAttribLocation(fsrEasuProgram, "aPosition")
+                    fsrEasuTexLoc = GLES20.glGetAttribLocation(fsrEasuProgram, "aTexCoord")
+                    fsrEasuSamplerLoc = GLES20.glGetUniformLocation(fsrEasuProgram, "uTex")
+                    fsrEasuTexMatrixLoc = GLES20.glGetUniformLocation(fsrEasuProgram, "uTexMatrix")
+                    fsrEasuVFlipLoc = GLES20.glGetUniformLocation(fsrEasuProgram, "uVFlip")
+                    fsrEasuInputSizeLoc = GLES20.glGetUniformLocation(fsrEasuProgram, "uInputSize")
+                    fsrEasuOutputSizeLoc = GLES20.glGetUniformLocation(fsrEasuProgram, "uOutputSize")
+                }
+            }
+            if (fsrRcasProgram == 0) {
+                fsrRcasProgram = buildProgram(vertexShader, fsrRcasShader)
+                if (fsrRcasProgram != 0) {
+                    fsrRcasPosLoc = GLES20.glGetAttribLocation(fsrRcasProgram, "aPosition")
+                    fsrRcasTexLoc = GLES20.glGetAttribLocation(fsrRcasProgram, "aTexCoord")
+                    fsrRcasSamplerLoc = GLES20.glGetUniformLocation(fsrRcasProgram, "uTex")
+                    fsrRcasTexMatrixLoc = GLES20.glGetUniformLocation(fsrRcasProgram, "uTexMatrix")
+                    fsrRcasVFlipLoc = GLES20.glGetUniformLocation(fsrRcasProgram, "uVFlip")
+                    fsrRcasTexelLoc = GLES20.glGetUniformLocation(fsrRcasProgram, "uTexel")
+                    fsrRcasSharpLoc = GLES20.glGetUniformLocation(fsrRcasProgram, "uSharpness")
+                }
+            }
+        }
+
+        private fun ensureDogTargets(w: Int, h: Int) {
+            val w1 = w; val h1 = h
+            val w2 = w; val h2 = h
+            if (dogTex1 == 0 || dogFBO1 == 0) {
+                val texs = IntArray(1); GLES20.glGenTextures(1, texs, 0); dogTex1 = texs[0]
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, dogTex1)
+                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w1, h1, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                val fbos = IntArray(1); GLES20.glGenFramebuffers(1, fbos, 0); dogFBO1 = fbos[0]
+            }
+            if (dogTex2 == 0 || dogFBO2 == 0) {
+                val texs = IntArray(1); GLES20.glGenTextures(1, texs, 0); dogTex2 = texs[0]
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, dogTex2)
+                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w2, h2, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                val fbos = IntArray(1); GLES20.glGenFramebuffers(1, fbos, 0); dogFBO2 = fbos[0]
+            }
+        }
+
+        private fun ensureFsrIntermediate(w: Int, h: Int) {
+            if (fsrIntermediateTex != 0) return
+            val texs = IntArray(1); GLES20.glGenTextures(1, texs, 0); fsrIntermediateTex = texs[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrIntermediateTex)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            val fbos = IntArray(1); GLES20.glGenFramebuffers(1, fbos, 0); fsrIntermediateFBO = fbos[0]
+        }
+
+        private fun renderBlit() {
+            ensureBlitProgram()
+            if (blitProgram == 0) return
+            GLES20.glUseProgram(blitProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
+            GLES20.glUniform1i(blitSamplerLoc, 0)
+            GLES20.glUniformMatrix4fv(blitTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(blitVFlipLoc, 1f)
+            drawQuad(blitPosLoc, blitTexLoc)
+        }
+
+        private fun renderBicubic(srcW: Int, srcH: Int) {
+            ensureBicubicProgram()
+            if (bicubicProgram == 0) return renderBlit()
+            GLES20.glUseProgram(bicubicProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
+            GLES20.glUniform1i(bicubicSamplerLoc, 0)
+            GLES20.glUniformMatrix4fv(bicubicTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(bicubicVFlipLoc, 1f)
+            GLES20.glUniform2f(bicubicTexelLoc, 1f / srcW.coerceAtLeast(1), 1f / srcH.coerceAtLeast(1))
+            drawQuad(bicubicPosLoc, bicubicTexLoc)
+        }
+
+        private fun renderDoG(srcW: Int, srcH: Int, cfg: VideoEnhanceConfig) {
+            ensureDogPrograms()
+            if (dogLumaProgram == 0 || dogGaussXProgram == 0 || dogGaussYProgram == 0 || dogApplyProgram == 0) {
+                renderBlit()
+                return
+            }
+            ensureDogTargets(srcW, srcH)
+            val texW = srcW.toFloat(); val texH = srcH.toFloat()
+            val texelX = 1f / texW; val texelY = 1f / texH
+            val strength = (0.6f + cfg.getSharpness() * 3.0f).coerceIn(0.3f, 3.0f)
+            // Pass 1: Luma extract -> dogTex1
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, dogFBO1)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, dogTex1, 0)
+            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                glFailed("dogFBO1 incomplete")
+                renderBlit()
+                return
+            }
+            GLES20.glViewport(0, 0, srcW, srcH)
+            GLES20.glUseProgram(dogLumaProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
+            GLES20.glUniform1i(dogLumaSamplerLoc, 0)
+            GLES20.glUniformMatrix4fv(dogLumaTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(dogLumaVFlipLoc, 1f)
+            drawQuad(dogLumaPosLoc, dogLumaTexLoc)
+            // Pass 2: Gaussian X -> dogTex2
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, dogFBO2)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, dogTex2, 0)
+            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                glFailed("dogFBO2 incomplete")
+                renderBlit()
+                return
+            }
+            GLES20.glUseProgram(dogGaussXProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, dogTex1)
+            GLES20.glUniform1i(dogGaussXSamplerLoc, 0)
+            GLES20.glUniformMatrix4fv(dogGaussXTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(dogGaussXVFlipLoc, 1f)
+            GLES20.glUniform2f(dogGaussXTexelLoc, texelX, texelY)
+            drawQuad(dogGaussXPosLoc, dogGaussXTexLoc)
+            // Pass 3: Gaussian Y -> dogTex1
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, dogFBO1)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, dogTex1, 0)
+            GLES20.glUseProgram(dogGaussYProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, dogTex2)
+            GLES20.glUniform1i(dogGaussYSamplerLoc, 0)
+            GLES20.glUniformMatrix4fv(dogGaussYTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(dogGaussYVFlipLoc, 1f)
+            GLES20.glUniform2f(dogGaussYTexelLoc, texelX, texelY)
+            drawQuad(dogGaussYPosLoc, dogGaussYTexLoc)
+            // Pass 4: Apply -> screen
+            val rect = aspectRect()
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            GLES20.glViewport(rect[0], rect[1], rect[2], rect[3])
+            GLES20.glUseProgram(dogApplyProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
+            GLES20.glUniform1i(dogApplyInputSamplerLoc, 0)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, dogTex1)
+            GLES20.glUniform1i(dogApplyGaussSamplerLoc, 1)
+            GLES20.glUniformMatrix4fv(dogApplyTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(dogApplyVFlipLoc, 1f)
+            GLES20.glUniform1f(dogApplyStrengthLoc, strength)
+            drawQuad(dogApplyPosLoc, dogApplyTexLoc)
+        }
+
+        private fun renderFSR(srcW: Int, srcH: Int, cfg: VideoEnhanceConfig) {
+            ensureFsrPrograms()
+            if (fsrEasuProgram == 0 || fsrRcasProgram == 0) {
+                renderBlit()
+                return
+            }
+            val outW = srcW * 2; val outH = srcH * 2
+            ensureFsrIntermediate(outW, outH)
+            // Pass 1: EASU -> intermediate (half -> full)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fsrIntermediateFBO)
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, fsrIntermediateTex, 0)
+            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                glFailed("fsrIntermediateFBO incomplete")
+                renderBlit()
+                return
+            }
+            GLES20.glViewport(0, 0, outW, outH)
+            GLES20.glUseProgram(fsrEasuProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, drsTexId)
+            GLES20.glUniform1i(fsrEasuSamplerLoc, 0)
+            GLES20.glUniformMatrix4fv(fsrEasuTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(fsrEasuVFlipLoc, 1f)
+            GLES20.glUniform2f(fsrEasuInputSizeLoc, srcW.toFloat(), srcH.toFloat())
+            GLES20.glUniform2f(fsrEasuOutputSizeLoc, outW.toFloat(), outH.toFloat())
+            drawQuad(fsrEasuPosLoc, fsrEasuTexLoc)
+            // Pass 2: RCAS -> screen (full)
+            val rect = aspectRect()
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            GLES20.glViewport(rect[0], rect[1], rect[2], rect[3])
+            GLES20.glUseProgram(fsrRcasProgram)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fsrIntermediateTex)
+            GLES20.glUniform1i(fsrRcasSamplerLoc, 0)
+            GLES20.glUniformMatrix4fv(fsrRcasTexMatrixLoc, 1, false, identityMat, 0)
+            GLES20.glUniform1f(fsrRcasVFlipLoc, 1f)
+            GLES20.glUniform2f(fsrRcasTexelLoc, 1f / outW.coerceAtLeast(1), 1f / outH.coerceAtLeast(1))
+            GLES20.glUniform1f(fsrRcasSharpLoc, (cfg.getSharpness() * 0.5f).coerceIn(0f, 2f))
+            drawQuad(fsrRcasPosLoc, fsrRcasTexLoc)
         }
 
         fun getInputSurface(): Surface? {
@@ -2411,6 +2864,26 @@ class Media3SixtyFpsProcessor(
             return cachedOutputSurface
         }
         fun setVideoSize(w: Int, h: Int) { videoWidth = w; videoHeight = h }
+        fun viewWidth(): Int = viewWidth
+        fun viewHeight(): Int = viewHeight
+        fun videoInputWidth(): Int = videoWidth
+        fun videoInputHeight(): Int = videoHeight
+
+        // Estimación aproximada de VRAM usada por el pipeline (texturas RGBA en bytes).
+        fun approxVramMb(): Float {
+            var bytes = 0L
+            fun add(w: Int, h: Int, n: Int = 1) {
+                if (w > 0 && h > 0) bytes += w.toLong() * h * 4 * n
+            }
+            add(viewWidth, viewHeight)               // prevTex
+            add(viewWidth / 2, viewHeight / 2)       // downTex
+            if (motionTexStorageAllocated) {
+                add(motionW, motionH, 4)             // 4 motion/acumuladores
+                add(coarseW, coarseH)                // coarse
+            }
+            if (drsTexId != 0) add(drsW, drsH)       // target upscaler/DRS
+            return bytes / (1024f * 1024f)
+        }
         fun requestStop() { stopped = true }
 
         fun setDebugModeValue(mode: Int) {
@@ -2445,7 +2918,7 @@ class Media3SixtyFpsProcessor(
     companion object {
         private const val TAG = "Media3-60fps"
         private const val STATIC_THRESHOLD = 0.04f
-        private const val STATIC_READ_INTERVAL = 6
+        private const val STATIC_READ_INTERVAL = 10
         private const val STALL_RESET_NS = 1_500_000_000L
     }
 }

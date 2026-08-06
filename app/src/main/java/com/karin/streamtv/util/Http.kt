@@ -131,11 +131,16 @@ object Http {
                         if (obj.optBoolean("httpOnly", false)) builder.httpOnly()
                     cookies.add(builder.build())
                 }
-                cookieStore[host] = cookies.filter { it.hasExpired().not() }
+                cookieStore[host] = cookies.filter { !it.hasExpired() }
+
+                val validCookies = cookieStore[host]
+                if (validCookies.isNullOrEmpty()) {
+                    prefs.edit().remove(key).apply()
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to load persisted cookies: ${e.message}")
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load persisted cookies: ${e.message}")
+        }
         }
 
         private fun Cookie.hasExpired(): Boolean {

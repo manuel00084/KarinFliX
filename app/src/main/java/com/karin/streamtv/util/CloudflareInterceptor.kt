@@ -6,39 +6,55 @@ import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import okhttp3.Cookie
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
 object CloudflareInterceptor {
 
     private const val TAG = "CFInterceptor"
-    private const val MAX_WAIT_SECONDS = 20L
+    var maxWaitSeconds: Long = 20L
+
+    // Cap global de WebViews simultáneos (patrón JobManager de Kodi): un WebView
+    // offscreen de 720x1280 por bypass es caro en RAM/compositor en TV/box baratas.
+    // Varios bypasses a la vez (p.ej. 8 requests del engine) hundían el renderer.
+    private val webViewPermits = Semaphore(2, true)
 
     private val CF_MARKERS = listOf(
-        "cf-browser-verification", "challenge-platform", "Just a moment",
+        "cf-browser-verification", "Just a moment",
         "Checking your browser", "cf-challenge", "Attention Required",
         "Verify you are human", "challenge-error-title", "challenge-error-text",
-        "cf_chl", "turnstile"
+        "cf_chl"
     )
 
+    // Actual Turnstile challenge widget (not just the script URL or JS variable names).
+    // The HTML element <div class="cf-turnstile" data-sitekey="..."> is present on a real
+    // challenge page; mere <script src=".../turnstile/..."> is loaded by many legitimate pages.
     private val CF_TURNSTILE_MARKERS = listOf(
-        "cf-turnstile", "challenges.cloudflare.com/turnstile"
+        """class="cf-turnstile"""",
+        """class='cf-turnstile'"""
     )
 
     // Managed/captcha challenges are frequently served with HTTP 200 (JS auto-submit page)
     // rather than 403/503, so we detect these distinctive markers regardless of status code.
+    // NOTE: markers that also appear in legitimate pages (script URLs, analytics beacons,
+    // JS variable names like "turnstileToken") are deliberately excluded to avoid false
+    // positives on pages that merely *load* Cloudflare scripts.
     private val CF_200_CHALLENGE_MARKERS = listOf(
         "Please wait while your request is being verified",
         "One moment, please",
-        "cloudflareinsights.com/beacon",
-        "challenge-platform",
+        "Checking your browser before accessing",
         "cf-browser-verification",
         "cf_chl_",
-        "Verify you are human"
+        "Verify you are human",
+        """action="/cdn-cgi/l/chk_js""",
+        "Enable JavaScript"
     )
 
     fun isCloudflareChallenge(statusCode: Int, html: String, serverHeader: String? = null): Boolean {
@@ -61,6 +77,25 @@ object CloudflareInterceptor {
 
     @SuppressLint("SetJavaScriptEnabled")
     suspend fun solveWithWebView(context: Context, url: String, userAgent: String? = null): String? {
+        val permitted = withContext(Dispatchers.IO) {
+            try {
+                webViewPermits.tryAcquire(maxWaitSeconds, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) {
+                false
+            }
+        }
+        if (!permitted) {
+            Log.w(TAG, "CF bypass capacity full, dropping $url")
+            return null
+        }
+        return try {
+            solveWithWebViewLocked(context, url, userAgent)
+        } finally {
+            webViewPermits.release()
+        }
+    }
+
+    private suspend fun solveWithWebViewLocked(context: Context, url: String, userAgent: String?): String? {
         return try {
             suspendCancellableCoroutine { cont ->
                 var htmlResult: String? = null
@@ -100,18 +135,19 @@ object CloudflareInterceptor {
                     val wm = webContext.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager
 
                     val parent = android.widget.FrameLayout(webContext).apply {
-                        layoutParams = android.view.ViewGroup.LayoutParams(
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                        )
+                        layoutParams = android.view.ViewGroup.LayoutParams(1, 1)
+                        x = -9999f
+                        y = -9999f
+                        clipChildren = false
+                        visibility = android.view.View.INVISIBLE
+                        alpha = 0f
                     }
 
                     webViewRef = WebView(webContext).apply {
-                        layoutParams = android.view.ViewGroup.LayoutParams(
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                        )
+                        layoutParams = android.view.ViewGroup.LayoutParams(720, 1280)
                         setBackgroundColor(0x00000000)
+                        visibility = android.view.View.INVISIBLE
+                        alpha = 0f
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.databaseEnabled = true
@@ -164,21 +200,21 @@ object CloudflareInterceptor {
                         }, 20000)
                     }
 
-                    parent.addView(webViewRef!!, android.view.ViewGroup.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT))
+                    parent.addView(webViewRef!!, android.view.ViewGroup.LayoutParams(720, 1280))
 
                     if (wm != null && hostActivity != null) {
                         try {
                             val lp = android.view.WindowManager.LayoutParams(
-                                android.view.WindowManager.LayoutParams.MATCH_PARENT,
-                                android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                                1,
+                                1,
                                 android.view.WindowManager.LayoutParams.TYPE_APPLICATION,
                                 android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                                     android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                                     android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                                 android.graphics.PixelFormat.TRANSLUCENT
                             )
+                            lp.x = -9999
+                            lp.y = -9999
                             wm.addView(parent, lp)
                             attachedWm = wm
                             attachedView = parent
@@ -205,7 +241,7 @@ object CloudflareInterceptor {
                 }
 
                 Thread {
-                    latch.await(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+                    latch.await(maxWaitSeconds, TimeUnit.SECONDS)
                     handler.post {
                         if (cont.isActive) {
                             if (htmlResult != null) {

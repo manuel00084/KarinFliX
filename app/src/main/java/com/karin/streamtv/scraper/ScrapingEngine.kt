@@ -87,6 +87,11 @@ object ScrapingEngine {
     // (fixed Chrome/131 desktop profile) instead of rotating. Key: host.
     private val cfLockedHosts = ConcurrentHashMap<String, String>()
 
+    /** Returns the UA string that must be used for an already-CF-locked [host], or null if unlocked. */
+    fun getLockedUa(host: String): String? = cfLockedHosts[host].also {
+        if (it != null) Log.d(TAG, "Using CF-locked UA for host=$host")
+    }
+
     // Fixed mobile Android Chrome/131 profile shared by the CF WebView and every retry to a
     // CF-protected host. Cloudflare binds cf_clearance to the exact UA string, so both must match.
     private val cfLockedProfile = BrowserProfile(
@@ -283,7 +288,7 @@ object ScrapingEngine {
 
     // region --- Public API ---
 
-    suspend fun fetch(url: String, siteName: String, cacheKey: String? = null, forceFresh: Boolean = false): Document? {
+    suspend fun fetch(url: String, siteName: String, cacheKey: String? = null, forceFresh: Boolean = false, referer: String? = null): Document? {
         val key = cacheKey ?: buildCacheKey(url)
         val metricsStart = System.currentTimeMillis()
 
@@ -329,7 +334,7 @@ object ScrapingEngine {
                  try {
                      enforceRateLimit(siteName)
                      Log.i(TAG, "Fetch [$attempts/$maxRetries] $url ($siteName)")
-                     val response = executeRequest(url)
+                      val response = executeRequest(url, referer)
                      val html = try { response.body?.string() ?: "" } catch (_: Exception) { "" }
                      val serverHeader = response.header("Server")
                      val statusCode = response.code
@@ -451,13 +456,14 @@ object ScrapingEngine {
 
     // region --- Internal ---
 
-    private fun executeRequest(url: String): Response {
-        val referer = try {
+    private fun executeRequest(url: String, customReferer: String? = null): Response {
+        val referer = customReferer ?: try {
             val uri = java.net.URI(url)
             "${uri.scheme}://${uri.host}/"
         } catch (_: Exception) { url }
 
-        val profile = nextBrowserProfile()
+        val host = hostOf(url)
+        val profile = if (cfLockedHosts.containsKey(host)) cfLockedProfile else nextBrowserProfile()
 
         val requestBuilder = Request.Builder()
             .url(url)

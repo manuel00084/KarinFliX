@@ -4,6 +4,7 @@ import android.util.Base64
 import android.util.Log
 import com.karin.streamtv.model.VideoServer
 import com.karin.streamtv.model.VideoSource
+import com.karin.streamtv.util.HtmlClean
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
@@ -195,12 +196,14 @@ object ServerExtractor {
     }
 
     private fun resolveTabUrl(tab: Element, doc: Document, fallbackUrl: String): String? {
-        tab.attr("abs:href").takeIf { it.startsWith("http") }?.let { return it }
-        tab.attr("data-src").takeIf { it.startsWith("http") }?.let { return it }
-        tab.attr("data-url").takeIf { it.startsWith("http") }?.let { return it }
-        tab.attr("data-link").takeIf { it.startsWith("http") }?.let { return it }
-        tab.attr("data-iframe").takeIf { it.startsWith("http") }?.let { return it }
-        tab.attr("data-embed").takeIf { it.startsWith("http") }?.let { return it }
+        // Acepta URLs absolutas, protocol-relative y relativas al documento
+        // (RFC 3986 vía HtmlClean), no solo las que ya empiezan con "http".
+        val base = doc.baseUri().ifBlank { fallbackUrl }
+        listOf("abs:href", "data-src", "data-url", "data-link", "data-iframe", "data-embed").forEach { attr ->
+            val value = tab.attr(attr).takeIf { it.isNotBlank() } ?: return@forEach
+            val resolved = HtmlClean.resolveUrl(base, value)
+            if (resolved.startsWith("http://") || resolved.startsWith("https://")) return resolved
+        }
 
         val href = tab.attr("href")
         if (href.startsWith("#")) {

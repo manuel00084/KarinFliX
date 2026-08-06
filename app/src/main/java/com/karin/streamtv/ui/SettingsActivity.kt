@@ -22,9 +22,8 @@ class SettingsActivity : FragmentActivity() {
     private lateinit var switchAutoplay: SwitchMaterial
     private lateinit var switchPlayNow: SwitchMaterial
     private lateinit var switchKarinLink: SwitchMaterial
-    private lateinit var switchSkipOpening: SwitchMaterial
-    private lateinit var switchSkipEnding: SwitchMaterial
     private lateinit var switchVideoPlayer: SwitchMaterial
+    private lateinit var switchGlQuality: SwitchMaterial
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,17 +33,15 @@ class SettingsActivity : FragmentActivity() {
         switchAutoplay = findViewById(R.id.switch_autoplay)
         switchPlayNow = findViewById(R.id.switch_playnow)
         switchKarinLink = findViewById(R.id.switch_karin_link)
-        switchSkipOpening = findViewById(R.id.switch_skip_opening)
-        switchSkipEnding = findViewById(R.id.switch_skip_ending)
         switchVideoPlayer = findViewById(R.id.switch_video_player)
+        switchGlQuality = findViewById(R.id.switch_gl_quality)
 
         switchServerFallback.isChecked = AppPreferences.isServerFallbackEnabled()
         switchAutoplay.isChecked = AppPreferences.isAutoPlayEnabled()
         switchPlayNow.isChecked = AppPreferences.isPlayNowEnabled()
         switchKarinLink.isChecked = AppPreferences.isKarinLinkEnabled()
-        switchSkipOpening.isChecked = AppPreferences.isSkipOpeningEnabled()
-        switchSkipEnding.isChecked = AppPreferences.isSkipEndingEnabled()
         switchVideoPlayer.isChecked = AppPreferences.isVideoPlayerModeEnabled()
+        switchGlQuality.isChecked = VideoEnhanceConfig.isGlQualityMode()
 
         val switchListener = { switch: SwitchMaterial, label: String ->
             switch.contentDescription = "$label: ${if (switch.isChecked) "activado" else "desactivado"}"
@@ -55,9 +52,15 @@ class SettingsActivity : FragmentActivity() {
         switchAutoplay.setOnCheckedChangeListener { _, _ -> switchListener(switchAutoplay, "Auto-play") }
         switchPlayNow.setOnCheckedChangeListener { _, _ -> switchListener(switchPlayNow, "PlayNow") }
         switchKarinLink.setOnCheckedChangeListener { _, _ -> switchListener(switchKarinLink, "KARIN Link") }
-        switchSkipOpening.setOnCheckedChangeListener { _, _ -> switchListener(switchSkipOpening, "Saltar opening") }
-        switchSkipEnding.setOnCheckedChangeListener { _, _ -> switchListener(switchSkipEnding, "Saltar ending") }
         switchVideoPlayer.setOnCheckedChangeListener { _, _ -> switchListener(switchVideoPlayer, "Reproductor de video del sistema") }
+        switchGlQuality.setOnCheckedChangeListener { _, _ ->
+            VideoEnhanceConfig.setGlQualityMode(switchGlQuality.isChecked)
+            switchListener(switchGlQuality, "Calidad GL")
+        }
+
+        val rowGlQuality = findViewById<android.widget.LinearLayout>(R.id.row_gl_quality)
+        rowGlQuality.setOnClickListener { switchGlQuality.toggle() }
+        rowGlQuality.onActionKey { switchGlQuality.toggle() }
 
         val btnSave = findViewById<TextView>(R.id.btn_save)
         btnSave.setOnClickListener { saveSettings() }
@@ -86,7 +89,6 @@ class SettingsActivity : FragmentActivity() {
         rowCredits.onActionKey { rowCredits.performClick() }
 
         setupCodecRow()
-        setupAudioRow()
 
         if (DeviceUtils.isTvDevice(this)) {
             btnBack.post { btnBack.requestFocus() }
@@ -127,7 +129,7 @@ class SettingsActivity : FragmentActivity() {
 
     private fun setupCodecRow() {
         VideoEnhanceConfig.init(this)
-        val row = findViewById<android.widget.LinearLayout>(R.id.row_codec)
+        val rowCodec = findViewById<android.widget.LinearLayout>(R.id.row_codec)
         val value = findViewById<TextView>(R.id.txt_codec_value)
         fun refresh() {
             value.text = VideoEnhanceConfig.codecMode().label
@@ -143,42 +145,14 @@ class SettingsActivity : FragmentActivity() {
                 .setSingleChoiceItems(labels, selectedIdx) { _, which ->
                     VideoEnhanceConfig.setCodecMode(modes[which])
                     refresh()
-                    row.announceForAccessibility("Códec ExoPlayer: ${modes[which].label}")
+                    rowCodec.announceForAccessibility("Códec ExoPlayer: ${modes[which].label}")
                 }
                 .setNegativeButton("Cerrar", null)
                 .create()
             dialog.show()
         }
-        row.setOnClickListener { showDialog() }
-        row.onActionKey { showDialog() }
-    }
-
-    private fun setupAudioRow() {
-        com.karin.streamtv.player.dsp.AudioEnhanceConfig.init(this)
-        val row = findViewById<android.widget.LinearLayout>(R.id.row_audio)
-        val value = findViewById<TextView>(R.id.txt_audio_value)
-        fun refresh() {
-            val config = com.karin.streamtv.player.dsp.AudioEnhanceConfig
-            val preset = config.preset()
-            val enabled = config.isEnabled()
-            val auto = config.isAutoDevice()
-            value.text = when {
-                !enabled || preset == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF -> "Apagado"
-                auto -> "Automático · ${config.outputDeviceLabel()}"
-                else -> preset.label
-            }
-        }
-        refresh()
-        val showDialog = {
-            com.karin.streamtv.player.dsp.AudioDspUi.showPresetDialog(this, onAdvanced = {
-                com.karin.streamtv.player.dsp.AudioDspUi.showAdvanced(this)
-            }, onChanged = {
-                refresh()
-                row.announceForAccessibility(value.text.toString())
-            })
-        }
-        row.setOnClickListener { showDialog() }
-        row.onActionKey { showDialog() }
+        rowCodec.setOnClickListener { showDialog() }
+        rowCodec.onActionKey { showDialog() }
     }
 
     private fun saveSettings() {
@@ -186,10 +160,9 @@ class SettingsActivity : FragmentActivity() {
         AppPreferences.setAutoPlayEnabled(switchAutoplay.isChecked)
         AppPreferences.setPlayNowEnabled(switchPlayNow.isChecked)
         AppPreferences.setKarinLinkEnabled(switchKarinLink.isChecked)
-        AppPreferences.setSkipOpeningEnabled(switchSkipOpening.isChecked)
-        AppPreferences.setSkipEndingEnabled(switchSkipEnding.isChecked)
         AppPreferences.setVideoPlayerModeEnabled(switchVideoPlayer.isChecked)
         AutoPlayManager.setAutoPlayEnabled(switchAutoplay.isChecked)
+        VideoEnhanceConfig.setGlQualityMode(switchGlQuality.isChecked)
 
         val btnSave = findViewById<TextView>(R.id.btn_save)
         btnSave.announceForAccessibility("Configuración guardada")

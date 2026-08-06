@@ -13,6 +13,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class VideoExtractorHelper(private val container: ViewGroup) {
 
@@ -25,6 +27,7 @@ class VideoExtractorHelper(private val container: ViewGroup) {
     var adSel=['.ad','.ads','.adsbygoogle','.ad-slot','.ad-unit','.ad-wrapper','.advertisement','.advert','.adsense','.adfox','.banner-ad','.ad-banner','.ad-popup','.ad-overlay','.ad-modal','.ad-interstitial','.ads-container','.ad-container','.ads-wrapper','[id*="google_ads"]','[id*="ad-"]','[class*="ad-"]','[class*="ads-"]','[data-ad]','[data-ads]','[data-adunit]','ins.adsbygoogle','.promo','.popup-ad','.popunder','.clickunder','.tp-ad','.preroll-ad','.video-ad','.vast-ad','.ima-ad-container','.ad-block','#ad','#ads','#advert','.floating-ad','.sticky-ad','.fixed-ad','.interstitial','.interstitial-ad','.outbrain','.taboola','.revcontent','.mgid','.nativendo','.pfp,.pfpi,.pfe,.pfi,.pfm','[id*="pfb"],[id*="pfe"]','.auto-ad,.auto_ads,.adsbygoogle-noablate','[data-testid*="ad"]','[aria-label*="ad"]','[aria-label*="publi"]','[class*="social-bar"]','[class*="share-bar"]','[class*="truste"],[class*="consent"],[id*="consent"]','[class*="onetrust"],[id*="onetrust"]','[class*="skip"],[class*="countdown"],[id*="skip"],[id*="countdown"]','[class*="adb-overlay"],[class*="adb-modal"],[class*="adb-popup"],[class*="adb-interstitial"]','[class*="float"],[class*="sticky"],[id*="float"],[id*="sticky"]','[class*="minimize"],[class*="pip"],[class*="expand"]','[class*="arrow"],[class*="nav-btn"],[class*="close-btn"]','[class*="share"],[class*="social"],[class*="follow"],[class*="newsletter"],[class*="subscribe"]'];
     var adIframeRe=/doubleclick|googlesyndication|adsense|adnxs|adroll|taboola|outbrain|advertising|popads|propellerads|exoclick|clickadu|criteo|amazon-adsystem|mgid|exosrv|trafficjunky/;
     var adScriptRe=/doubleclick|googlesyndication|adsense|pagead|adnxs|adsrvr|adroll|taboola|outbrain|mgid|popads|propellerads|exoclick|clickadu|criteo|amazon-adsystem|moatads|quantserve|scorecardresearch|exosrv|trafficjunky|juicyads|epidemictuna|marginoboles/;
+    var __kfSweep__=0;
     function kfCleanAds(root){
         adSel.forEach(function(sel){try{root.querySelectorAll(sel).forEach(function(el){el.remove();});}catch(e){}});
         root.querySelectorAll('iframe').forEach(function(f){var src=(f.src||f.getAttribute('data-src')||'').toLowerCase();if(adIframeRe.test(src)){f.remove();}if(f.offsetWidth<10||f.offsetHeight<10){f.remove();}});
@@ -33,13 +36,18 @@ class VideoExtractorHelper(private val container: ViewGroup) {
         root.querySelectorAll('[class*="cookie"],[class*="gdpr"],[class*="consent"],[id*="cookie"],[id*="gdpr"],[id*="onetrust"]').forEach(function(el){el.remove();});
         root.querySelectorAll('[class*="overlay"],[class*="modal"],[class*="popup"],[class*="backdrop"],[class*="mask"],[class*="curtain"],[class*="interstitial"],[class*="preroll"],[class*="midroll"],[class*="blocker"],[class*="cover"]:not(video):not(.player)').forEach(function(el){el.style.display='none';el.style.visibility='hidden';el.style.pointerEvents='none';el.style.zIndex='-1';el.remove();});
         root.querySelectorAll('[class*="play"]').forEach(function(el){el.style.pointerEvents='auto';});
-        root.querySelectorAll('*').forEach(function(el){try{var s=getComputedStyle(el);if((s.position==='fixed'||s.position==='sticky')&&parseInt(s.zIndex)>900000){var tag=el.tagName.toLowerCase();if(tag!=='video'&&tag!=='div'||!el.querySelector('video')){var w=el.offsetWidth,h=el.offsetHeight;if(w>0&&h>0&&(w<300||h<50||h<100)){el.remove();}}}}catch(e){}});
-        root.querySelectorAll('*').forEach(function(el){try{var s=getComputedStyle(el);if(s.position==='fixed'&&parseInt(s.zIndex)>1000&&el.querySelector('video')===null&&el.querySelector('iframe')===null){el.style.pointerEvents='none';el.style.display='none';el.remove();}}catch(e){}});
+        // Barrido caro (recorre TODO el DOM con getComputedStyle): solo las primeras 2 veces.
+        if(__kfSweep__<2){
+            __kfSweep__++;
+            root.querySelectorAll('*').forEach(function(el){try{var s=getComputedStyle(el);if((s.position==='fixed'||s.position==='sticky')&&parseInt(s.zIndex)>900000){var tag=el.tagName.toLowerCase();if(tag!=='video'&&tag!=='div'||!el.querySelector('video')){var w=el.offsetWidth,h=el.offsetHeight;if(w>0&&h>0&&(w<300||h<50||h<100)){el.remove();}}}}catch(e){}});
+            root.querySelectorAll('*').forEach(function(el){try{var s=getComputedStyle(el);if(s.position==='fixed'&&parseInt(s.zIndex)>1000&&el.querySelector('video')===null&&el.querySelector('iframe')===null){el.style.pointerEvents='none';el.style.display='none';el.remove();}}catch(e){}});
+        }
         root.querySelectorAll('video').forEach(function(v){v.style.pointerEvents='auto';v.style.zIndex='9999998';v.controls=true;});
     }
     kfCleanAds(document);
-    try{var mo=new MutationObserver(function(){kfCleanAds(document);});mo.observe(document.documentElement,{childList:true,subtree:true});}catch(e){}
-    setInterval(function(){kfCleanAds(document);},2000);
+    // Observer con debounce y auto-desconexión + limpiezas acotadas (sin setInterval infinito).
+    try{var moLast=0;var mo=new MutationObserver(function(){var t=Date.now();if(t-moLast>700){moLast=t;kfCleanAds(document);}});mo.observe(document.documentElement,{childList:true,subtree:true});setTimeout(function(){try{mo.disconnect();}catch(e){}},30000);}catch(e){}
+    (function(){var k=0;var iv=setInterval(function(){++k;if(k>=6){clearInterval(iv);}kfCleanAds(document);},2500);})();
 })();
 """
 
@@ -231,17 +239,37 @@ class VideoExtractorHelper(private val container: ViewGroup) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
 
-    suspend fun extractSuspend(embedUrl: String, serverName: String = ""): String? {
+    suspend fun extractSuspend(embedUrl: String, serverName: String = "", referer: String = ""): String? {
+        // Try CF bypass before the WebView to avoid challenge pages blocking extraction.
+        // IMPORTANT: ScrapingEngine.fetch hace un OkHttp .execute() síncrono; va en
+        // Dispatchers.IO para no congelar el hilo principal (ANR) si tarda hasta 60s.
+        val cfBypassedHtml: String? = try {
+            withContext(Dispatchers.IO) {
+                val doc = com.karin.streamtv.scraper.ScrapingEngine.fetch(
+                    embedUrl, "VideoExtractorHelper", "vext::${embedUrl.hashCode()}", true,
+                    referer = referer.ifBlank { null }?.let {
+                        if (it.startsWith("http://") || it.startsWith("https://")) it
+                        else "https://$it"
+                    }
+                )
+                doc?.body()?.html()?.takeIf { it.isNotBlank() }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "CF bypass for $embedUrl: ${e.message}")
+            null
+        }
+
         val deferred = CompletableDeferred<String?>()
+        val cfHtml = cfBypassedHtml
         mainHandler.post {
-            doExtract(embedUrl, serverName) { url ->
+            doExtract(embedUrl, serverName, referer, cfHtml) { url ->
                 deferred.complete(url)
             }
         }
         return deferred.await()
     }
 
-    private fun doExtract(embedUrl: String, serverName: String, onResult: (String?) -> Unit) {
+    private fun doExtract(embedUrl: String, serverName: String, referer: String = "", preFetchedHtml: String? = null, onResult: (String?) -> Unit) {
         val wv = WebView(container.context)
         webView = wv
         wv.layoutParams = FrameLayout.LayoutParams(1, 1)
@@ -345,7 +373,25 @@ class VideoExtractorHelper(private val container: ViewGroup) {
         }
 
         Log.d(TAG, "Loading hidden WebView: ${embedUrl.takeLast(80)}")
-        wv.loadUrl(embedUrl)
+
+        // Build extra headers (Referer for hotlink protection)
+        val extraHeaders = mutableMapOf<String, String>()
+        if (referer.isNotBlank()) {
+            extraHeaders["Referer"] = if (referer.startsWith("http")) referer else "https://$referer"
+        }
+
+        if (preFetchedHtml != null) {
+            val isChallenge = com.karin.streamtv.util.CloudflareInterceptor.isCloudflareChallenge(200, preFetchedHtml, null)
+            if (!isChallenge) {
+                Log.i(TAG, "Using CF-bypassed HTML for $embedUrl")
+                wv.loadDataWithBaseURL(embedUrl, preFetchedHtml, "text/html", "UTF-8", null)
+            } else {
+                Log.w(TAG, "CF bypass returned challenge page — falling back to direct loadUrl")
+                wv.loadUrl(embedUrl, extraHeaders)
+            }
+        } else {
+            wv.loadUrl(embedUrl, extraHeaders)
+        }
 
         mainHandler.postDelayed({
             cleanup()

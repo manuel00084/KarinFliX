@@ -4,7 +4,6 @@ import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
-import androidx.media3.datasource.DefaultHttpDataSource
 import java.math.BigInteger
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
@@ -13,23 +12,19 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * DataSource that streams a MEGA download URL and decrypts the AES-128-CTR
  * content on the fly (MEGA chunk scheme, continuous 128-bit big-endian counter).
+ *
+ * The network engine is injected via [upstream] so the same underlying
+ * DataSource factory (e.g. Cronet) is reused across all downloads. This wrapper
+ * only decrypts the bytes; it does not own the HTTP layer.
  */
 @UnstableApi
 class MegaDecryptingDataSource(
     private val key: ByteArray,
     private val ctrStart: Long,
-    extraHeaders: Map<String, String> = emptyMap()
+    private val upstream: DataSource
 ) : DataSource {
 
     private val TAG = "MegaDataSource"
-
-    private val upstream: DataSource = DefaultHttpDataSource.Factory()
-        .setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        )
-        .setAllowCrossProtocolRedirects(true)
-        .setDefaultRequestProperties(extraHeaders)
-        .createDataSource()
 
     private val cipher = Cipher.getInstance("AES/CTR/NoPadding")
     private val keySpec = SecretKeySpec(key, "AES")

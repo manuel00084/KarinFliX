@@ -102,12 +102,13 @@ dependencies {
     // implementation 'io.sentry:sentry-android:7.14.0'
 
     // ExoPlayer (Media3) for native video playback
-    implementation 'androidx.media3:media3-exoplayer:1.5.1'
-    implementation 'androidx.media3:media3-exoplayer-hls:1.5.1'
-    implementation 'androidx.media3:media3-ui:1.5.1'
-    implementation 'androidx.media3:media3-ui-leanback:1.5.1'
-    implementation 'androidx.media3:media3-effect:1.5.1'
-    implementation 'androidx.media3:media3-common:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer:1.9.3'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.9.3'
+    implementation 'androidx.media3:media3-ui:1.9.3'
+    implementation 'androidx.media3:media3-ui-leanback:1.9.3'
+    implementation 'androidx.media3:media3-effect:1.9.3'
+    implementation 'androidx.media3:media3-common:1.9.3'
+    implementation 'androidx.media3:media3-datasource-cronet:1.9.3'
 
     // Unit tests
     testImplementation 'junit:junit:4.13.2'

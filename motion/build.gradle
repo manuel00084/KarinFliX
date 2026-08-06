@@ -24,6 +24,7 @@ android {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     implementation project(':dsp')
-    implementation 'androidx.media3:media3-exoplayer:1.5.1'
-    implementation 'androidx.media3:media3-common:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer:1.9.3'
+    implementation 'androidx.media3:media3-common:1.9.3'
+    implementation 'androidx.media3:media3-datasource-cronet:1.9.3'
 }

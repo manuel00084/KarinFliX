@@ -247,25 +247,25 @@ class SeriesDetailActivity : AppCompatActivity() {
                 loadingOverlay.visibility = android.view.View.GONE
 
                 if (servers.isEmpty()) {
-                    openEpisodeDirect(episode)
+                    loadingOverlay.visibility = android.view.View.GONE
+                    Toast.makeText(
+                        this@SeriesDetailActivity,
+                        "No se encontraron servidores de video para este episodio",
+                        Toast.LENGTH_LONG
+                    ).show()
                     return@launch
                 }
 
                 showServerSelectionDialog(servers, episode.title, episode.url)
             } catch (e: Exception) {
                 loadingOverlay.visibility = android.view.View.GONE
-                openEpisodeDirect(episode)
+                Toast.makeText(
+                    this@SeriesDetailActivity,
+                    "Error al extraer servidores de video",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
-    }
-
-    private fun openEpisodeDirect(episode: Episode) {
-        val intent = Intent(this, EmbedWebViewActivity::class.java).apply {
-            putExtra("embed_url", episode.url)
-            putExtra("video_title", episode.title)
-        }
-        attachPlaylist(intent)
-        startActivity(intent)
     }
 
     private fun showServerSelectionDialog(servers: List<VideoSource>, title: String, episodeUrl: String) {
@@ -289,7 +289,9 @@ class SeriesDetailActivity : AppCompatActivity() {
         }
         updateQueueBadge()
 
-        listView.adapter = ServerAdapter(sorted, title)
+        val resolutionLabels = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val adapter = ServerAdapter(sorted, title, resolutionLabels)
+        listView.adapter = adapter
 
         btnAddToQueue.setOnClickListener {
             val best = sorted.firstOrNull()
@@ -321,10 +323,54 @@ class SeriesDetailActivity : AppCompatActivity() {
 
         dialog.show()
 
+        val btnShare = view.findViewById<TextView>(R.id.btn_share_karinlink)
+        btnShare.setOnClickListener {
+            dialog.dismiss()
+            val best = sorted.firstOrNull()
+            val embed = best?.serverUrl ?: episodeUrl
+            com.karin.streamtv.karinlink.KarinLinkShareDialog(
+                this,
+                episodeTitle = title,
+                episodeUrl = episodeUrl,
+                embedUrl = embed,
+                siteName = siteName
+            ).show()
+        }
+        btnShare.onActionKey { btnShare.performClick() }
+
+        detectServerResolutions(sorted, view as ViewGroup, adapter, resolutionLabels)
+
         listView.setOnItemClickListener { _, _, which, _ ->
             dialog.dismiss()
             val server = sorted[which]
             openEmbedWebView(server, title, sorted)
+        }
+    }
+
+    private fun detectServerResolutions(
+        servers: List<VideoSource>,
+        container: ViewGroup,
+        adapter: android.widget.BaseAdapter,
+        labels: java.util.concurrent.ConcurrentHashMap<String, String>
+    ) {
+        val semaphore = java.util.concurrent.Semaphore(3)
+        lifecycleScope.launch {
+            servers.forEach { server ->
+                launch(Dispatchers.IO) {
+                    semaphore.acquire()
+                    try {
+                        val label = com.karin.streamtv.scraper.ServerResolutionDetector.detect(server, container, siteName)
+                        if (label != null) {
+                            labels[server.serverUrl] = label
+                            runOnUiThread { adapter.notifyDataSetChanged() }
+                        }
+                    } catch (e: Exception) {
+                        Log.w("SeriesDetail", "res detection failed: ${e.message}")
+                    } finally {
+                        semaphore.release()
+                    }
+                }
+            }
         }
     }
 
@@ -433,7 +479,8 @@ class SeriesDetailActivity : AppCompatActivity() {
 
     private inner class ServerAdapter(
         private val servers: List<VideoSource>,
-        private val title: String
+        private val title: String,
+        private val resolutionLabels: java.util.concurrent.ConcurrentHashMap<String, String>
     ) : android.widget.BaseAdapter() {
 
         override fun getCount(): Int = servers.size
@@ -455,7 +502,16 @@ class SeriesDetailActivity : AppCompatActivity() {
             val fastTag = if (server.speedRating >= 4) " \u26A1" else ""
             tvName.text = "${server.name}$fastTag"
             tvStars.text = stars
-            tvRes.visibility = if (server.supportsResolutionChange) android.view.View.VISIBLE else android.view.View.GONE
+            val detected = resolutionLabels[server.serverUrl]
+            if (detected != null) {
+                tvRes.visibility = android.view.View.VISIBLE
+                tvRes.text = detected
+            } else if (server.supportsResolutionChange) {
+                tvRes.visibility = android.view.View.VISIBLE
+                tvRes.text = "HD"
+            } else {
+                tvRes.visibility = android.view.View.GONE
+            }
 
             val tvPlayer = row.findViewById<android.widget.TextView>(R.id.tv_player_badge)
             val usesHttp = com.karin.streamtv.scraper.ServerDirectResolver.usesHttpResolver(server.serverUrl)

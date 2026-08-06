@@ -11,10 +11,9 @@ object AppPreferences {
     private const val KEY_AUTOPLAY = "autoplay_enabled"
     private const val KEY_KARIN_LINK = "karin_link_enabled"
     private const val KEY_PLAYNOW = "playnow_enabled"
-    private const val KEY_SKIP_OPENING = "skip_opening_enabled"
-    private const val KEY_SKIP_ENDING = "skip_ending_enabled"
     private const val KEY_VIDEO_PLAYER_MODE = "video_player_mode_enabled"
     private const val KEY_PLAYER_VOLUME = "player_volume"
+    private const val KEY_FIRST_RUN = "first_run_done"
 
     private var prefs: SharedPreferences? = null
 
@@ -56,22 +55,6 @@ object AppPreferences {
         prefs?.edit()?.putBoolean(KEY_PLAYNOW, enabled)?.apply()
     }
 
-    fun isSkipOpeningEnabled(): Boolean {
-        return prefs?.getBoolean(KEY_SKIP_OPENING, true) ?: true
-    }
-
-    fun setSkipOpeningEnabled(enabled: Boolean) {
-        prefs?.edit()?.putBoolean(KEY_SKIP_OPENING, enabled)?.apply()
-    }
-
-    fun isSkipEndingEnabled(): Boolean {
-        return prefs?.getBoolean(KEY_SKIP_ENDING, false) ?: false
-    }
-
-    fun setSkipEndingEnabled(enabled: Boolean) {
-        prefs?.edit()?.putBoolean(KEY_SKIP_ENDING, enabled)?.apply()
-    }
-
     fun isVideoPlayerModeEnabled(): Boolean {
         return prefs?.getBoolean(KEY_VIDEO_PLAYER_MODE, false) ?: false
     }
@@ -86,6 +69,14 @@ object AppPreferences {
 
     fun setPlayerVolume(v: Float) {
         prefs?.edit()?.putFloat(KEY_PLAYER_VOLUME, v.coerceIn(0.1f, 3.0f))?.apply()
+    }
+
+    fun isFirstRun(): Boolean {
+        return prefs?.getBoolean(KEY_FIRST_RUN, false) != true
+    }
+
+    fun setFirstRunDone() {
+        prefs?.edit()?.putBoolean(KEY_FIRST_RUN, true)?.apply()
     }
 
 }

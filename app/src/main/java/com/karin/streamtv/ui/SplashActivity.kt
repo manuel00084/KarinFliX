@@ -48,7 +48,12 @@ class SplashActivity : AppCompatActivity() {
                     try {
                         progressBar.progress = 100
                         CrashLogger.log(this@SplashActivity, "Splash", "navigating")
-                        startActivity(Intent(this@SplashActivity, MainActivity::class.java))
+                        val next = if (AppPreferences.isFirstRun()) {
+                            OnboardingActivity::class.java
+                        } else {
+                            MainActivity::class.java
+                        }
+                        startActivity(Intent(this@SplashActivity, next))
                     } catch (e: Exception) {
                         CrashLogger.log(this@SplashActivity, "Splash", "onFinish error: ${e.message}")
                     }

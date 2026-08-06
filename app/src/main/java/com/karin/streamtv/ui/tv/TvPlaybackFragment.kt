@@ -1,5 +1,8 @@
 package com.karin.streamtv.ui.tv
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -23,18 +26,23 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
+import android.graphics.PixelFormat
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import com.karin.streamtv.R
+import com.karin.streamtv.player.CodecSelectorFactory
 import com.karin.streamtv.player.Media3SixtyFpsProcessor
+import com.karin.streamtv.player.TrackSelectorFactory
 import com.karin.streamtv.player.MegaDecryptingDataSource
 import com.karin.streamtv.player.TvSurfaceCompat
 import com.karin.streamtv.player.VideoDataSource
 import com.karin.streamtv.player.VideoEnhanceConfig
 import com.karin.streamtv.player.VideoEnhanceUi
-import com.karin.streamtv.player.ColorProfileUi
 import com.karin.streamtv.player.VideoExtractorHelper
 import com.karin.streamtv.scraper.ServerDirectResolver
 import com.karin.streamtv.util.AutoPlayManager
@@ -72,7 +80,6 @@ class TvPlaybackFragment : Fragment() {
     private lateinit var btnUpscaler: TextView
     private lateinit var btnInterp: TextView
     private lateinit var btnVideoProfile: TextView
-    private lateinit var btnColorProfile: TextView
     private lateinit var btnQuality: TextView
     private lateinit var btnRewind: ImageButton
     private lateinit var btnForward: ImageButton
@@ -143,6 +150,25 @@ class TvPlaybackFragment : Fragment() {
     private var useEnhancedMode = false
     private var referer = ""
     private var fallbackTriggered = false
+    private var retryCount = 0
+    private var isNetworkBack = false
+    private var wasInterrupted = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val rebufferWatchdog = Runnable {
+        if (!isAdded) return@Runnable
+        if (player?.playbackState == Player.STATE_BUFFERING) {
+            val msg = if (isNetworkBack) {
+                retryCount++
+                "Cargando - reconectando... (intento $retryCount)"
+            } else {
+                "Sin conexión - esperando red..."
+            }
+            loadingText.text = msg
+            loadingText.visibility = View.VISIBLE
+            forceReconnect("watchdog-buffer-timeout")
+        }
+    }
     private val fallbackHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -169,14 +195,8 @@ class TvPlaybackFragment : Fragment() {
         val dbgExtra = args?.getInt("debug_mode", -1) ?: -1
         if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
 
-        trackSelector = DefaultTrackSelector(requireContext()).apply {
-            setParameters(buildUponParameters()
-                .setMaxVideoSize(C.LENGTH_UNSET, C.LENGTH_UNSET)
-                .setMaxVideoBitrate(Int.MAX_VALUE)
-                .setMaxAudioBitrate(Int.MAX_VALUE)
-            )
-        }
-        useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled()
+        trackSelector = TrackSelectorFactory.create(requireContext())
+        useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled() || VideoEnhanceConfig.isGlQualityMode()
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
@@ -205,7 +225,6 @@ class TvPlaybackFragment : Fragment() {
         btnUpscaler = content.findViewById(R.id.btn_upscaler)
         btnInterp = content.findViewById(R.id.btn_interp)
         btnVideoProfile = content.findViewById(R.id.btn_video_profile)
-        btnColorProfile = content.findViewById(R.id.btn_color_profile)
         btnQuality = content.findViewById(R.id.btn_quality)
         btnLocalFile = content.findViewById(R.id.btn_local_file)
 
@@ -271,8 +290,6 @@ class TvPlaybackFragment : Fragment() {
         btnDsp.setOnClickListener { showDspDialog() }
         btnVideoProfile.setOnClickListener { showVideoProfileDialog() }
         updateVideoProfileButton()
-        btnColorProfile.setOnClickListener { showColorProfileDialog() }
-        updateColorProfileButton()
         btnInterp.setOnClickListener { showInterpolationDialog() }
         updateInterpButton()
         btnUpscaler.setOnClickListener { showUpscalerDialog() }
@@ -463,7 +480,7 @@ class TvPlaybackFragment : Fragment() {
     private fun showVideoProfileDialog() {
         VideoEnhanceUi.showAdvanced(requireContext()) {
             updateVideoProfileButton()
-            if (VideoEnhanceConfig.isEnabled() && !useEnhancedMode) {
+            if (!useEnhancedMode) {
                 useEnhancedMode = true
                 restartWithEnhanced()
             } else {
@@ -473,19 +490,7 @@ class TvPlaybackFragment : Fragment() {
     }
 
     private fun updateVideoProfileButton() {
-        btnVideoProfile.text = if (VideoEnhanceConfig.isEnabled()) "Enhancement: ON" else "Enhancement: OFF"
-    }
-
-    private fun showColorProfileDialog() {
-        ColorProfileUi.show(requireContext()) {
-            updateColorProfileButton()
-            showController()
-        }
-    }
-
-    private fun updateColorProfileButton() {
-        val p = VideoEnhanceConfig.colorPreset()
-        btnColorProfile.text = if (p == VideoEnhanceConfig.ColorPreset.OFF) "Color" else "Color: ${p.label}"
+        btnVideoProfile.text = "Enhancement: ON"
     }
 
     private fun skipToPlaylist(delta: Int) {
@@ -553,32 +558,11 @@ class TvPlaybackFragment : Fragment() {
 
     private fun showUpscalerDialog() {
         val modes = VideoEnhanceConfig.mainUpscalers
-        val labels = modes.map { if (it == VideoEnhanceConfig.UpscalerMode.FSR) "FSR…" else it.label }.toTypedArray()
+        val labels = modes.map { it.label }.toTypedArray()
         val current = VideoEnhanceConfig.getUpscalerMode()
-        val selectedIdx = if (VideoEnhanceConfig.isFsr(current)) modes.indexOf(VideoEnhanceConfig.UpscalerMode.FSR)
-                          else modes.indexOfFirst { it.ordinal == current.ordinal }.coerceAtLeast(0)
+        val selectedIdx = modes.indexOfFirst { it == current }.coerceAtLeast(0)
         androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
             .setTitle("Escalado de Video")
-            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
-                val chosen = modes[which]
-                if (chosen == VideoEnhanceConfig.UpscalerMode.FSR) {
-                    showFsrQualityDialog()
-                } else {
-                    VideoEnhanceConfig.setUpscalerMode(chosen)
-                    updateUpscalerButton()
-                    showController()
-                }
-            }
-            .setNegativeButton("Cerrar", null)
-            .show()
-    }
-
-    private fun showFsrQualityDialog() {
-        val modes = VideoEnhanceConfig.fsrQualities
-        val labels = modes.map { it.label }.toTypedArray()
-        val selectedIdx = modes.indexOf(VideoEnhanceConfig.currentFsr()).coerceAtLeast(0)
-        androidx.appcompat.app.AlertDialog.Builder(requireContext(), R.style.DialogTheme)
-            .setTitle("FSR · Calidad")
             .setSingleChoiceItems(labels, selectedIdx) { _, which ->
                 VideoEnhanceConfig.setUpscalerMode(modes[which])
                 updateUpscalerButton()
@@ -590,8 +574,7 @@ class TvPlaybackFragment : Fragment() {
 
     private fun updateUpscalerButton() {
         val mode = VideoEnhanceConfig.getUpscalerMode()
-        btnUpscaler.text = if (VideoEnhanceConfig.isFsr(mode)) "Escala: FSR · ${mode.label.removePrefix("FSR ")}"
-                           else "Escala: ${mode.label}"
+        btnUpscaler.text = "Escala: ${mode.label}"
     }
 
     private fun applySavedVolume() {
@@ -655,7 +638,7 @@ class TvPlaybackFragment : Fragment() {
                 val extractor = VideoExtractorHelper(playerContainer)
                 try {
                     val url = withContext(Dispatchers.Main) {
-                        extractor.extractSuspend(embedUrl, serverName)
+                        extractor.extractSuspend(embedUrl, serverName, referer)
                     }
                     loadingText.visibility = View.GONE
                     if (!url.isNullOrBlank()) {
@@ -683,9 +666,23 @@ class TvPlaybackFragment : Fragment() {
             return
         }
         val megaFactory = DataSource.Factory {
-            MegaDecryptingDataSource(key, resolved.megaCtrStart, resolved.extraHeaders)
+            MegaDecryptingDataSource(
+                key,
+                resolved.megaCtrStart,
+                VideoDataSource.create(requireContext(), referer)
+            )
         }
-         val exoPlayer = ExoPlayer.Builder(requireContext())
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                20000,
+                80000,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+            )
+            .build()
+         val exoPlayer = ExoPlayer.Builder(requireContext(), CodecSelectorFactory.renderersFactory(requireContext()))
+             .setLoadControl(loadControl)
+             .setTrackSelector(trackSelector!!)
              .setMediaSourceFactory(
                  DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(megaFactory)
              )
@@ -695,7 +692,9 @@ class TvPlaybackFragment : Fragment() {
         player = exoPlayer
         applySavedVolume()
 
-        addPlayerView(exoPlayer)
+        val playerView = addPlayerView(exoPlayer)
+        (playerView.getVideoSurfaceView() as? SurfaceView)?.holder?.setFormat(PixelFormat.RGBA_8888)
+        exoPlayer.setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
         exoPlayer.setMediaItem(MediaItem.fromUri(resolved.url))
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -721,12 +720,22 @@ class TvPlaybackFragment : Fragment() {
     private fun isLocalUrl(url: String): Boolean =
         url.startsWith("content://") || url.startsWith("file://")
 
-    private fun playStandard(url: String) {
-         val exoPlayer = ExoPlayer.Builder(requireContext())
+private fun playStandard(url: String) {
+         val loadControl = DefaultLoadControl.Builder()
+             .setBufferDurationsMs(
+                 20000,
+                 80000,
+                 DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                 DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+             )
+             .build()
+         val exoPlayer = ExoPlayer.Builder(requireContext(), CodecSelectorFactory.renderersFactory(requireContext()))
+             .setLoadControl(loadControl)
+             .setTrackSelector(trackSelector!!)
              .setMediaSourceFactory(
                  DefaultMediaSourceFactory(requireContext()).setDataSourceFactory(
                      if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(requireContext())
-                     else VideoDataSource.factory(referer)
+                     else VideoDataSource.factory(requireContext(), referer)
                  )
              )
              .setHandleAudioBecomingNoisy(true)
@@ -735,7 +744,9 @@ class TvPlaybackFragment : Fragment() {
         player = exoPlayer
         applySavedVolume()
 
-        addPlayerView(exoPlayer)
+        val playerView = addPlayerView(exoPlayer)
+        (playerView.getVideoSurfaceView() as? SurfaceView)?.holder?.setFormat(PixelFormat.RGBA_8888)
+        exoPlayer.setVideoScalingMode(C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING)
         exoPlayer.setMediaItem(MediaItem.fromUri(url))
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -757,7 +768,7 @@ class TvPlaybackFragment : Fragment() {
         processor = Media3SixtyFpsProcessor(requireContext(), glSurface, referer)
         processor!!.setupGlPipeline()
         processor!!.renderer?.setDebugModeValue(VideoEnhanceConfig.getDebugMode())
-        processor!!.onGlFailure = { requireActivity().runOnUiThread { triggerGlFallback() } }
+        processor!!.onGlFailure = { requireActivity().runOnUiThread { triggerGlFallback(url) } }
 
          val exoPlayer = processor!!.createPlayer(
              trackSelector = trackSelector,
@@ -775,8 +786,8 @@ class TvPlaybackFragment : Fragment() {
 
         fallbackHandler.postDelayed({
             if (player != null && processor?.isPipelineReady() != true && !fallbackTriggered) {
-                Log.w(TAG, "GL pipeline not ready, falling back to standard surface")
-                triggerGlFallback()
+                Log.w(TAG, "GL pipeline not ready, falling back to standard playback")
+                triggerGlFallback(url)
             }
         }, 5000)
     }
@@ -796,19 +807,19 @@ class TvPlaybackFragment : Fragment() {
          return playerView
      }
 
-    private fun triggerGlFallback() {
+    private fun triggerGlFallback(url: String) {
         if (fallbackTriggered) return
         fallbackTriggered = true
-        Log.w(TAG, "GL pipeline failed, switching to standard surface")
+        useEnhancedMode = false
+        Log.w(TAG, "GL pipeline failed, falling back to standard playback")
         fpsBadge.visibility = View.GONE
         processor?.release()
         processor = null
+        player?.release()
+        player = null
         glActive = false
         playerContainer.removeAllViews()
-        val exo = player
-        if (exo != null) {
-            addPlayerView(exo)
-        }
+        playStandard(url)
     }
 
     private fun startFpsPolling() {
@@ -819,6 +830,9 @@ class TvPlaybackFragment : Fragment() {
                     if (r.pipelineReady && r.interpolationActive) {
                         fpsBadge.visibility = View.VISIBLE
                         fpsBadge.text = "Salida ${r.outputFps.toInt()} fps · Fuente ${r.sourceFps.toInt()} · ${r.frameMs}ms · Mov ${(r.motionLevel * 100).toInt()} · Drop ${r.droppedFrames} · ${r.qualityLabel}"
+                    } else if (r.pipelineReady && com.karin.streamtv.player.VideoEnhanceConfig.isGlQualityMode() && !com.karin.streamtv.player.VideoEnhanceConfig.isEnabled() && !com.karin.streamtv.player.VideoEnhanceConfig.isInterpolationEnabled()) {
+                        fpsBadge.visibility = View.VISIBLE
+                        fpsBadge.text = "Calidad GL: activa"
                     } else {
                         fpsBadge.visibility = View.GONE
                     }
@@ -843,15 +857,104 @@ class TvPlaybackFragment : Fragment() {
         fallbackHandler.postDelayed(poll, 1000)
     }
 
+    private fun registerNetworkMonitor() {
+        val cm = requireContext().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                reconnectHandler.post {
+                    if (!isNetworkBack) {
+                        isNetworkBack = true
+                        retryCount = 0
+                    }
+                    forceReconnect("network-available")
+                }
+            }
+            override fun onLost(network: Network) {
+                reconnectHandler.post {
+                    isNetworkBack = false
+                    player?.pause()
+                    loadingText.text = "Sin conexión - esperando red..."
+                    loadingText.visibility = View.VISIBLE
+                }
+            }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(networkCallback!!)
+        } catch (_: Exception) {
+            networkCallback = null
+        }
+    }
+
+    private fun forceReconnect(reason: String) {
+        val p = player ?: return
+        val posMs = p.currentPosition.takeIf { it > 0 } ?: 0L
+        loadingText.text = "Reconectando... ($reason)"
+        loadingText.visibility = View.VISIBLE
+        reconnectHandler.removeCallbacks(rebufferWatchdog)
+        reconnectHandler.postDelayed({
+            if (!isAdded) return@postDelayed
+            try {
+                p.seekTo(posMs)
+                p.prepare()
+                p.playWhenReady = true
+                Log.i(TAG, "forceReconnect($reason) done, position=$posMs")
+            } catch (_: Exception) {}
+        }, 1200L)
+    }
+
+    private fun handlePlaybackError(error: PlaybackException) {
+        Log.e(TAG, "Playback error: ${error.message}")
+        val transient = error.errorCode == PlaybackException.ERROR_CODE_TIMEOUT ||
+            error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+        if (transient && retryCount < 3) {
+            retryCount++
+            val delay = 1500L * retryCount
+            val msg = if (isNetworkBack) {
+                "Error temporal - reintentando en ${delay / 1000}s (intento $retryCount/3)"
+            } else {
+                "Sin conexión - reintentando en ${delay / 1000}s (intento $retryCount/3)"
+            }
+            loadingText.text = msg
+            loadingText.visibility = View.VISIBLE
+            reconnectHandler.removeCallbacks(rebufferWatchdog)
+            reconnectHandler.postDelayed({
+                if (!isAdded) return@postDelayed
+                forceReconnect("playback-error")
+                reconnectHandler.postDelayed(rebufferWatchdog, 15_000)
+            }, delay)
+        } else {
+            if (!isAdded) return
+            Toast.makeText(requireContext(), "Error de reproducción: ${error.message}", Toast.LENGTH_LONG).show()
+            requireActivity().finish()
+        }
+    }
+
     private fun attachListener(exoPlayer: ExoPlayer) {
+        if (networkCallback == null) registerNetworkMonitor()
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
-                    Player.STATE_READY -> loadingText.visibility = View.GONE
+                    Player.STATE_READY -> {
+                        loadingText.visibility = View.GONE
+                        retryCount = 0
+                        reconnectHandler.removeCallbacks(rebufferWatchdog)
+                    }
+                    Player.STATE_BUFFERING -> {
+                        val msg = if (isNetworkBack) {
+                            "Cargando... (reintento $retryCount)"
+                        } else {
+                            "Sin conexión - esperando red..."
+                        }
+                        loadingText.text = msg
+                        loadingText.visibility = View.VISIBLE
+                        reconnectHandler.postDelayed(rebufferWatchdog, 15_000)
+                    }
                     Player.STATE_ENDED -> onVideoEnded()
                 }
             }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (!isAdded) return
                 processor?.renderer?.setVideoSize(videoSize.width, videoSize.height)
                 // Android TV fix: force the hardware SurfaceView buffer to panel-native resolution
                 val ctx = requireContext()
@@ -864,9 +967,8 @@ class TvPlaybackFragment : Fragment() {
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
-                Log.e(TAG, "Playback error: ${error.message}")
-                Toast.makeText(requireContext(), "Error: ${error.message}", Toast.LENGTH_LONG).show()
-                requireActivity().finish()
+                if (!isAdded) return
+                handlePlaybackError(error)
             }
         })
     }
@@ -883,10 +985,12 @@ class TvPlaybackFragment : Fragment() {
                 com.karin.streamtv.util.VideoQueue.poll()
                 AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
                     override fun onCountdownTick(sec: Int) {
+                        if (!isAdded) return
                         loadingText.visibility = View.VISIBLE
                         loadingText.text = "Siguiente: ${nextFromQueue.title} en ${sec}s"
                     }
                     override fun onCountdownFinish() {
+                        if (!isAdded) return
                         val intent = android.content.Intent(
                             requireContext(),
                             com.karin.streamtv.ui.SiteBrowserActivity::class.java
@@ -908,10 +1012,12 @@ class TvPlaybackFragment : Fragment() {
                 if (nextUrl != null) {
                     AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
                         override fun onCountdownTick(sec: Int) {
+                            if (!isAdded) return
                             loadingText.visibility = View.VISIBLE
                             loadingText.text = "Siguiente episodio en ${sec}s"
                         }
                         override fun onCountdownFinish() {
+                            if (!isAdded) return
                             val intent = android.content.Intent(
                                 requireContext(),
                                 com.karin.streamtv.ui.SiteBrowserActivity::class.java
@@ -965,9 +1071,16 @@ class TvPlaybackFragment : Fragment() {
     override fun onDestroy() {
         controllerHandler.removeCallbacksAndMessages(null)
         fallbackHandler.removeCallbacksAndMessages(null)
-        processor?.release()
+        reconnectHandler.removeCallbacksAndMessages(null)
+        networkCallback?.let { cb ->
+            try {
+                (requireContext().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {}
+        }
+        networkCallback = null
+        val proc = processor
         processor = null
-        player?.release()
+        proc?.release() ?: player?.release()
         player = null
         super.onDestroy()
     }

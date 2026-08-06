@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.util.LruCache
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
@@ -16,20 +17,39 @@ object DiskImageCache {
     private const val CACHE_DIR = "image_cache"
     private const val MAX_CACHE_SIZE = 50L * 1024 * 1024 // 50MB
     private const val MAX_ENTRIES = 500
+    private const val MAX_DOWNLOAD_BYTES = 8L * 1024 * 1024 // 8MB
 
     private var cacheDir: File? = null
+
+    // LRU en memoria (patrón TextureCache de Kodi): evita re-decodificar desde
+    // disco en cada bind y baja la presión de memoria en grid/recyclers.
+    private val memoryCache = object : LruCache<String, Bitmap>(memCacheSizeBytes()) {
+        override fun sizeOf(key: String, value: Bitmap): Int =
+            value.byteCount
+    }
+
+    private fun memCacheSizeBytes(): Int {
+        val maxMem = Runtime.getRuntime().maxMemory()
+        return (maxMem / 16).toInt().coerceIn(4 * 1024 * 1024, 64 * 1024 * 1024)
+    }
+
+    private fun memKeyOf(url: String, w: Int, h: Int): String = "$url#$w#$h"
 
     fun init(context: Context) {
         cacheDir = File(context.cacheDir, CACHE_DIR).also { it.mkdirs() }
         trimCache()
     }
 
-    fun get(url: String): Bitmap? {
+    fun get(url: String, reqW: Int = 0, reqH: Int = 0): Bitmap? {
+        val memKey = memKeyOf(url, reqW, reqH)
+        memoryCache.get(memKey)?.let { return it }
         val file = fileFor(url) ?: return null
         if (!file.exists()) return null
         return try {
             val bytes = file.readBytes()
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            decode(bytes, reqW, reqH)?.also { bmp ->
+                memoryCache.put(memKey, bmp)
+            }
         } catch (_: Exception) {
             file.delete()
             null
@@ -68,16 +88,27 @@ object DiskImageCache {
     }
 
     fun loadFromNetwork(url: String, maxWidth: Int = 400, maxHeight: Int = 220): Bitmap? {
-        get(url)?.let { return it }
+        get(url, maxWidth, maxHeight)?.let { return it }
 
         val bytes = fetchBytes(url) ?: return null
         put(url, bytes)
 
-        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        options.inSampleSize = calculateInSampleSize(options, maxWidth, maxHeight)
-        options.inJustDecodeBounds = false
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        return decode(bytes, maxWidth, maxHeight)?.also { bmp ->
+            memoryCache.put(memKeyOf(url, maxWidth, maxHeight), bmp)
+        }
+    }
+
+    private fun decode(bytes: ByteArray, reqW: Int, reqH: Int): Bitmap? {
+        if (reqW > 0 && reqH > 0) {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            if (options.outWidth > 0 && options.outHeight > 0) {
+                options.inSampleSize = calculateInSampleSize(options, reqW, reqH)
+                options.inJustDecodeBounds = false
+                return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            }
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }
 
     /**
@@ -124,6 +155,9 @@ object DiskImageCache {
      * so wide brand logos and small favicons both look uniform on a card.
      */
     fun renderLogoPlate(logo: Bitmap, plateW: Int, plateH: Int, cornerRadius: Int = 12): Bitmap {
+        if (logo.width <= 0 || logo.height <= 0 || plateW <= 0 || plateH <= 0) {
+            return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        }
         val out = Bitmap.createBitmap(plateW, plateH, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
         val rect = RectF(0f, 0f, plateW.toFloat(), plateH.toFloat())
@@ -159,14 +193,31 @@ object DiskImageCache {
                     .header("Accept", "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
                     .build()
             ).execute()
-            if (!conn.isSuccessful) { conn.close(); return null }
-            val bytes = conn.body?.bytes()
-            conn.close()
-            bytes
+            try {
+                if (!conn.isSuccessful) return null
+                val body = conn.body ?: return null
+                val bytes = body.byteStream().use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(8192)
+                    var total = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_DOWNLOAD_BYTES) return null
+                        out.write(buf, 0, n)
+                    }
+                    out.toByteArray()
+                }
+                bytes
+            } finally {
+                conn.close()
+            }
         } catch (_: Exception) { null }
     }
 
     fun clearCache() {
+        memoryCache.evictAll()
         cacheDir?.listFiles()?.forEach { it.delete() }
     }
 

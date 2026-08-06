@@ -57,7 +57,7 @@ class Media3SixtyFpsProcessor(
             .setTrackSelector(trackSelector ?: DefaultTrackSelector(context))
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
-                    .setDataSourceFactory(dataSourceFactory ?: VideoDataSource.factory(referer))
+                    .setDataSourceFactory(dataSourceFactory ?: VideoDataSource.factory(context, referer))
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(android.os.PowerManager.PARTIAL_WAKE_LOCK)

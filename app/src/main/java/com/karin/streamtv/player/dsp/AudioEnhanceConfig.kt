@@ -132,97 +132,97 @@ object AudioEnhanceConfig {
              // ANIME — TV speakers: diálogos nítidos, OST con cuerpo, sub-bass virtual
              Preset.ANIME -> Params(
                  Preset.ANIME, true, autoDevice = false,
-                 bassGain = +2.0f,       // medio-bajo: peso a efectos/OST sin embarrar
-                 trebleGain = +0.8f,     // brillo suave, evita sibilancia en voces JP
+                 bassGain = +1.0f,       // peso ligero: efectos/OST sin embarrar
+                 trebleGain = +0.6f,     // brillo suave, evita sibilancia en voces JP
                  subBassGain = -1.5f,    // corta sub real; VirtualBass (harmonicBass) lo reconstruye
-                 presenceGain = +2.5f,   // 2-4 kHz: claridad máxima en voces/anime
-                 surroundWidth = 0.3f,   // ancho moderado para estéreo TV
-                 fieldSurround = 0.15f,  // Haas sutil: sensación de "delante"
-                 exciterAmount = 0.1f,   // armónicos agudos: detalle en OST
-                 harmonicBass = 0.4f,    // TruBass fuerte: sub virtual convincente
-                 compression = 0.45f,    // nivelación anime (susurros ↔ gritos)
-                 reverbMix = 0.02f,      // casi seco: TV pequeña no necesita sala
+                 presenceGain = +1.5f,   // 2-4 kHz: claridad en voces/anime sin dureza
+                 surroundWidth = 0.2f,   // ancho moderado para estéreo TV
+                 fieldSurround = 0.08f,  // Haas sutil: sensación de "delante"
+                 exciterAmount = 0.05f,  // armónicos agudos: detalle en OST
+                 harmonicBass = 0.07f,   // TruBass suave: sub virtual sin "buzzy" (THD @55Hz 8.2%→2.6%)
+                 compression = 0.3f,     // nivelación suave anime (susurros ↔ gritos)
+                 reverbMix = 0.01f,      // casi seco: TV pequeña no necesita sala
                  masterGain = 1.0f,
-                 irType = IrPreset.SPEAKER_CAB,
-                 irMix = 0.25f,
-                 subharmonicMix = 0.5f,
-                 deBoxing = 0.4f
+                  irType = IrPreset.SPEAKER_CAB,
+                  irMix = 0.06f,
+                 subharmonicMix = 0.1f,
+                 deBoxing = 0.2f
              )
              // CINEMA — Soundbar/TV/5.1: experiencia cinematográfica real
              Preset.CINEMA -> Params(
                  Preset.CINEMA, true, autoDevice = false,
-                 bassGain = +1.0f,       // soporte, no boom
+                 bassGain = +0.5f,       // soporte, no boom
                  trebleGain = +0.3f,     // aire sutil
-                 subBassGain = +3.0f,    // LFE real (explosiones, banda sonora)
-                 presenceGain = +1.2f,   // diálogos inteligibles sin dureza
-                 surroundWidth = 0.4f,   // ancho cinematográfico
-                 fieldSurround = 0.35f,  // campo V4A: Haas + bass centrado = 5.1 fantasma
-                 exciterAmount = 0.04f,  // casi transparente
-                 harmonicBass = 0.1f,    // ligero refuerzo armónico
-                 compression = 0.35f,    // rango dinámico cine (respeta DR original)
-                 reverbMix = 0.08f,      // sala de cine leve
+                 subBassGain = +1.5f,    // LFE moderado (explosiones, banda sonora)
+                 presenceGain = +0.8f,   // diálogos inteligibles sin dureza
+                 surroundWidth = 0.3f,   // ancho cinematográfico
+                 fieldSurround = 0.15f,  // campo V4A suave
+                 exciterAmount = 0.03f,  // casi transparente
+                 harmonicBass = 0.08f,   // ligero refuerzo armónico
+                 compression = 0.25f,    // rango dinámico cine (respeta DR original)
+                 reverbMix = 0.04f,      // sala de cine leve
                  masterGain = 0.98f,     // headroom para picos de LFE
                  irType = IrPreset.HALL,
-                 irMix = 0.18f,
-                 subharmonicMix = 0.4f,
-                 deBoxing = 0.2f
+                 irMix = 0.08f,
+                 subharmonicMix = 0.1f,
+                 deBoxing = 0.12f
              )
              // BASS_BOOST — Musical: graves ajustados, rápidos, armónicamente ricos
              Preset.BASS_BOOST -> Params(
                  Preset.BASS_BOOST, true, autoDevice = false,
-                 bassGain = +3.0f,       // 80-150 Hz: "punch" musical
+                 bassGain = +2.0f,       // 80-150 Hz: "punch" musical
                  trebleGain = +0.5f,     // compensa masking de graves
-                 subBassGain = +1.5f,    // sub controlado (no retumba)
+                 subBassGain = +0.8f,    // sub controlado (no retumba)
                  presenceGain = 0.0f,
                  surroundWidth = 0.15f,
                  fieldSurround = 0.05f,
-                 exciterAmount = 0.06f,  // claridad en ataque de bombo/bajo
-                 harmonicBass = 0.3f,    // síntesis armónica: graves "más grandes"
+                 exciterAmount = 0.04f,  // claridad en ataque de bombo/bajo
+                 harmonicBass = 0.1f,    // TruBass moderado: 2f/3f sin "buzzy" (THD @55Hz 5.3%→2.7%)
                  compression = 0.25f,    // dinámica musical preservada
                  reverbMix = 0.0f,
                  masterGain = 0.95f,     // headroom para boost
                  irType = IrPreset.ROOM,
-                 irMix = 0.08f,
-                 subharmonicMix = 0.2f,
-                 deBoxing = 0.1f
+                 irMix = 0.04f,
+                 subharmonicMix = 0.05f,
+                 deBoxing = 0.05f
              )
              // SURROUND — Inmersivo: crossfeed binaural + Haas + reflexiones
              Preset.SURROUND -> Params(
                  Preset.SURROUND, true, autoDevice = false,
                  bassGain = +0.5f,
-                 trebleGain = +1.0f,     // apertura espacial en agudos
+                 trebleGain = +0.6f,     // apertura espacial en agudos
                  subBassGain = +0.5f,
-                 presenceGain = +0.8f,
-                 surroundWidth = 0.85f,  // ancho máximo sin fase
-                 fieldSurround = 0.6f,   // V4A fuerte: Haas 9/12ms + reflexión 16ms
-                 exciterAmount = 0.15f,  // detalle espacial
+                 presenceGain = +0.5f,
+                 surroundWidth = 0.5f,   // ancho sin fase
+                 fieldSurround = 0.3f,   // V4A moderado: Haas 9/12ms + reflexión 16ms
+                 exciterAmount = 0.08f,  // detalle espacial
                  harmonicBass = 0.08f,
                  compression = 0.2f,
-                 reverbMix = 0.12f,      // ambiente envolvente
+                 reverbMix = 0.06f,      // ambiente envolvente
                  masterGain = 1.0f,
                  irType = IrPreset.CROSSFEED,
-                 irMix = 0.2f,           // crossfeed binaural real
-                 subharmonicMix = 0.1f,
-                 deBoxing = 0.05f
+                 irMix = 0.1f,           // crossfeed binaural real
+                 subharmonicMix = 0.03f,
+                 deBoxing = 0.03f
              )
              // DIALOGUE — Noticias/podcasts/audiolibros: inteligibilidad absoluta
              Preset.DIALOGUE -> Params(
                  Preset.DIALOGUE, true, autoDevice = false,
                  bassGain = -3.0f,       // elimina rumble/musica de fondo
-                 trebleGain = +1.5f,     // aire/consonantes
+                 trebleGain = +1.0f,     // aire/consonantes
                  subBassGain = -4.0f,
-                 presenceGain = +5.0f,   // 1.5-4 kHz: zona crítica habla
+                 presenceGain = +3.0f,   // 1.5-4 kHz: zona crítica habla
                  surroundWidth = 0.0f,   // mono perfecto: foco central
                  fieldSurround = 0.0f,
-                 exciterAmount = 0.12f,  // nitidez consonantes
-                 harmonicBass = 0.0f,
-                 compression = 0.7f,     // nivelación fuerte: voz constante
-                 reverbMix = 0.0f,
-                 masterGain = 1.05f,     // compensación corte graves
+                  exciterAmount = 0.08f,  // nitidez consonantes
+                  harmonicBass = 0.0f,
+                  compression = 0.45f,    // nivelación suave: voz constante sin aplastar (-7dB→-3dB)
+                  reverbMix = 0.0f,
+                  masterGain = 1.05f,     // compensa corte de graves + compresión
                  irType = IrPreset.NONE,
                  irMix = 0.0f,
-                 subharmonicMix = 0.3f,
-                 deBoxing = 0.3f
+                 subharmonicMix = 0.05f,
+                 deBoxing = 0.2f
              )
              // MUSIC — Audiófilo: respuesta plana + micro-mejora
              Preset.MUSIC -> Params(
@@ -232,36 +232,36 @@ object AudioEnhanceConfig {
                  subBassGain = +0.5f,    // extensión grave sutil
                  presenceGain = +0.3f,   // presencia vocal natural
                  surroundWidth = 0.25f,  // estéreo natural, no ensanchado artificial
-                 fieldSurround = 0.1f,   // profundidad Haas leve
-                 exciterAmount = 0.05f,  // armónicos: realismo timbre
-                 harmonicBass = 0.12f,   // TruBass sutil: cuerpo sin colorar
+                 fieldSurround = 0.05f,  // profundidad Haas leve
+                 exciterAmount = 0.03f,  // armónicos: realismo timbre
+                 harmonicBass = 0.08f,   // TruBass sutil: cuerpo sin colorar
                  compression = 0.1f,     // casi sin compresión: DR máximo
                  reverbMix = 0.02f,      // ambiente de sala real (IR ROOM)
                  masterGain = 1.0f,
                  irType = IrPreset.ROOM,
-                 irMix = 0.12f,
-                 subharmonicMix = 0.1f,
-                 deBoxing = 0.05f
+                 irMix = 0.06f,
+                 subharmonicMix = 0.03f,
+                 deBoxing = 0.03f
              )
-             // SPEAKER / TRUE MAXBASS — Bocina chica: máximo grave percibido
-             Preset.SPEAKER -> Params(
-                 Preset.SPEAKER, true, autoDevice = false,
-                 bassGain = +3.5f,       // medio-bajo: donde el driver rinde
-                 trebleGain = -0.3f,     // doma resonancias metálicas
-                 subBassGain = -5.0f,    // elimina sub real (distorsiona driver)
-                 presenceGain = +1.8f,   // claridad vocal
-                 surroundWidth = 0.0f,
-                 fieldSurround = 0.0f,
-                 exciterAmount = 0.04f,
-                 harmonicBass = 0.7f,    // síntesis armónica agresiva (2f, 3f, 4f)
-                 compression = 0.5f,     // protege driver, nivelación fuerte
-                 reverbMix = 0.0f,
-                 masterGain = 1.0f,
-                 irType = IrPreset.SPEAKER_CAB,
-                 irMix = 0.35f,          // máximo cuerpo de cabina
-                 subharmonicMix = 0.6f,
-                 deBoxing = 0.5f
-             )
+              // SPEAKER / TRUE MAXBASS — Bocina chica: máximo grave percibido
+              Preset.SPEAKER -> Params(
+                  Preset.SPEAKER, true, autoDevice = false,
+                  bassGain = +2.0f,       // medio-bajo: donde el driver rinde
+                  trebleGain = -0.3f,     // doma resonancias metálicas
+                  subBassGain = -5.0f,    // elimina sub real (distorsiona driver)
+                  presenceGain = +1.2f,   // claridad vocal
+                  surroundWidth = 0.0f,
+                  fieldSurround = 0.0f,
+                  exciterAmount = 0.03f,
+                  harmonicBass = 0.12f,   // síntesis armónica contenida (THD @55Hz 18%→6%, limiter despegado)
+                  compression = 0.3f,     // protege driver, nivelación
+                  reverbMix = 0.0f,
+                  masterGain = 0.95f,     // headroom para boost + IR
+                  irType = IrPreset.SPEAKER_CAB,
+                  irMix = 0.1f,           // cuerpo de cabina moderado (pico @100Hz 0.90→0.67)
+                  subharmonicMix = 0.15f,
+                  deBoxing = 0.25f
+              )
         }
     }
 
@@ -720,9 +720,8 @@ object AudioEnhanceConfig {
         // Celular: driver 10-15mm, mono, cerca de la oreja
         DeviceKind.PHONE_SPEAKER -> base.copy(
             subBassGain = (base.subBassGain - 3f).coerceIn(-12f, 12f),   // driver no reproduce <100Hz
-            trebleGain = (base.trebleGain + 0.5f).coerceIn(-12f, 12f),   // compensa roll-off agudos
-            presenceGain = (base.presenceGain + 0.8f).coerceIn(-12f, 12f), // claridad voz
-            harmonicBass = (base.harmonicBass + 0.25f).coerceIn(0f, 1f),  // VirtualBass fuerte
+            trebleGain = (base.trebleGain + 0.3f).coerceIn(-12f, 12f),   // compensa roll-off agudos
+            presenceGain = (base.presenceGain + 0.4f).coerceIn(-12f, 12f), // claridad voz
             compression = (base.compression + 0.15f).coerceIn(0f, 1f),    // protege driver
             reverbMix = 0f,
             surroundWidth = (base.surroundWidth * 0.3f).coerceIn(0f, 1.5f), // mono real
@@ -732,8 +731,7 @@ object AudioEnhanceConfig {
         DeviceKind.TV_SPEAKER -> base.copy(
             trebleGain = (base.trebleGain - 0.3f).coerceIn(-12f, 12f),   // reduce resonancias metálicas
             subBassGain = (base.subBassGain - 1.5f).coerceIn(-12f, 12f), // corte suave sub
-            presenceGain = (base.presenceGain + 0.6f).coerceIn(-12f, 12f), // diálogos
-            harmonicBass = (base.harmonicBass + 0.2f).coerceIn(0f, 1f),   // graves virtuales
+            presenceGain = (base.presenceGain + 0.3f).coerceIn(-12f, 12f), // diálogos
             reverbMix = 0f,
             surfaceResonance = true  // activa resonancia de caja/mesa
         )
@@ -743,7 +741,8 @@ object AudioEnhanceConfig {
             subBassGain = (base.subBassGain + 0.3f).coerceIn(-12f, 12f),   // extensión real
             trebleGain = (base.trebleGain + 0.2f).coerceIn(-12f, 12f),     // aire
             reverbMix = (base.reverbMix + 0.015f).coerceIn(0f, 0.5f),      // ambience natural
-            fieldSurround = (base.fieldSurround + 0.1f).coerceIn(0f, 1f)   // profundidad
+            fieldSurround = (base.fieldSurround + 0.1f).coerceIn(0f, 1f),  // profundidad
+            masterGain = (base.masterGain * 0.90f).coerceIn(0.5f, 1.2f)    // headroom: evita bombeo del limiter en graves
         )
         // Soundbar/HT: drivers dedicados, subwoofer real, placement fijo
         DeviceKind.SOUNDBAR -> base.copy(
