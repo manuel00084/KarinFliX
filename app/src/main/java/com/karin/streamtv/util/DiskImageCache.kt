@@ -28,6 +28,10 @@ object DiskImageCache {
             value.byteCount
     }
 
+    // Pool para probar candidatos de favicon en paralelo (antes era secuencial:
+    // hasta 8 peticiones en serie por sitio al primer arranque).
+    private val faviconPool = java.util.concurrent.Executors.newFixedThreadPool(4)
+
     private fun memCacheSizeBytes(): Int {
         val maxMem = Runtime.getRuntime().maxMemory()
         return (maxMem / 16).toInt().coerceIn(4 * 1024 * 1024, 64 * 1024 * 1024)
@@ -136,10 +140,18 @@ object DiskImageCache {
      * largest available when none reach that size.
      */
     fun loadBestFavicon(candidates: List<String>, maxWidth: Int = 256, maxHeight: Int = 256): Bitmap? {
+        if (candidates.isEmpty()) return null
+        val futures = candidates.map { url ->
+            faviconPool.submit(java.util.concurrent.Callable<Bitmap?> {
+                try { loadFromNetwork(url, maxWidth, maxHeight) } catch (_: Exception) { null }
+            })
+        }
         var best: Bitmap? = null
         var bestPixels = 0
-        for (url in candidates) {
-            val bmp = loadFromNetwork(url, maxWidth, maxHeight) ?: continue
+        for (f in futures) {
+            val bmp = try {
+                f.get(3, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (_: Exception) { null } ?: continue
             val pixels = bmp.width * bmp.height
             if (pixels > bestPixels) {
                 best = bmp

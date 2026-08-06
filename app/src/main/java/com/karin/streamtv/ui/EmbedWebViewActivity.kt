@@ -124,8 +124,8 @@ class EmbedWebViewActivity : AppCompatActivity() {
     var intv=setInterval(function(){
         n++;
         dumpState('t'+n);
-        if(n>=30){clearInterval(intv);}
-    },2000);
+        if(n>=3){clearInterval(intv);}
+    },3000);
 })();
 """
 

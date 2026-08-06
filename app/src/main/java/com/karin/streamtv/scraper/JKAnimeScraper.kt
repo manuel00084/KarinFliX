@@ -4,6 +4,9 @@ import android.util.Log
 import com.karin.streamtv.model.Episode
 import com.karin.streamtv.model.VideoSource
 import com.karin.streamtv.model.VideoServer
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -106,19 +109,20 @@ object JKAnimeScraper : GenericScraper() {
         val episodes = mutableListOf<Episode>()
         var lastPage = 1
 
-        fun parsePage(body: String) {
+        fun parsePage(body: String): List<Episode> {
             val json = try { org.json.JSONObject(body) } catch (e: Exception) {
                 Log.w("JKAnimeScraper", "episodes JSON parse failed: ${e.message}")
-                return
+                return emptyList()
             }
-            val arr = json.optJSONArray("data") ?: return
+            val arr = json.optJSONArray("data") ?: return emptyList()
+            val out = mutableListOf<Episode>()
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
                 val number = obj.optInt("number", 0)
                 if (number <= 0) continue
                 val title = obj.optString("title").trim().ifBlank { "$slug - $number" }
                 val img = obj.optString("image").trim()
-                episodes.add(Episode(
+                out.add(Episode(
                     title = title,
                     url = "$origin/$slug/$number/",
                     episodeNum = number.toString(),
@@ -127,37 +131,48 @@ object JKAnimeScraper : GenericScraper() {
                 ))
             }
             lastPage = json.optInt("last_page", 1)
+            return out
         }
 
+        // Fetch page 1 first to learn last_page, then fetch the remaining pages concurrently.
         var page = 1
+        var effectiveToken = token
         var refreshed = false
-        while (page <= MAX_EPISODE_PAGES) {
-            var body = ScrapingEngine.postForm(
-                url = "$origin/ajax/episodes/$id/$page",
-                form = mapOf("_token" to token),
-                csrfToken = token,
-                siteName = siteName
-            )
-            if (body.isNullOrBlank() && !refreshed) {
-                // Session likely expired -> refresh the series page to obtain a fresh CSRF token and retry once.
-                refreshed = true
-                val fresh = ScrapingEngine.fetch("$origin/$slug/", siteName, null, forceFresh = true)
-                val freshToken = fresh?.toString()
-                    ?.let { Regex("""<meta name="csrf-token" content="([^"]+)""").find(it)?.groupValues?.get(1)?.trim() }
-                    .orEmpty()
-                if (freshToken.isNotBlank()) {
-                    body = ScrapingEngine.postForm(
-                        url = "$origin/ajax/episodes/$id/$page",
-                        form = mapOf("_token" to freshToken),
-                        csrfToken = freshToken,
-                        siteName = siteName
-                    )
-                }
+
+        suspend fun postPage(p: Int, csrf: String): String? = ScrapingEngine.postForm(
+            url = "$origin/ajax/episodes/$id/$p",
+            form = mapOf("_token" to csrf),
+            csrfToken = csrf,
+            siteName = siteName
+        )
+
+        var body = postPage(page, effectiveToken)
+        if (body.isNullOrBlank() && !refreshed) {
+            // Session likely expired -> refresh the series page to obtain a fresh CSRF token and retry once.
+            refreshed = true
+            val fresh = ScrapingEngine.fetch("$origin/$slug/", siteName, null, forceFresh = true)
+            val freshToken = fresh?.toString()
+                ?.let { Regex("""<meta name="csrf-token" content="([^"]+)""").find(it)?.groupValues?.get(1)?.trim() }
+                .orEmpty()
+            if (freshToken.isNotBlank()) {
+                effectiveToken = freshToken
+                body = postPage(page, effectiveToken)
             }
-            if (body.isNullOrBlank()) break
-            parsePage(body)
-            page++
-            if (page > lastPage) break
+        }
+        if (!body.isNullOrBlank()) episodes.addAll(parsePage(body))
+
+        page++
+        if (lastPage > 1 && page <= MAX_EPISODE_PAGES) {
+            val last = minOf(lastPage, MAX_EPISODE_PAGES)
+            val results = coroutineScope {
+                (page..last).map { p ->
+                    async { p to postPage(p, effectiveToken) }
+                }.awaitAll()
+            }
+            for ((p, b) in results.sortedBy { it.first }) {
+                if (b.isNullOrBlank()) continue
+                episodes.addAll(parsePage(b))
+            }
         }
 
         Log.d("JKAnimeScraper", "Fetched ${episodes.size} episodes for '$slug' (id=$id)")

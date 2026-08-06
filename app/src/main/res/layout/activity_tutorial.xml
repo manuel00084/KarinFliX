@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#1A1A1A"
+            android:paddingHorizontal="8dp">
+
+            <TextView
+                android:id="@+id/btn_back"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingHorizontal="16dp"
+                android:text="← Atrás"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:focusable="true" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Tutorial"
+                android:textColor="@color/accent"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/scroll_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Bienvenido a KarinFLiX"
+                    android:textColor="@color/accent"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:gravity="center"
+                    android:layout_marginBottom="12dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="KarinFLiX es tu centro de anime y series. En lugar de tener que entrar a varios sitios web por separado, aquí los tienes todos juntos en una sola pantalla. Elige tu serie, dale play y olvídate del resto: la app busca el mejor enlace, limpia la publicidad, mejora la imagen y el sonido, y hasta te deja continuar viendo en otra pantalla si quieres."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="CÓMO SE MANEJA"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Todo se controla igual que una app de TV normal:\n• Las flechas (o el anillo del mando) mueven el cursor por la pantalla.\n• Enter o el botón central del mando selecciona lo que tienes marcado.\n• El botón Atrás te regresa a la pantalla anterior.\nNo necesitas tocar la pantalla: con mando, teclado o el control remoto de Android TV funciona igual."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="LA PANTALLA PRINCIPAL"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Esta es tu casa. Desde aquí puedes llegar a todo:\n• Sitios: las tarjetas que ves son cada sitio de anime disponible (JKAnime, LatAnime y otros). Entrar a una tarjeta te lleva al contenido de ese sitio.\n• Buscar: escribe lo que quieras y la app lo busca en TODOS los sitios al mismo tiempo, para que no tengas que buscar uno por uno.\n• Historial: aquí aparecen las series que ya abriste alguna vez, por si quieres volver a ellas sin buscarlas de nuevo.\n• Continuar viendo: lo que empezaste y no terminaste, listo para retomarlo exactamente donde lo dejaste.\n• Calendario: un calendario con los episodios que salen cada día de la semana.\n• KARIN Link: el botón para conectar tus dispositivos entre sí.\n• Archivos: si tienes videos guardados en tu equipo o en una memoria USB, los puedes reproducir aquí."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="10dp" />
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:adjustViewBounds="true"
+                    android:src="@drawable/tut_main"
+                    android:contentDescription="Pantalla principal de KarinFLiX"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="DENTRO DE UN SITIO"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Cuando entras a un sitio, en la parte superior encuentras sus secciones:\n• Portada: los episodios más recientes que se han publicado.\n• Buscar: busca series y episodios, pero solo dentro de ese sitio.\n• Filtros: puedes filtrar por género, estado (en emisión, finalizada), tipo de serie, etc. Muy útil para descubrir algo nuevo.\n• Directorio: el catálogo completo del sitio, para explorarlo de principio a fin.\n• Siguiente / Anterior: recorren las páginas del catálogo.\n• Compartir: si tienes otro dispositivo conectado, puedes mandarle el episodio para que se reproduzca allá."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="10dp" />
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:adjustViewBounds="true"
+                    android:src="@drawable/tut_site"
+                    android:contentDescription="Navegador de un sitio de anime"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="LA FICHA DE UNA SERIE"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Al elegir una serie verás su portada, la sinopsis y la lista de episodios en orden.\n• Reproducir: elige un episodio y la app te muestra los servidores disponibles (las fuentes donde está alojado el video).\n• Playlist: puedes marcar varios episodios con el botón 📋 y reproducirlos seguidos, uno tras otro, sin tener que estar pendiente. Perfecto para maratones."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="EL REPRODUCTOR"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Aquí es donde la app hace su magia: quita la publicidad y los avisos molestos para que veas el video limpio. La barra de abajo tiene botones sencillos:\n• ▶/⏸ Play y Pausa.\n• ±10s: retrocede o avanza 10 segundos.\n• ⏮ ⏭ (anterior / siguiente): saltan al episodio anterior o siguiente de tu lista (solo si armaste un maratón).\n• Barra de progreso: mueve el video con el mando.\n• La app recuerda en qué episodio y minuto te quedaste."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="18dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="OTROS BOTONES — PARA QUÉ SIRVE CADA UNO"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Calidad: este botón cambia la RESOLUCIÓN REAL que se descarga (480p, 720p, 1080p...). Sólo funciona si el sitio ofrece varias versiones.\n  ➜ Dónde: si el video se corta (rebuffering) o tu equipo es flojo, baja para que no se atore."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Escala (el que agranda el video): este NO cambia la resolución que se descarga, solo estira la imagen a pantalla completa y la hace más nítida. Es distinto a Calidad: aquí no cambias la resolución real.\n  ➜ Apagado: deja que el televisor lo estire (recomendado en cajas débiles).\n  ➜ Bilineal/Bicúbico: estirados suaves y ligeros.\n  ➜ Anime4K DoG: hace el anime muy nítido, pero es pesado.\n  ➜ FSR: equilibrado, bueno para equipos medios."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• MotionX2 60p (fluidez): inventa cuadros entre los reales para que el movimiento se vea más suave (como las teles modernas). No cambia la resolución, cambia la fluidez.\n  ➜ Apagado: el video corre a sus cuadros naturales (30p). Es igual de fluido y es el que menos gasta.\n  ➜ Frame x2, Suavizado, Doubling+Micro-Blend: distintos niveles de suavizado.\n  ▶ IMPORTANTE EN EQUIPOS DÉBILES: es la opción que MÁS exige al aparato. Apágalo si el video se te trababa."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• IMAGEN MEJORADA (Enhancement): ajustes de color a tu gusto: brillo, contraste, saturación, nitidez, etc. Hace que la imagen se vea mejor sin tocar la resolución ni la fluidez.\n  ➜ Útil si el video se ve apagado o sin color. Si el aparato es lento, deja algo o todo off."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• SONIDO MEJORADO (Perfil de audio): cambia el sonido para que se escuche como prefieres. Se aplica al parlante (TV, bocina, auriculares) y funciona automáticamente según el equipo:\n  ➜ Auto: la app detecta tu bocina/TV y lo ajusta solo (recomendado).\n  ➜ Anime, Cine, Bass Boost, 3D Surround, Diálogos/Noticias, Música y True MaxBass: elige el estilo.\n  ➜ En avanzado también puedes subir un archivo de sonido (IR) para simular otra bocina."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="18dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="RESUMEN DE LAS DIFERENCIAS"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Calidad = QUÉ se descarga (resolución).\n• Escala = CÓMO se estira esa imagen (grande/definición).\n• MotionX2 60p = FLUIDEZ (más cuadros por segundo).\n• Imagen mejorada = COLORES/NITIDEZ.\n• Sonido mejorado = CÓMO se escucha.\n\nRECUERDA: si tu equipo es de gama baja o está limitado, pon Calidad en 720/480, Escala en OFF y MotionX2 60p apagado. Así verás el video igual de bien pero corriendo fluido, incluso si no puedes bajar de resolución."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="18dp" />
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:adjustViewBounds="true"
+                    android:src="@drawable/tut_servers"
+                    android:contentDescription="Selección de servidores de reproducción"
+                    android:layout_marginBottom="12dp" />
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:adjustViewBounds="true"
+                    android:src="@drawable/tut_player"
+                    android:contentDescription="Reproductor de video en KarinFLiX"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="KARIN LINK (CONECTAR DISPOSITIVOS)"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Con KARIN Link puedes ver lo mismo en dos pantallas a la vez, o mandar un video de un dispositivo a otro:\n• Misma red (LAN): si tu teléfono y tu TV están conectados al mismo wifi, la app los encuentra solos. Eliges el dispositivo y listo.\n• Internet (sala): si están en redes distintas, creas una sala y te conectas con un código QR o un enlace.\n• Compartir un episodio: desde cualquier serie, toca Compartir y elige el otro dispositivo: el episodio se reproduce allá al instante."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="10dp" />
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:adjustViewBounds="true"
+                    android:src="@drawable/tut_karinlink"
+                    android:contentDescription="Pantalla de KARIN Link"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="CONFIGURACIÓN"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="En Ajustes puedes personalizar tu experiencia:\n• Reproducción automática: que el siguiente episodio empiece solo.\n• Reproducir ahora: abrir directamente el video sin preguntar qué servidor usar.\n• Servidor alternativo: si el que elegiste falla, que pruebe con otro automáticamente.\n• Mejoras de imagen y sonido: activarlas o desactivarlas según prefieras.\n• KARIN Link: encender o apagar la conexión entre dispositivos.\nTodo lo que cambies se guarda con el botón Guardar."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="10dp" />
+
+                <ImageView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:adjustViewBounds="true"
+                    android:src="@drawable/tut_settings"
+                    android:contentDescription="Pantalla de configuración"
+                    android:layout_marginBottom="24dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="RESUMEN RÁPIDO"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="1. Elige un sitio o busca lo que quieres ver.\n2. Entra a la serie y elige el episodio.\n3. Dale play y, si algo no funciona, cambia de servidor.\n4. La app guarda tu progreso: retoma cuando quieras.\n5. ¿Otra pantalla? Conecta tus dispositivos con KARIN Link."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- Bottom Spacer -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:text="" />
+
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

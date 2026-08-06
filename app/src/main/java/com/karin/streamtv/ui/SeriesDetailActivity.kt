@@ -28,6 +28,9 @@ import com.karin.streamtv.util.PlaylistQueue
 import com.karin.streamtv.util.ServerHelper
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -443,30 +446,34 @@ class SeriesDetailActivity : AppCompatActivity() {
 
     private suspend fun buildQueue(episodes: List<Episode>): List<PlaylistItem> {
         val scraper = ScraperRegistry.getScraper(siteName)
-        return episodes.mapNotNull { ep ->
-            try {
-                val servers = scraper?.extractServers(ep.url) ?: ServerExtractor.extractServers(ep.url, siteName)
-                val best = servers.maxByOrNull { it.speedRating }
-                if (best != null) {
-                    PlaylistItem(
-                        title = ep.title,
-                        url = ep.url,
-                        embedUrl = if (best.serverUrl.contains("?server=")) best.serverUrl.substringBefore("?server=") else best.serverUrl,
-                        serverName = if (best.serverUrl.contains("?server=")) best.serverUrl.substringAfter("?server=") else "",
-                        episodeNumber = ServerHelper.extractEpisodeNumber(ep.title)
-                    )
-                } else {
-                    PlaylistItem(
-                        title = ep.title,
-                        url = ep.url,
-                        embedUrl = ep.url,
-                        episodeNumber = ServerHelper.extractEpisodeNumber(ep.title)
-                    )
+        return coroutineScope {
+            episodes.map { ep ->
+                async {
+                    try {
+                        val servers = scraper?.extractServers(ep.url) ?: ServerExtractor.extractServers(ep.url, siteName)
+                        val best = servers.maxByOrNull { it.speedRating }
+                        if (best != null) {
+                            PlaylistItem(
+                                title = ep.title,
+                                url = ep.url,
+                                embedUrl = if (best.serverUrl.contains("?server=")) best.serverUrl.substringBefore("?server=") else best.serverUrl,
+                                serverName = if (best.serverUrl.contains("?server=")) best.serverUrl.substringAfter("?server=") else "",
+                                episodeNumber = ServerHelper.extractEpisodeNumber(ep.title)
+                            )
+                        } else {
+                            PlaylistItem(
+                                title = ep.title,
+                                url = ep.url,
+                                embedUrl = ep.url,
+                                episodeNumber = ServerHelper.extractEpisodeNumber(ep.title)
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e("SeriesDetail", "buildQueue error: ${e.message}")
+                        null
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e("SeriesDetail", "buildQueue error: ${e.message}")
-                null
-            }
+            }.awaitAll().filterNotNull()
         }
     }
 
@@ -573,5 +580,10 @@ class SeriesDetailActivity : AppCompatActivity() {
             return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onDestroy() {
+        (rvEpisodes.adapter as? EpisodeAdapter)?.destroy()
+        super.onDestroy()
     }
 }

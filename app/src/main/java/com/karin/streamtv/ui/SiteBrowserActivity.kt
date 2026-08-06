@@ -297,7 +297,7 @@ filterBar = findViewById(R.id.filter_bar)
                     return@launch
                 }
 
-                rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
+                setEpisodesAdapter(episodes) { episode ->
                     openEpisode(episode)
                 }
                 // TV: solicitar foco en grid tras cargar datos
@@ -369,7 +369,7 @@ filterBar = findViewById(R.id.filter_bar)
                     return@launch
                 }
 
-rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
+setEpisodesAdapter(episodes) { episode ->
                     openEpisode(episode)
                 }
                 if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
@@ -410,7 +410,7 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
 
                 currentPageUrl = url
                 currentEpisodes = ArrayList(newEpisodes)
-                rvEpisodes.adapter = EpisodeAdapter(currentEpisodes, siteUrl) { episode ->
+                setEpisodesAdapter(currentEpisodes) { episode ->
                     openEpisode(episode)
                 }
                 if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
@@ -461,7 +461,7 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
 
                 currentPageUrl = url
                 currentEpisodes = ArrayList(newEpisodes)
-                rvEpisodes.adapter = EpisodeAdapter(currentEpisodes, siteUrl) { episode ->
+                setEpisodesAdapter(currentEpisodes) { episode ->
                     openEpisode(episode)
                 }
                 if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
@@ -676,7 +676,7 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
                 tvTitle.text = "$siteName - Filtros"
                 tvTitle.visibility = View.VISIBLE
 
-                rvEpisodes.adapter = EpisodeAdapter(seriesList, siteUrl) { episode ->
+                setEpisodesAdapter(seriesList) { episode ->
                     val intent = Intent(this@SiteBrowserActivity, SeriesDetailActivity::class.java).apply {
                         putExtra("series_url", episode.url)
                         putExtra("series_title", episode.title)
@@ -791,7 +791,7 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
                 tvTitle.text = "$siteName - Directorio"
                 tvTitle.visibility = android.view.View.VISIBLE
 
-                rvEpisodes.adapter = EpisodeAdapter(seriesList, siteUrl) { episode ->
+                setEpisodesAdapter(seriesList) { episode ->
                     val intent = Intent(this@SiteBrowserActivity, SeriesDetailActivity::class.java).apply {
                         putExtra("series_url", episode.url)
                         putExtra("series_title", episode.title)
@@ -1133,9 +1133,15 @@ rvEpisodes.adapter = EpisodeAdapter(episodes, siteUrl) { episode ->
         super.onResume()
     }
 
+    private fun setEpisodesAdapter(list: List<Episode>, onEpisodeClick: (Episode) -> Unit) {
+        (rvEpisodes.adapter as? EpisodeAdapter)?.destroy()
+        rvEpisodes.adapter = EpisodeAdapter(list, siteUrl, onEpisodeClick = onEpisodeClick)
+    }
+
     override fun onDestroy() {
         ScrapingEngine.onMetrics = null
         handler.removeCallbacksAndMessages(null)
+        (rvEpisodes.adapter as? EpisodeAdapter)?.destroy()
         super.onDestroy()
     }
 }

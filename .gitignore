@@ -22,6 +22,7 @@ captures/
 *.bmp
 karin_link.db
 *.xml
+!app/src/main/res/layout/activity_tutorial.xml
 logcat.txt
 temp_unpack.js
 test-servers.ps1

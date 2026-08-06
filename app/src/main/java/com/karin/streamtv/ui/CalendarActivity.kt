@@ -171,4 +171,9 @@ class CalendarActivity : AppCompatActivity() {
         }
         return super.onKeyDown(keyCode, event)
     }
+
+    override fun onDestroy() {
+        seriesAdapter?.destroy()
+        super.onDestroy()
+    }
 }

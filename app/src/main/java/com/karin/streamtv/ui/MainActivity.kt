@@ -585,6 +585,11 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        searchAdapter.destroy()
+        super.onDestroy()
+    }
+
     companion object {
         private const val REQUEST_PICK_VIDEO = 4101
     }
