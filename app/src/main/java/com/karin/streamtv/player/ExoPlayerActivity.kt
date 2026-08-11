@@ -7,7 +7,9 @@ import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.view.GestureDetector
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -25,7 +27,10 @@ import androidx.media3.common.util.UnstableApi
 import android.graphics.PixelFormat
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import androidx.media3.exoplayer.DefaultLoadControl
+
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.karin.streamtv.R
@@ -45,6 +50,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var processor: Media3SixtyFpsProcessor? = null
     private var trackSelector: DefaultTrackSelector? = null
     private lateinit var playerContainer: FrameLayout
+    private lateinit var loadingContainer: View
     private lateinit var loadingText: TextView
     private lateinit var topBar: View
     private lateinit var tvVideoTitle: TextView
@@ -63,7 +69,17 @@ class ExoPlayerActivity : AppCompatActivity() {
     private lateinit var btnNext: TextView
     private lateinit var tvPosition: TextView
     private lateinit var tvDuration: TextView
+    private lateinit var tvRemaining: TextView
+    private lateinit var gestureIndicator: View
+    private lateinit var tvGestureIcon: TextView
+    private lateinit var tvGestureValue: TextView
     private lateinit var btnQuality: TextView
+    private lateinit var btnSpeed: TextView
+    private lateinit var btnMore: TextView
+    private lateinit var btnServer: TextView
+    private lateinit var btnFullscreen: ImageButton
+    private lateinit var btnLock: ImageButton
+    private lateinit var btnUnlock: ImageButton
     private lateinit var btnVolume: ImageButton
     private lateinit var btnAudioPreset: TextView
     private lateinit var btnInterp: TextView
@@ -72,11 +88,21 @@ class ExoPlayerActivity : AppCompatActivity() {
     private lateinit var btnInfo: TextView
     private var seekDragging = false
     private var selectedHeight = -1
+    private var gestureStartY = 0f
+    private var startBrightness = 0.5f
+    private var startVolume = 1.0f
+    private var gestureSide = 0
+    private var gestureDetector: GestureDetector? = null
     private val controllerHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var audioRefreshCounter = 0
     private val progressRunnable = object : Runnable {
         override fun run() {
             updateProgress()
-            com.karin.streamtv.player.dsp.AudioEnhanceConfig.refreshPlaybackVolume()
+            audioRefreshCounter++
+            if (audioRefreshCounter >= 4) {
+                audioRefreshCounter = 0
+                com.karin.streamtv.player.dsp.AudioEnhanceConfig.refreshPlaybackVolume()
+            }
             controllerHandler.postDelayed(this, 500)
         }
     }
@@ -95,6 +121,8 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var autoPlayTriggered: Boolean = false
     private var useEnhancedMode = false
     private var referer: String = ""
+    private var contentKind: com.karin.streamtv.player.dsp.AudioEnhanceConfig.ContentType =
+        com.karin.streamtv.player.dsp.AudioEnhanceConfig.ContentType.NEUTRAL
     private var fallbackTriggered = false
     private var isPlainFallback = false
     private var playlist: List<com.karin.streamtv.model.PlaylistItem> = emptyList()
@@ -102,11 +130,22 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var currentVideoUrl: String = ""
     private var currentMegaResolved: com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo? = null
     private var pendingResumeMs = -1L
+    private var openResumeMs = -1L
+    private var openResumeHandled = false
+    private var allServerUrls: Array<String> = emptyArray()
+    private var allServerNames: Array<String> = emptyArray()
+    private var currentServerIndex: Int = 0
+    private var serverFailoverTriggered = false
     private val fallbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** Auto-reproducir al abrir: lo gobierna el toggle "PlayNow" de Ajustes. */
+    private fun autoPlayEnabled(): Boolean =
+        com.karin.streamtv.util.AppPreferences.isPlayNowEnabled()
 
     private var retryCount = 0
     private var isNetworkBack = true
     private var wasInterrupted = false
+    private var wasPlayingBeforePause = true
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -124,8 +163,7 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     private val irPicker = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri == null) return@registerForActivityResult
+    ) { uri ->        if (uri == null) return@registerForActivityResult
         try {
             val name = com.karin.streamtv.player.dsp.WavIr.displayName(contentResolver, uri)
             val bytes = contentResolver.openInputStream(uri)?.readBytes()
@@ -157,6 +195,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         setContentView(R.layout.activity_exo_player)
 
         playerContainer = findViewById(R.id.player_container)
+        loadingContainer = findViewById(R.id.loading_container)
         loadingText = findViewById(R.id.tv_loading)
         topBar = findViewById(R.id.top_bar)
         tvVideoTitle = findViewById(R.id.tv_video_title)
@@ -175,15 +214,44 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnNext = findViewById(R.id.btn_next)
         tvPosition = findViewById(R.id.tv_position)
         tvDuration = findViewById(R.id.tv_duration)
+        tvRemaining = findViewById(R.id.tv_remaining)
+        gestureIndicator = findViewById(R.id.gesture_indicator)
+        tvGestureIcon = findViewById(R.id.tv_gesture_icon)
+        tvGestureValue = findViewById(R.id.tv_gesture_value)
         btnQuality = findViewById(R.id.btn_quality)
         btnVolume = findViewById(R.id.btn_volume)
         btnAudioPreset = findViewById(R.id.btn_audio_preset)
+        btnSpeed = findViewById(R.id.btn_speed)
+        btnMore = findViewById(R.id.btn_more)
+        btnServer = findViewById(R.id.btn_server)
+        btnFullscreen = findViewById(R.id.btn_fullscreen)
+        btnLock = findViewById(R.id.btn_lock)
+        btnUnlock = findViewById(R.id.btn_unlock)
         btnInterp = findViewById(R.id.btn_interp)
         btnVideoProfile = findViewById(R.id.btn_video_profile)
         btnUpscaler = findViewById(R.id.btn_upscaler)
         btnInfo = findViewById(R.id.btn_info)
 
         trackSelector = TrackSelectorFactory.create(this)
+
+        // "Reproductor de video del sistema": si está OFF y abrimos un video externo
+        // (ACTION_VIEW video/*), delegamos al reproductor por defecto del dispositivo.
+        if (intent.action == Intent.ACTION_VIEW &&
+            !com.karin.streamtv.util.AppPreferences.isVideoPlayerModeEnabled()
+        ) {
+            val data = intent.data
+            if (data != null) {
+                val shareable = com.karin.streamtv.util.ShareFileUri.shareableUri(this, data)
+                val type = contentResolver.getType(shareable) ?: "video/*"
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW).setDataAndTypeAndNormalize(shareable, type))
+                } catch (_: Exception) {
+                    // Si no hay otra app que atienda, ignoramos y salimos silenciosamente.
+                }
+            }
+            finish()
+            return
+        }
 
         val externalUri: Uri? = if (intent.action == Intent.ACTION_VIEW) intent.data else null
         val videoUrl = intent.getStringExtra("video_url") ?: externalUri?.toString()
@@ -199,7 +267,15 @@ class ExoPlayerActivity : AppCompatActivity() {
         if (episodeUrl.isNotBlank()) {
             animeId = EpisodeProgress.generateAnimeId(episodeUrl)
             episodeNumber = epNum
+            // Auto-resume: recordar el minuto donde se dejó el video (dato ya guardado).
+            if (animeId.isNotBlank() && episodeNumber > 0) {
+                openResumeMs = EpisodeProgress.getLastPosition(animeId, episodeNumber)
+            }
         }
+
+        allServerUrls = intent.getStringArrayExtra("all_server_urls") ?: emptyArray()
+        allServerNames = intent.getStringArrayExtra("all_server_names") ?: emptyArray()
+        currentServerIndex = intent.getIntExtra("current_server_index", 0)
 
         videoTitle = intent.getStringExtra("video_title") ?: ""
         tvVideoTitle.text = videoTitle
@@ -208,19 +284,33 @@ class ExoPlayerActivity : AppCompatActivity() {
             tvEpisodeInfo.visibility = View.VISIBLE
         }
 
+        contentKind = intent.getStringExtra("content_type")?.let { name ->
+            com.karin.streamtv.player.dsp.AudioEnhanceConfig.ContentType.entries.firstOrNull { it.name == name }
+        } ?: com.karin.streamtv.player.dsp.AudioEnhanceConfig.detectContentType(
+            intent.getStringExtra("site_name") ?: "",
+            videoUrl ?: embedUrl
+        )
+        com.karin.streamtv.player.dsp.AudioEnhanceConfig.setContentType(contentKind)
+
         referer = intent.getStringExtra("referer")
             ?: embedUrl
             ?: ""
         if (referer.startsWith("http://")) referer = "https://" + referer.substringAfter("http://")
 
-        useEnhancedMode = VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled() || VideoEnhanceConfig.isGlQualityMode()
+        useEnhancedMode = com.karin.streamtv.util.DeviceProfile.get(this).let { profile ->
+            // En gama baja el pipeline GL de mejora/interpolación es muy pesado:
+            // la APTA se adapta apagándolo automáticamente (auto-adaptación),
+            // salvo que el usuario lo fuerza explícitamente.
+            if (!profile.supportsInterpolation && !profile.supportsGlEnhance) return@let false
+            VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled() || VideoEnhanceConfig.isGlQualityMode()
+        }
 
         val dbgExtra = intent.getIntExtra("debug_mode", -1)
         if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
 
         val megaKeyB64 = intent.getStringExtra("mega_key")
         if (videoUrl != null && videoUrl.isNotBlank() && megaKeyB64 != null) {
-            loadingText.visibility = View.GONE
+            hideLoading()
             val resolved = com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo(
                 url = videoUrl,
                 referer = referer,
@@ -231,11 +321,10 @@ class ExoPlayerActivity : AppCompatActivity() {
             )
             playVideoMega(resolved)
         } else if (videoUrl != null && videoUrl.isNotBlank()) {
-            loadingText.visibility = View.GONE
+            hideLoading()
             playVideo(videoUrl)
         } else if (embedUrl != null && embedUrl.isNotBlank()) {
-            loadingText.visibility = View.VISIBLE
-            loadingText.text = "Extrayendo video..."
+            showLoading("Extrayendo video...")
             extractAndPlay(embedUrl, serverName)
         } else {
             Toast.makeText(this, "URL de video no disponible", Toast.LENGTH_SHORT).show()
@@ -244,7 +333,7 @@ class ExoPlayerActivity : AppCompatActivity() {
 
         btnBack.setOnClickListener { finish() }
         btnBack.onActionKey { finish() }
-        playerContainer.setOnClickListener { showController() }
+        setupGestureControls()
         btnPlayPause.setOnClickListener { togglePlayPause() }
         btnRewind.setOnClickListener { seekRelative(-10000) }
         btnForward.setOnClickListener { seekRelative(10000) }
@@ -256,6 +345,17 @@ class ExoPlayerActivity : AppCompatActivity() {
             btnNext.setOnClickListener { skipToPlaylist(1) }
         }
         updateAudioPresetButton()
+        btnSpeed.text = speedLabel(com.karin.streamtv.util.AppPreferences.getPlayerSpeed())
+        btnSpeed.setOnClickListener { showSpeedDialog() }
+        btnMore.setOnClickListener { showMoreDialog() }
+        if (allServerUrls.size > 1) {
+            btnServer.visibility = View.VISIBLE
+            btnServer.text = "🖥 ${allServerNames.getOrElse(currentServerIndex) { "Servidor" }}"
+            btnServer.setOnClickListener { showServerPickerDialog() }
+        }
+        btnFullscreen.setOnClickListener { toggleFullscreen() }
+        btnLock.setOnClickListener { lockControls() }
+        btnUnlock.setOnClickListener { unlockControls() }
         btnQuality.setOnClickListener { showQualityDialog() }
         btnVolume.setOnClickListener { showVolumeDialog() }
         btnAudioPreset.setOnClickListener { showDspDialog() }
@@ -297,8 +397,7 @@ class ExoPlayerActivity : AppCompatActivity() {
                     wasInterrupted = true
                     Log.w(TAG, "Network lost - pausing playback")
                     player?.pause()
-                    loadingText.visibility = View.VISIBLE
-                    loadingText.text = "Sin conexión - esperando red..."
+                    showLoading("Sin conexión - esperando red...")
                     reconnectHandler.removeCallbacks(rebufferWatchdog)
                 }
             }
@@ -307,24 +406,109 @@ class ExoPlayerActivity : AppCompatActivity() {
         cm.registerDefaultNetworkCallback(callback)
     }
 
-    private fun forceReconnect(reason: String) {
-        Log.w(TAG, "Reconnect triggered by: $reason")
-        val p = player ?: return
-        if (p.playbackState == Player.STATE_ENDED || p.playbackState == Player.STATE_IDLE) return
-        val pos = p.currentPosition.coerceAtLeast(0)
-        loadingText.visibility = View.VISIBLE
-        loadingText.text = "Reconectando..."
-        reconnectHandler.removeCallbacksAndMessages(null)
-        reconnectHandler.postDelayed({
-            val live = player ?: return@postDelayed
-            try {
-                live.seekTo(pos)
-                live.prepare()
-                live.playWhenReady = true
-            } catch (e: Exception) {
-                Log.e(TAG, "Reconnect prepare failed: ${e.message}")
+    private fun setupGestureControls() {
+        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean {
+                if (isLocked) return false
+                gestureStartY = e.y
+                val wl = window.attributes
+                startBrightness = if (wl.screenBrightness >= 0) wl.screenBrightness else 0.5f
+                startVolume = player?.volume ?: com.karin.streamtv.util.AppPreferences.getPlayerVolume()
+                gestureSide = if (e.x < playerContainer.width / 2f) 0 else 1
+                return true
             }
-        }, 1200)
+
+            override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+                val h = playerContainer.height.coerceAtLeast(1)
+                val ratio = (gestureStartY - e2.y) / h
+                if (gestureSide == 0) {
+                    val v = (startBrightness + ratio).coerceIn(0.01f, 1f)
+                    setScreenBrightness(v)
+                    showGestureIndicator("\u2600\ufe0f Brillo", "${(v * 100).toInt()}%")
+                } else {
+                    val target = (startVolume + ratio).coerceIn(0.0f, 3.0f)
+                    player?.volume = target
+                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.setAppVolume(target)
+                    com.karin.streamtv.util.AppPreferences.setPlayerVolume(target)
+                    showGestureIndicator("\ud83d\udd0a Volumen", "${(target * 100).toInt()}%")
+                }
+                return true
+            }
+
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                val x = e.x
+                val w = playerContainer.width.coerceAtLeast(1)
+                if (x < w / 3f) {
+                    seekRelative(-10000)
+                } else if (x > w * 2f / 3f) {
+                    seekRelative(10000)
+                } else {
+                    togglePlayPause()
+                }
+                return true
+            }
+
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                showController()
+                return true
+            }
+        })
+        playerContainer.setOnTouchListener { _, event -> gestureDetector?.onTouchEvent(event) ?: false }
+    }
+
+    private val hideGestureIndicator = Runnable { gestureIndicator.visibility = View.GONE }
+
+    private fun showGestureIndicator(icon: String, value: String) {
+        tvGestureIcon.text = icon
+        tvGestureValue.text = value
+        gestureIndicator.visibility = View.VISIBLE
+        gestureIndicator.removeCallbacks(hideGestureIndicator)
+        gestureIndicator.postDelayed(hideGestureIndicator, 900)
+    }
+
+    private fun setScreenBrightness(v: Float) {
+        try {
+            val wl = window.attributes
+            wl.screenBrightness = v
+            window.attributes = wl
+        } catch (_: Exception) {}
+    }
+
+    private var isFullscreen = false
+
+    private var isLocked = false
+
+    private fun lockControls() {
+        isLocked = true
+        topBar.visibility = View.GONE
+        controllerPanel.visibility = View.GONE
+        centerControls.visibility = View.GONE
+        btnUnlock.visibility = View.VISIBLE
+        controllerHandler.removeCallbacks(hideController)
+    }
+
+    private fun unlockControls() {
+        isLocked = false
+        btnUnlock.visibility = View.GONE
+        showController()
+    }
+
+    private fun toggleFullscreen() {
+        isFullscreen = !isFullscreen
+        applyFullscreenState()
+        showController()
+    }
+
+    private fun applyFullscreenState() {
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (isFullscreen) {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            btnFullscreen.setImageResource(R.drawable.ic_fullscreen_exit)
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+            btnFullscreen.setImageResource(R.drawable.ic_fullscreen_enter)
+        }
     }
 
     private fun showController() {
@@ -339,7 +523,8 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun togglePlayPause() {
         val p = player ?: return
         p.playWhenReady = !p.playWhenReady
-        playStateOverlay.text = if (p.playWhenReady) "Reproduciendo" else "Pausa"
+        playStateOverlay.text = if (p.playWhenReady) "\u25b6" else "\u275a\u275a"
+        playStateOverlay.textSize = 30f
         playStateOverlay.visibility = View.VISIBLE
         playStateOverlay.removeCallbacks(hidePlayState)
         playStateOverlay.postDelayed(hidePlayState, 800)
@@ -349,13 +534,16 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     private fun updateProgress() {
         val p = player ?: return
+        if (controllerPanel.visibility != View.VISIBLE) return
         val dur = p.duration.coerceAtLeast(0)
         val pos = p.currentPosition.coerceAtLeast(0)
         if (dur > 0) {
             seekBar.max = dur.toInt().coerceAtLeast(1)
             if (!seekDragging) seekBar.progress = pos.toInt()
+            seekBar.secondaryProgress = p.bufferedPosition.toInt().coerceIn(0, seekBar.max)
             tvPosition.text = formatTime(pos)
             tvDuration.text = formatTime(dur)
+            tvRemaining.text = "-" + formatTime((dur - pos).coerceAtLeast(0))
         }
         btnPlayPause.setImageResource(
             if (p.playWhenReady && p.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
@@ -363,8 +551,12 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun formatTime(ms: Long): String {
-        val s = ms / 1000
-        return String.format("%d:%02d", s / 60, s % 60)
+        val total = (ms / 1000).coerceAtLeast(0)
+        val h = total / 3600
+        val m = (total % 3600) / 60
+        val s = total % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, s)
+        else String.format("%d:%02d", m, s)
     }
 
     private fun seekRelative(ms: Long) {
@@ -491,9 +683,109 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnAudioPreset.text = when {
             !enabled || preset == com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.OFF ->
                 "Perfil: OFF"
-            auto -> "Perfil: Auto"
+            auto -> {
+                val contentLabel = com.karin.streamtv.player.dsp.AudioEnhanceConfig.getContentType()
+                "Perfil: Auto${if (contentLabel != com.karin.streamtv.player.dsp.AudioEnhanceConfig.ContentType.NEUTRAL) " · ${contentLabel.label}" else ""}"
+            }
             else -> "Perfil: ${preset.label}"
         }
+    }
+
+    private fun showMoreDialog() {
+        val options = listOf(
+            "🎛 Perfil de audio (DSP)",
+            "✨ Enhancement"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Opciones avanzadas")
+            .setItems(options.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> showDspDialog()
+                    1 -> showVideoProfileDialog()
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun showServerPickerDialog() {
+        if (allServerUrls.size <= 1) return
+        val names = allServerNames.takeIf { it.isEmpty().not() } ?: allServerUrls
+        val labels = allServerUrls.mapIndexed { i, _ ->
+            when {
+                i < names.size && names[i].isNotBlank() -> names[i]
+                else -> "Servidor ${i + 1}"
+            }
+        }.toTypedArray()
+        val currentIdx = currentServerIndex.coerceIn(0, allServerUrls.size - 1)
+        AlertDialog.Builder(this)
+            .setTitle("Seleccionar servidor")
+            .setSingleChoiceItems(labels, currentIdx) { _, which ->
+                if (which != currentServerIndex) {
+                    switchToServer(which)
+                }
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Cambiar manualmente a otro servidor relanzando la cadena de extracción. */
+    private fun switchToServer(index: Int) {
+        val name = allServerNames.getOrElse(index) { "Servidor ${index + 1}" }
+        Log.w(TAG, "Manual server switch -> $name: ${allServerUrls[index].takeLast(60)}")
+        Toast.makeText(this, "Cambiando a: $name", Toast.LENGTH_SHORT).show()
+        serverFailoverTriggered = true
+        val intent = Intent(this, com.karin.streamtv.ui.EmbedWebViewActivity::class.java).apply {
+            putExtra("embed_url", allServerUrls[index])
+            putExtra("server_name", name)
+            putExtra("video_title", videoTitle)
+            putExtra("episode_url", currentEpisodeUrl)
+            putExtra("episode_number", episodeNumber)
+            putExtra("site_name", intent.getStringExtra("site_name") ?: "")
+            putExtra("all_server_urls", allServerUrls)
+            putExtra("all_server_names", allServerNames)
+            putExtra("current_server_index", index)
+            if (playlist.isNotEmpty()) {
+                putExtra("playlist_json", com.karin.streamtv.util.PlaylistQueue.toJson(playlist))
+                putExtra("playlist_index", playlistIndex)
+            }
+        }
+        startActivity(intent)
+        finish()
+    }
+
+    private fun showSpeedDialog() {
+        val p = player ?: return
+        val speeds = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+        val labels = speeds.map { speedLabel(it) }
+        val current = com.karin.streamtv.util.AppPreferences.getPlayerSpeed()
+        val selectedIdx = speeds.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }.coerceAtLeast(3)
+        AlertDialog.Builder(this)
+            .setTitle("Velocidad de reproducción")
+            .setSingleChoiceItems(labels.toTypedArray(), selectedIdx) { _, which ->
+                val s = speeds[which]
+                p.setPlaybackParameters(androidx.media3.common.PlaybackParameters(s, s))
+                com.karin.streamtv.util.AppPreferences.setPlayerSpeed(s)
+                btnSpeed.text = speedLabel(s)
+                showController()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun speedLabel(s: Float): String {
+        return when {
+            s == 1.0f -> "1×"
+            s % 1.0f == 0f -> "${s.toInt()}×"
+            else -> "$s×"
+        }
+    }
+
+    private fun applySavedSpeed() {
+        val p = player ?: return
+        val s = com.karin.streamtv.util.AppPreferences.getPlayerSpeed()
+        p.setPlaybackParameters(androidx.media3.common.PlaybackParameters(s, s))
+        btnSpeed.text = speedLabel(s)
     }
 
     private fun showVideoProfileDialog() {
@@ -578,6 +870,23 @@ if (which == 0) {
             exoPlayer.seekTo(pendingResumeMs)
             pendingResumeMs = -1
         }
+    }
+
+    /** Auto-resume: ofrece continuar desde el minuto guardado (una sola vez por apertura). */
+    private fun maybeOfferResume(exoPlayer: androidx.media3.exoplayer.ExoPlayer) {
+        if (openResumeHandled || openResumeMs <= 0) return
+        openResumeHandled = true
+        val duration = exoPlayer.duration
+        val resumePos = openResumeMs
+        openResumeMs = -1
+        // Sin duración conocida o ya visto casi completo: no interrumpir.
+        if (duration <= 0 || resumePos <= 0 || resumePos >= duration * 0.9) return
+        AlertDialog.Builder(this, R.style.DialogTheme)
+            .setTitle("Reanudar reproducción")
+            .setMessage("Continuar desde ${formatTime(resumePos)}?")
+            .setPositiveButton("Reanudar") { _, _ -> exoPlayer.seekTo(resumePos) }
+            .setNegativeButton("Desde el inicio") { _, _ -> exoPlayer.seekTo(0) }
+            .show()
     }
 
     private fun showUpscalerDialog() {
@@ -774,11 +1083,20 @@ if (which == 0) {
         com.karin.streamtv.player.dsp.AudioEnhanceConfig.setAppVolume(v)
     }
 
+    private fun showLoading(text: String) {
+        loadingText.text = text
+        loadingContainer.visibility = View.VISIBLE
+    }
+
+    private fun hideLoading() {
+        loadingContainer.visibility = View.GONE
+    }
+
     private fun extractAndPlay(embedUrl: String, serverName: String) {
         lifecycleScope.launch {
             try {
                 val resolved = com.karin.streamtv.scraper.ServerDirectResolver.resolve(embedUrl, referer)
-                loadingText.visibility = View.GONE
+                hideLoading()
                 if (resolved != null) {
                     Log.i(TAG, "HTTP-resolved video, launching playback")
                     if (resolved.needsMegaDecrypt) {
@@ -793,21 +1111,25 @@ if (which == 0) {
                     val url = withContext(Dispatchers.Main) {
                         extractor.extractSuspend(embedUrl, serverName, referer)
                     }
-                    loadingText.visibility = View.GONE
+                    hideLoading()
                     if (!url.isNullOrBlank()) {
                         playVideo(url)
                     } else {
-                        Toast.makeText(this@ExoPlayerActivity, "No se pudo extraer el video", Toast.LENGTH_LONG).show()
-                        finish()
+                        if (!tryServerFailover("extracción fallida")) {
+                            Toast.makeText(this@ExoPlayerActivity, "No se pudo extraer el video", Toast.LENGTH_LONG).show()
+                            finish()
+                        }
                     }
                 } finally {
                     extractor.destroy()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Extraction error: ${e.message}", e)
-                loadingText.visibility = View.GONE
-                Toast.makeText(this@ExoPlayerActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-                finish()
+                hideLoading()
+                if (!tryServerFailover("extracción fallida: ${e.message}")) {
+                    Toast.makeText(this@ExoPlayerActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    finish()
+                }
             }
         }
     }
@@ -827,18 +1149,13 @@ if (which == 0) {
                 VideoDataSource.create(this, referer)
             )
         }
-        if (useEnhancedMode && !isPlainFallback) {
+        if (useEnhancedMode && !isPlainFallback &&
+            contentKind != com.karin.streamtv.player.dsp.AudioEnhanceConfig.ContentType.MUSIC
+        ) {
             playWithEnhancedPipeline(resolved.url, megaFactory)
             return
         }
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                20000,
-                80000,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
-            )
-            .build()
+        val loadControl = RamAwareLoadControl.create(this)
 
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, CodecSelectorFactory.renderersFactory(this))
             .setLoadControl(loadControl)
@@ -859,6 +1176,7 @@ if (which == 0) {
             .build()
         player = exoPlayer
         applySavedVolume()
+        applySavedSpeed()
 
         val playerView = androidx.media3.ui.PlayerView(this).apply {
             useController = false
@@ -875,20 +1193,20 @@ if (which == 0) {
 
         exoPlayer.setMediaItem(MediaItem.fromUri(resolved.url))
         exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
+        exoPlayer.playWhenReady = autoPlayEnabled()
         applyPendingResume(exoPlayer)
 
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
                     Player.STATE_READY -> {
-                        loadingText.visibility = View.GONE
+                        hideLoading()
                         retryCount = 0
                         reconnectHandler.removeCallbacks(rebufferWatchdog)
+                        maybeOfferResume(exoPlayer)
                     }
                     Player.STATE_BUFFERING -> {
-                        loadingText.visibility = View.VISIBLE
-                        loadingText.text = if (isNetworkBack) "Cargando..." else "Sin conexión..."
+                        showLoading(if (isNetworkBack) "Cargando..." else "Sin conexión...")
                         reconnectHandler.removeCallbacks(rebufferWatchdog)
                         reconnectHandler.postDelayed(rebufferWatchdog, 15000)
                     }
@@ -907,7 +1225,9 @@ if (which == 0) {
 
     private fun playVideo(url: String) {
         currentVideoUrl = url
-        if (useEnhancedMode && !isPlainFallback) {
+        if (useEnhancedMode && !isPlainFallback &&
+            contentKind != com.karin.streamtv.player.dsp.AudioEnhanceConfig.ContentType.MUSIC
+        ) {
             playWithEnhancedPipeline(
                 url,
                 if (isLocalUrl(url)) androidx.media3.datasource.DefaultDataSource.Factory(this) else null
@@ -938,6 +1258,7 @@ if (which == 0) {
         val exoPlayer = processor!!.createPlayer(trackSelector, dataSourceFactory)
         player = exoPlayer
         applySavedVolume()
+        applySavedSpeed()
 
         processor!!.connectPlayer(exoPlayer)
         processor!!.play(url)
@@ -955,14 +1276,14 @@ if (which == 0) {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
                     Player.STATE_READY -> {
-                        loadingText.visibility = View.GONE
+                        hideLoading()
                         retryCount = 0
                         reconnectHandler.removeCallbacks(rebufferWatchdog)
+                        maybeOfferResume(exoPlayer)
                         Log.i(TAG, "Player STATE_READY - 60fps pipeline active")
                     }
                     Player.STATE_BUFFERING -> {
-                        loadingText.visibility = View.VISIBLE
-                        loadingText.text = if (isNetworkBack) "Cargando..." else "Sin conexión..."
+                        showLoading(if (isNetworkBack) "Cargando..." else "Sin conexión...")
                         reconnectHandler.removeCallbacks(rebufferWatchdog)
                         reconnectHandler.postDelayed(rebufferWatchdog, 15000)
                     }
@@ -1005,7 +1326,7 @@ if (which == 0) {
                 if (r != null) {
                      if (r.pipelineReady && r.interpolationActive) {
                         fpsBadge.visibility = View.VISIBLE
-                        fpsBadge.text = "Salida ${r.outputFps.toInt()} fps · Fuente ${r.sourceFps.toInt()} · ${r.frameMs}ms · Mov ${(r.motionLevel * 100).toInt()} · Drop ${r.droppedFrames} · ${r.qualityLabel}"
+                        fpsBadge.text = "Salida ${r.outputFps.toInt()} fps · ${r.frameMs}ms · Drop ${r.droppedFrames}"
                     } else if (r.pipelineReady && com.karin.streamtv.player.VideoEnhanceConfig.isGlQualityMode() && !com.karin.streamtv.player.VideoEnhanceConfig.isEnabled() && !com.karin.streamtv.player.VideoEnhanceConfig.isInterpolationEnabled()) {
                         fpsBadge.visibility = View.VISIBLE
                         fpsBadge.text = "Calidad GL: activa"
@@ -1018,19 +1339,18 @@ if (which == 0) {
                         if (lastNs > 0) {
                             val stallMs = (System.nanoTime() - lastNs) / 1_000_000
                             if (stallMs > 2500) {
-                                Log.w(TAG, "Video congelado ${stallMs}ms mientras el audio avanza - resincronizando")
                                 processor?.resyncSurface()
                                 r.markResync()
                             }
                         }
                     }
-                    fallbackHandler.postDelayed(this, 1000)
+                    fallbackHandler.postDelayed(this, 1500)
                 } else {
                     fpsBadge.visibility = View.GONE
                 }
             }
         }
-        fallbackHandler.postDelayed(poll, 1000)
+        fallbackHandler.postDelayed(poll, 1500)
     }
 
     private fun playStandard(url: String) {
@@ -1050,14 +1370,7 @@ if (which == 0) {
                 )
             } catch (_: Exception) {}
         }
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                20000,
-                80000,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
-            )
-            .build()
+        val loadControl = RamAwareLoadControl.create(this)
 
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, CodecSelectorFactory.renderersFactory(this))
             .setLoadControl(loadControl)
@@ -1084,6 +1397,7 @@ if (which == 0) {
             .build()
         player = exoPlayer
         applySavedVolume()
+        applySavedSpeed()
 
         val playerView = androidx.media3.ui.PlayerView(this).apply {
             useController = false
@@ -1100,20 +1414,20 @@ if (which == 0) {
 
         exoPlayer.setMediaItem(MediaItem.fromUri(url))
         exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
+        exoPlayer.playWhenReady = autoPlayEnabled()
         applyPendingResume(exoPlayer)
 
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
                     Player.STATE_READY -> {
-                        loadingText.visibility = View.GONE
+                        hideLoading()
                         retryCount = 0
                         reconnectHandler.removeCallbacks(rebufferWatchdog)
+                        maybeOfferResume(exoPlayer)
                     }
                     Player.STATE_BUFFERING -> {
-                        loadingText.visibility = View.VISIBLE
-                        loadingText.text = if (isNetworkBack) "Cargando..." else "Sin conexión..."
+                        showLoading(if (isNetworkBack) "Cargando..." else "Sin conexión...")
                         reconnectHandler.removeCallbacks(rebufferWatchdog)
                         reconnectHandler.postDelayed(rebufferWatchdog, 15000)
                     }
@@ -1132,6 +1446,41 @@ if (which == 0) {
         })
     }
 
+    /**
+     * Failover de servidores: si el enlace actual falla, abrir el siguiente servidor
+     * en la lista (EmbedWebViewActivity se encarga de extraer y seguir la cadena).
+     * Respeta el toggle "Fallback de servidores" de Ajustes.
+     */
+    private fun tryServerFailover(reason: String): Boolean {
+        if (serverFailoverTriggered) return false
+        if (!com.karin.streamtv.util.AppPreferences.isServerFallbackEnabled()) return false
+        if (allServerUrls.isEmpty() || currentServerIndex + 1 >= allServerUrls.size) return false
+        val nextIndex = currentServerIndex + 1
+        val nextUrl = allServerUrls[nextIndex]
+        val nextName = allServerNames.getOrElse(nextIndex) { "" }
+        serverFailoverTriggered = true
+        Log.w(TAG, "Server failover ($reason) -> $nextName: ${nextUrl.takeLast(60)}")
+        Toast.makeText(this, "Servidor no disponible ($reason). Probando: $nextName", Toast.LENGTH_SHORT).show()
+        val intent = Intent(this, com.karin.streamtv.ui.EmbedWebViewActivity::class.java).apply {
+            putExtra("embed_url", nextUrl)
+            putExtra("server_name", nextName)
+            putExtra("video_title", videoTitle)
+            putExtra("episode_url", currentEpisodeUrl)
+            putExtra("episode_number", episodeNumber)
+            putExtra("site_name", intent.getStringExtra("site_name") ?: "")
+            putExtra("all_server_urls", allServerUrls)
+            putExtra("all_server_names", allServerNames)
+            putExtra("current_server_index", nextIndex)
+            if (playlist.isNotEmpty()) {
+                putExtra("playlist_json", com.karin.streamtv.util.PlaylistQueue.toJson(playlist))
+                putExtra("playlist_index", playlistIndex)
+            }
+        }
+        startActivity(intent)
+        finish()
+        return true
+    }
+
     private fun handlePlaybackError(error: PlaybackException) {
         Log.e(TAG, "handlePlaybackError: ${error.errorCodeName} - ${error.message}")
         val transient =
@@ -1139,29 +1488,84 @@ if (which == 0) {
             error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
             error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
-        if (!transient || retryCount >= 3) {
-            Toast.makeText(this@ExoPlayerActivity, "Error: ${error.message}", Toast.LENGTH_LONG).show()
-            finish()
+        // En gama baja los fallos de decoder suelen deberse a falta de RAM/heap
+        // nativo; bajar la resolución máxima antes de rendirse evita cerrar la app.
+        val decoderIssue =
+            error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED
+        // HTTP duro (404/403/410/451): el enlace del servidor está roto, no vale la
+        // pena reintentarlo → saltar al siguiente servidor si hay.
+        val hardHttp =
+            error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+            error.message?.lowercase()?.let { m ->
+                listOf("404", "403", "410", "451", "not found", "forbidden", "gone").any { m.contains(it) }
+            } ?: false
+        if (hardHttp && tryServerFailover("HTTP ${error.message?.substringBefore('\n')?.take(50)}")) return
+        if (!transient && !decoderIssue) {
+            if (!tryServerFailover("enlace no soportado")) {
+                Toast.makeText(this@ExoPlayerActivity, "Error: ${error.message}", Toast.LENGTH_LONG).show()
+                finish()
+            }
+            return
+        }
+        if (decoderIssue && selectedHeight > 0) {
+            Log.w(TAG, "Decoder error - lowering max video height from ${selectedHeight}p")
+            selectedHeight /= 2
+            trackSelector?.setParameters(
+                trackSelector!!.buildUponParameters()
+                    .setMaxVideoSize(C.LENGTH_UNSET, selectedHeight)
+            )
+            retryCount = 0
+            reconnectVideo("decoder-lower-resolution", 1000L)
+            return
+        }
+        if (retryCount >= 3) {
+            if (!tryServerFailover("reintentos agotados")) {
+                Toast.makeText(this@ExoPlayerActivity, "Error: ${error.message}", Toast.LENGTH_LONG).show()
+                finish()
+            }
             return
         }
         retryCount++
-        val pos = player?.currentPosition?.coerceAtLeast(0) ?: 0L
-        loadingText.visibility = View.VISIBLE
-        loadingText.text = "Reconectando... (intento $retryCount/3)"
         val delay = 1500L * retryCount
+        showLoading("Reconectando... (intento $retryCount/3)")
+        reconnectVideo("retry", delay)
+    }
+
+    /**
+     * Reconexión robusta: tras un error el player está en ERROR/IDLE y un simple
+     * seekTo+prepare es no-op. Se re-crea el MediaItem (fuerza re-apertura del
+     * stream), se busca la posición y se respeta el estado de reproducción previo.
+     */
+    private fun reconnectVideo(reason: String, delayMs: Long) {
+        val url = currentVideoUrl
+        if (url.isBlank()) {
+            finish()
+            return
+        }
         reconnectHandler.removeCallbacksAndMessages(null)
         reconnectHandler.postDelayed({
             val live = player ?: return@postDelayed
+            val wasPlaying = live.playWhenReady
+            val pos = live.currentPosition.coerceAtLeast(0)
             try {
-                Log.i(TAG, "Retry #$retryCount seeking to $pos")
+                Log.d(TAG, "Reconnect($reason) at $pos")
+                live.setMediaItem(MediaItem.fromUri(url))
                 live.seekTo(pos)
                 live.prepare()
-                live.playWhenReady = true
+                live.playWhenReady = wasPlaying
             } catch (e: Exception) {
-                Log.e(TAG, "Retry prepare failed: ${e.message}")
+                Log.e(TAG, "Reconnect prepare failed: ${e.message}")
                 finish()
             }
-        }, delay)
+        }, delayMs)
+    }
+
+    private fun forceReconnect(reason: String) {
+        Log.w(TAG, "Reconnect triggered by: $reason")
+        val p = player ?: return
+        if (p.playbackState == Player.STATE_ENDED || p.playbackState == Player.STATE_IDLE) return
+        reconnectVideo(reason, 1200L)
     }
 
     private fun onVideoEnded() {
@@ -1177,8 +1581,7 @@ if (which == 0) {
             val siteName = intent.getStringExtra("site_name") ?: ""
             AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
                 override fun onCountdownTick(sec: Int) {
-                    loadingText.visibility = View.VISIBLE
-                    loadingText.text = "Siguiente: ${nextFromQueue.title} en ${sec}s"
+                    showLoading("Siguiente: ${nextFromQueue.title} en ${sec}s")
                 }
                 override fun onCountdownFinish() {
                     val intent = Intent(this@ExoPlayerActivity, com.karin.streamtv.ui.SiteBrowserActivity::class.java).apply {
@@ -1201,8 +1604,7 @@ if (which == 0) {
             val siteName = intent.getStringExtra("site_name") ?: ""
             AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
                 override fun onCountdownTick(sec: Int) {
-                    loadingText.visibility = View.VISIBLE
-                    loadingText.text = "Siguiente: ${next.title} en ${sec}s"
+                    showLoading("Siguiente: ${next.title} en ${sec}s")
                 }
                 override fun onCountdownFinish() {
                     startActivity(com.karin.streamtv.util.PlaylistQueue.buildIntent(this@ExoPlayerActivity, playlist, nextIndex, siteName))
@@ -1218,8 +1620,7 @@ if (which == 0) {
             if (nextUrl != null) {
                 AutoPlayManager.startCountdown(object : AutoPlayManager.AutoPlayCallback {
                     override fun onCountdownTick(sec: Int) {
-                        loadingText.visibility = View.VISIBLE
-                        loadingText.text = "Siguiente episodio en ${sec}s"
+                        showLoading("Siguiente episodio en ${sec}s")
                     }
                     override fun onCountdownFinish() {
                         val intent = android.content.Intent(
@@ -1261,7 +1662,8 @@ if (which == 0) {
         super.onResume()
         if (useEnhancedMode && ::glSurface.isInitialized) glSurface.onResume()
         updateQueueBadge()
-        player?.play()
+        // Restaurar el estado de reproducción previo (respetando pausa manual y PlayNow).
+        player?.playWhenReady = wasPlayingBeforePause
     }
 
     private fun updateQueueBadge() {
@@ -1277,6 +1679,7 @@ if (which == 0) {
     override fun onPause() {
         super.onPause()
         saveProgress()
+        wasPlayingBeforePause = player?.playWhenReady == true
         player?.pause()
         if (useEnhancedMode && ::glSurface.isInitialized) glSurface.onPause()
     }

@@ -12,7 +12,7 @@ import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultLoadControl
+
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -41,14 +41,7 @@ class Media3SixtyFpsProcessor(
     fun createPlayer(trackSelector: DefaultTrackSelector? = null, dataSourceFactory: androidx.media3.datasource.DataSource.Factory? = null): ExoPlayer {
         val renderersFactory = CodecSelectorFactory.renderersFactory(context)
 
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                20000,
-                80000,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
-            )
-            .build()
+        val loadControl = RamAwareLoadControl.create(context)
 
         val exoPlayer = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
@@ -102,7 +95,7 @@ class Media3SixtyFpsProcessor(
         player?.let {
             it.setMediaItem(MediaItem.fromUri(url))
             it.prepare()
-            it.playWhenReady = true
+            it.playWhenReady = com.karin.streamtv.util.AppPreferences.isPlayNowEnabled()
             Log.i(TAG, "Playing: ${url.takeLast(60)}")
         }
     }
@@ -207,7 +200,9 @@ class Media3SixtyFpsProcessor(
         private var downTexId = 0
         private var downFbo = 0
 
-        private var renderScale = 1f
+        // Escala de dibujo inicial del lazo DRS: la gama del equipo la fija para
+        // que los chips humildes arranquen más abajo y no den tirones al inicio.
+        private var renderScale = com.karin.streamtv.util.DeviceProfile.get(context).recommendedRenderScale
         private var drsFbo = 0
         private var drsTexId = 0
         private var drsW = 0
@@ -617,19 +612,17 @@ class Media3SixtyFpsProcessor(
                 outputFps = fpsFrames * 1_000_000_000f / elapsed
                 if (fpsFrames > 0) frameMs = (fpsRenderNs / 1_000_000f) / fpsFrames
                 if (!staticScene && VideoEnhanceConfig.getUpscalerMode() == VideoEnhanceConfig.UpscalerMode.OFF) {
-                    if (!interpolationActive) {
-                        if (renderScale < 1f) {
-                            renderScale = 1f
-                            Log.i(TAG, "DRS full-res scale=${renderScale}")
-                        }
-                        lowFpsStreak = 0
-                        highFpsStreak = 0
-                    } else if (outputFps < 28f && renderScale > 0.7f) {
+                    // DRS adaptativo para gama media/baja: si no llegamos a refresco fluido,
+                    // bajamos la resolución interna de render (y el panel la reescala). Cuando
+                    // vuelve a haber margen, restauramos 1.0. Así los chips débiles se mantienen
+                    // fluidos sin perder calidad en dispositivos capaces (solo cuando cae fps).
+                    val targetFloor = if (interpolationActive) 0.7f else 0.8f
+                    if (outputFps < 24f && renderScale > targetFloor) {
                         lowFpsStreak++
                         if (lowFpsStreak >= 2) {
                             lowFpsStreak = 0
                             highFpsStreak = 0
-                            renderScale = (renderScale - 0.1f).coerceAtLeast(0.7f)
+                            renderScale = (renderScale - 0.1f).coerceAtLeast(targetFloor)
                             Log.i(TAG, "DRS down scale=${renderScale}")
                         }
                     } else if (outputFps > 52f && renderScale < 1f) {
@@ -645,7 +638,7 @@ class Media3SixtyFpsProcessor(
                         highFpsStreak = 0
                     }
                 }
-                Log.i(TAG, "metrics out=${outputFps.toInt()}fps ms=${"%.1f".format(frameMs)} src=${sourceFps.toInt()}fps interp=$interpolationActive static=$staticScene mov=${(motionLevel * 100).toInt()} drop=$droppedFrames ${qualityLabel} gx=${"%.2f".format(globalVec[0])} gy=${"%.2f".format(globalVec[1])} prev=$prevReady srcF=$sourceFps dscale=${renderScale}")
+                Log.d(TAG, "metrics out=${outputFps.toInt()}fps ms=${"%.1f".format(frameMs)} src=${sourceFps.toInt()}fps interp=$interpolationActive mov=${(motionLevel * 100).toInt()} drop=$droppedFrames ${qualityLabel}")
                 fpsFrames = 0
                 fpsRenderNs = 0
                 lastFpsTimeNs = now
@@ -696,7 +689,7 @@ class Media3SixtyFpsProcessor(
             glSurface.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
             firstLatch = true
             matrixLogged = false
-            renderScale = 1f
+            renderScale = com.karin.streamtv.util.DeviceProfile.get(context).recommendedRenderScale
             lowFpsStreak = 0
             highFpsStreak = 0
         }
@@ -1803,6 +1796,11 @@ class Media3SixtyFpsProcessor(
             gPosLoc = GLES20.glGetAttribLocation(globalProgram, "aPosition")
             gTexLoc = GLES20.glGetAttribLocation(globalProgram, "aTexCoord")
 
+            ensureBlitProgram()
+            ensureBicubicProgram()
+            ensureDogPrograms()
+            ensureFsrPrograms()
+
             Log.i(TAG, "GL surface created, interpolator ready")
         }
 
@@ -1819,13 +1817,14 @@ class Media3SixtyFpsProcessor(
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, downTexId)
                 GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, (pw / 2).coerceAtLeast(2), (ph / 2).coerceAtLeast(2), 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
 
-                // Las texturas de motion/coarse se asignan de forma perezosa (solo
-                // cuando hay interpolación), para ahorrar VRAM y setup si no se usan.
+                // Las texturas de motion/coarse se pre-asignan en SurfaceChanged para
+                // evitar hitch al primer frame de interpolación.
                 motionW = (w / 4).coerceIn(32, 480)
                 motionH = (h / 4).coerceIn(32, 270)
                 coarseW = (motionW / 2).coerceAtLeast(8)
                 coarseH = (motionH / 2).coerceAtLeast(8)
                 motionTexStorageAllocated = false
+                ensureMotionStorage()
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
                 GLES20.glViewport(0, 0, viewWidth, viewHeight)
             } catch (t: Throwable) {
@@ -1898,7 +1897,7 @@ class Media3SixtyFpsProcessor(
                                 }
                             } else {
                                 staticCheckCounter++
-                                if (staticCheckCounter >= 20) {
+                                if (staticCheckCounter >= 40) {
                                     staticCheckCounter = 0
                                     buildMotionMap()
                                     val lvl = readStaticLevel()
@@ -1947,8 +1946,6 @@ class Media3SixtyFpsProcessor(
             }
 
             val texMatrix = this.texMatrix
-            st?.getTransformMatrix(texMatrix)
-            normalizeMatrix(texMatrix)
             if (!matrixLogged) {
                 matrixLogged = true
                 Log.i(TAG, "texMatrix=" + texMatrix.joinToString(",") { String.format("%.3f", it) })
@@ -1968,7 +1965,8 @@ class Media3SixtyFpsProcessor(
             val renderStartNs = System.nanoTime()
             renderFrame(texMatrix, factor, cfg, interpolating, mode)
             fpsRenderNs += System.nanoTime() - renderStartNs
-            val wantDirty = staticScene && !debugNeedsPrev
+            val wantDirty = (staticScene && !debugNeedsPrev) ||
+                (!interpWanted && !cfg.isEnabled() && !cfg.isGlQualityMode() && !debugNeedsPrev)
             if (wantDirty != staticRenderMode) {
                 staticRenderMode = wantDirty
                 glSurface.renderMode = if (wantDirty) GLSurfaceView.RENDERMODE_WHEN_DIRTY else GLSurfaceView.RENDERMODE_CONTINUOUSLY
@@ -1989,20 +1987,16 @@ class Media3SixtyFpsProcessor(
 
         private fun drainMetadata(currTimestampNs: Long) {
             synchronized(metaLock) {
-                metaScratch.clear()
-                val consumed = metaScratch
+                var prev: FrameMeta? = null
+                var curr: FrameMeta? = null
                 while (metaQueue.isNotEmpty() && metaQueue.first().ptsUs * 1000L <= currTimestampNs) {
-                    consumed.add(metaQueue.removeFirst())
+                    val item = metaQueue.removeFirst()
+                    if (curr != null) prev = curr
+                    curr = item
                 }
-                if (consumed.isNotEmpty()) {
-                    var curr = consumed.last()
-                    for (i in consumed.indices.reversed()) {
-                        if (consumed[i].ptsUs * 1000L == currTimestampNs) { curr = consumed[i]; break }
-                    }
-                    val idx = consumed.indexOf(curr)
-                    val p = if (idx > 0) consumed[idx - 1] else lastDrainedMeta
-                    prevReleaseNs = p?.releaseNs ?: -1L
-                    prevPtsUs = p?.ptsUs ?: -1L
+                if (curr != null) {
+                    prevReleaseNs = prev?.releaseNs ?: lastDrainedMeta?.releaseNs ?: -1L
+                    prevPtsUs = prev?.ptsUs ?: lastDrainedMeta?.ptsUs ?: -1L
                     currReleaseNs = curr.releaseNs
                     currPtsUs = curr.ptsUs
                     lastDrainedMeta = curr
@@ -2223,15 +2217,13 @@ class Media3SixtyFpsProcessor(
 
                 if (mvProbeFrames % 15 == 0 && debugMode > 0) {
                     try {
-                        val mw = coarseW.coerceAtLeast(2)
-                        val mh = coarseH.coerceAtLeast(2)
+                        val mw = 4; val mh = 4
                         if (coarseProbeBuf == null || coarseProbeBuf!!.capacity() < mw * mh * 4) {
                             coarseProbeBuf = java.nio.ByteBuffer.allocateDirect(mw * mh * 4)
                         }
                         val buf = coarseProbeBuf!!
                         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
                         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, coarseTexId, 0)
-                        GLES20.glViewport(0, 0, mw, mh)
                         buf.rewind()
                         GLES20.glReadPixels(0, 0, mw, mh, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
                         buf.rewind()
@@ -2304,15 +2296,13 @@ class Media3SixtyFpsProcessor(
 
             if (mvProbeFrames++ % 15 == 0 && debugMode > 0) {
                 try {
-                    val mw = motionW.coerceAtLeast(2)
-                    val mh = motionH.coerceAtLeast(2)
+                    val mw = 4; val mh = 4
                     if (mvProbeBuf == null || mvProbeBuf!!.capacity() < mw * mh * 4) {
                         mvProbeBuf = java.nio.ByteBuffer.allocateDirect(mw * mh * 4)
                     }
                     val buf = mvProbeBuf!!
                     GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
                     GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionTexId, 0)
-                    GLES20.glViewport(0, 0, mw, mh)
                     buf.rewind()
                     GLES20.glReadPixels(0, 0, mw, mh, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
                     buf.rewind()
@@ -2379,15 +2369,13 @@ class Media3SixtyFpsProcessor(
 
             if (mvProbeFrames % 15 == 0 && debugMode > 0) {
                 try {
-                    val mw = motionW.coerceAtLeast(2)
-                    val mh = motionH.coerceAtLeast(2)
+                    val mw = 4; val mh = 4
                     if (bwdProbeBuf == null || bwdProbeBuf!!.capacity() < mw * mh * 4) {
                         bwdProbeBuf = java.nio.ByteBuffer.allocateDirect(mw * mh * 4)
                     }
                     val buf = bwdProbeBuf!!
                     GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, motionFbo)
                     GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, motionBwdId, 0)
-                    GLES20.glViewport(0, 0, mw, mh)
                     buf.rewind()
                     GLES20.glReadPixels(0, 0, mw, mh, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
                     buf.rewind()
@@ -2491,7 +2479,6 @@ class Media3SixtyFpsProcessor(
             val speedPx = Math.hypot(globalVec[0].toDouble(), globalVec[1].toDouble()).toFloat() * 128f
             motionAlpha = 0.5f + 0.35f * (speedPx / 40f).coerceIn(0f, 1f)
             globalVecReady = true
-            Log.i(TAG, "globalVec=(${"%.1f".format(globalVec[0] * 128f)},${"%.1f".format(globalVec[1] * 128f)})px n=${n}")
         }
 
         private fun weightedMedian(vals: FloatArray, n: Int, half: Float): Float {
@@ -2915,10 +2902,10 @@ class Media3SixtyFpsProcessor(
                 .asFloatBuffer().put(data).also { it.position(0) }
     }
 
-    companion object {
+        companion object {
         private const val TAG = "Media3-60fps"
         private const val STATIC_THRESHOLD = 0.04f
-        private const val STATIC_READ_INTERVAL = 10
+        private const val STATIC_READ_INTERVAL = 30
         private const val STALL_RESET_NS = 1_500_000_000L
     }
 }
