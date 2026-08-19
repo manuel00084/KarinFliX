@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.karin.streamtv.R
 import com.karin.streamtv.model.Episode
+import com.karin.streamtv.model.EpisodeNavigation
 import com.karin.streamtv.model.PlaylistItem
 import com.karin.streamtv.model.VideoSource
 import com.karin.streamtv.scraper.DynamicParser
@@ -219,6 +220,7 @@ class SeriesDetailActivity : AppCompatActivity() {
         }
 
         if (page.episodes.isNotEmpty()) {
+            allEpisodes = page.episodes
             tvEpisodesLabel.visibility = android.view.View.VISIBLE
             rvEpisodes.visibility = android.view.View.VISIBLE
             rvEpisodes.adapter = EpisodeAdapter(page.episodes, seriesUrl) { episode ->
@@ -237,16 +239,37 @@ class SeriesDetailActivity : AppCompatActivity() {
 
     private var siteName: String = ""
     private var currentEpisodeUrl: String = ""
+    private var allEpisodes: List<Episode> = emptyList()
+    private var currentEpisodeIndex: Int = -1
+    private var currentNavigation: EpisodeNavigation = EpisodeNavigation()
 
     private fun openEpisode(episode: Episode) {
         showLoading("Extrayendo servidores de video...")
         currentEpisodeUrl = episode.url
+        currentEpisodeIndex = allEpisodes.indexOfFirst { it.url == episode.url }
         lifecycleScope.launch {
             try {
                 val scraper = ScraperRegistry.getScraper(siteName)
-                val servers = withContext(Dispatchers.IO) {
-                    scraper?.extractServers(episode.url) ?: ServerExtractor.extractServers(episode.url, siteName)
+                val (servers, nav) = kotlinx.coroutines.coroutineScope {
+                    val serversDeferred = async(Dispatchers.IO) {
+                        kotlinx.coroutines.withTimeoutOrNull(25_000) {
+                            scraper?.extractServers(episode.url) ?: ServerExtractor.extractServers(episode.url, siteName)
+                        }
+                    }
+                    val navDeferred = async(Dispatchers.IO) {
+                        try {
+                            kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                                scraper?.scrapeEpisodeNavigation(episode.url)
+                                    ?: ServerExtractor.extractEpisodeNavigation(episode.url, siteName)
+                            }
+                        } catch (e: Exception) {
+                            Log.w("SeriesDetail", "Navigation scrape failed: ${e.message}")
+                            null
+                        }
+                    }
+                    Pair(serversDeferred.await() ?: emptyList(), navDeferred.await() ?: EpisodeNavigation())
                 }
+                currentNavigation = nav
                 loadingOverlay.visibility = android.view.View.GONE
 
                 if (servers.isEmpty()) {
@@ -276,70 +299,68 @@ class SeriesDetailActivity : AppCompatActivity() {
 
         val view = layoutInflater.inflate(R.layout.dialog_servers, null)
         val listView = view.findViewById<android.widget.ListView>(R.id.lv_servers)
-        val tvCount = view.findViewById<TextView>(R.id.tv_server_count)
-        val btnAddToQueue = view.findViewById<TextView>(R.id.btn_add_to_queue)
-        val tvQueueCount = view.findViewById<TextView>(R.id.btn_queue_count)
-        tvCount.text = "${sorted.size} servidores"
-
-        fun updateQueueBadge() {
-            val qSize = com.karin.streamtv.util.VideoQueue.size()
-            if (qSize > 0) {
-                tvQueueCount.visibility = android.view.View.VISIBLE
-                tvQueueCount.text = "Cola: $qSize"
-            } else {
-                tvQueueCount.visibility = android.view.View.GONE
-            }
-        }
-        updateQueueBadge()
+        val tvDialogTitle = view.findViewById<TextView>(R.id.tv_dialog_title)
+        val btnPrevEpisode = view.findViewById<TextView>(R.id.btn_prev_episode)
+        val btnNextEpisode = view.findViewById<TextView>(R.id.btn_next_episode)
+        val btnEpisodeList = view.findViewById<TextView>(R.id.btn_episode_list)
+        tvDialogTitle.text = title
 
         val resolutionLabels = java.util.concurrent.ConcurrentHashMap<String, String>()
         val adapter = ServerAdapter(sorted, title, resolutionLabels)
         listView.adapter = adapter
 
-        btnAddToQueue.setOnClickListener {
-            val best = sorted.firstOrNull()
-            val embedUrl = best?.serverUrl ?: episodeUrl
-            val item = com.karin.streamtv.model.PlaylistItem(
-                title = title,
-                url = episodeUrl,
-                embedUrl = embedUrl,
-                serverName = best?.name ?: siteName,
-                episodeNumber = ServerHelper.extractEpisodeNumber(title)
-            )
-            com.karin.streamtv.util.VideoQueue.add(item)
-            updateQueueBadge()
-            Toast.makeText(this, "Agregado a la cola (${com.karin.streamtv.util.VideoQueue.size()})", Toast.LENGTH_SHORT).show()
-        }
-        btnAddToQueue.onActionKey { btnAddToQueue.performClick() }
+        var dialog: android.app.AlertDialog? = null
 
-        val dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
+        dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
             .setView(view)
             .setNegativeButton("Cancelar", null)
             .create()
+
+        // Botones de navegación de episodios (scrapeados de la página del episodio)
+        val nav = currentNavigation
+        if (nav.prevUrl != null) {
+            btnPrevEpisode.visibility = android.view.View.VISIBLE
+            btnPrevEpisode.setOnClickListener {
+                dialog?.dismiss()
+                openEpisode(Episode(
+                    title = com.karin.streamtv.util.ServerHelper.titleFromEpisodeUrl(nav.prevUrl),
+                    url = nav.prevUrl,
+                    siteName = siteName
+                ))
+            }
+        }
+
+        if (nav.nextUrl != null) {
+            btnNextEpisode.visibility = android.view.View.VISIBLE
+            btnNextEpisode.setOnClickListener {
+                dialog?.dismiss()
+                openEpisode(Episode(
+                    title = com.karin.streamtv.util.ServerHelper.titleFromEpisodeUrl(nav.nextUrl),
+                    url = nav.nextUrl,
+                    siteName = siteName
+                ))
+            }
+        }
+
+        if (nav.listUrl != null) {
+            btnEpisodeList.setOnClickListener {
+                dialog?.dismiss()
+                val intent = Intent(this, SiteBrowserActivity::class.java).apply {
+                    putExtra("series_url", nav.listUrl)
+                    putExtra("site_name", siteName)
+                }
+                startActivity(intent)
+            }
+        }
 
         dialog.window?.setLayout(
             (resources.displayMetrics.widthPixels * 0.85).toInt(),
             android.view.WindowManager.LayoutParams.WRAP_CONTENT
         )
 
-        com.karin.streamtv.util.TvDialogHelper.makeListTvReady(dialog, listView, this)
+        com.karin.streamtv.util.TvDialogHelper.makeDialogTvReady(dialog, listView, this, btnPrevEpisode, btnEpisodeList, btnNextEpisode)
 
         dialog.show()
-
-        val btnShare = view.findViewById<TextView>(R.id.btn_share_karinlink)
-        btnShare.setOnClickListener {
-            dialog.dismiss()
-            val best = sorted.firstOrNull()
-            val embed = best?.serverUrl ?: episodeUrl
-            com.karin.streamtv.karinlink.KarinLinkShareDialog(
-                this,
-                episodeTitle = title,
-                episodeUrl = episodeUrl,
-                embedUrl = embed,
-                siteName = siteName
-            ).show()
-        }
-        btnShare.onActionKey { btnShare.performClick() }
 
         detectServerResolutions(sorted, view as ViewGroup, adapter, resolutionLabels)
 
@@ -501,13 +522,11 @@ class SeriesDetailActivity : AppCompatActivity() {
             val tvName = row.findViewById<android.widget.TextView>(R.id.tv_server_name)
             val tvStars = row.findViewById<android.widget.TextView>(R.id.tv_server_stars)
             val tvRes = row.findViewById<android.widget.TextView>(R.id.tv_res_badge)
-            val btnFb = row.findViewById<android.view.View>(R.id.btn_share_fb)
-            val btnWa = row.findViewById<android.view.View>(R.id.btn_share_wa)
             val btnExt = row.findViewById<android.widget.TextView>(R.id.btn_play_external)
 
             val stars = "\u2605".repeat(server.speedRating.coerceIn(1, 5))
             val fastTag = if (server.speedRating >= 4) " \u26A1" else ""
-            tvName.text = "${server.name}$fastTag"
+            tvName.text = "${position + 1}. ${server.name}$fastTag"
             tvStars.text = stars
             val detected = resolutionLabels[server.serverUrl]
             if (detected != null) {
@@ -532,12 +551,6 @@ class SeriesDetailActivity : AppCompatActivity() {
 
             row.setOnClickListener { openEmbedWebView(server, title, servers) }
 
-            btnFb.setOnClickListener {
-                ServerHelper.shareUrl(this@SeriesDetailActivity, server.serverUrl, server.name, "com.facebook.katana")
-            }
-            btnWa.setOnClickListener {
-                ServerHelper.shareUrl(this@SeriesDetailActivity, server.serverUrl, server.name, "com.whatsapp")
-            }
             btnExt.setOnClickListener {
                 val isTabServer = server.serverUrl.contains("?server=")
                 val intent = Intent(this@SeriesDetailActivity, EmbedWebViewActivity::class.java).apply {
@@ -558,8 +571,6 @@ class SeriesDetailActivity : AppCompatActivity() {
             }
 
             if (DeviceUtils.isTvDevice(this@SeriesDetailActivity)) {
-                btnFb.isFocusable = false
-                btnWa.isFocusable = false
                 btnExt.isFocusable = false
             }
 
@@ -580,6 +591,12 @@ class SeriesDetailActivity : AppCompatActivity() {
             return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Al volver del player el progreso pudo cambiar; refresca los badges.
+        (rvEpisodes.adapter as? EpisodeAdapter)?.invalidateProgressCache()
     }
 
     override fun onDestroy() {

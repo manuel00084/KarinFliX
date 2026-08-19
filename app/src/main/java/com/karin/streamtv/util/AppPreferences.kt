@@ -13,6 +13,9 @@ object AppPreferences {
     private const val KEY_PLAYNOW = "playnow_enabled"
     private const val KEY_VIDEO_PLAYER_MODE = "video_player_mode_enabled"
     private const val KEY_PLAYER_VOLUME = "player_volume"
+    private const val KEY_PLAYER_SPEED = "player_speed"
+    private const val KEY_SMB_SHOW_HOME = "smb_show_on_home"
+    private const val KEY_LOW_END = "low_end_mode"
     private const val KEY_FIRST_RUN = "first_run_done"
 
     private var prefs: SharedPreferences? = null
@@ -69,6 +72,29 @@ object AppPreferences {
 
     fun setPlayerVolume(v: Float) {
         prefs?.edit()?.putFloat(KEY_PLAYER_VOLUME, v.coerceIn(0.1f, 3.0f))?.apply()
+    }
+
+    fun getPlayerSpeed(): Float {
+        val sp = prefs?.getFloat(KEY_PLAYER_SPEED, 1.0f) ?: 1.0f
+        return sp.coerceIn(0.25f, 2.0f)
+    }
+
+    fun setPlayerSpeed(v: Float) {
+        prefs?.edit()?.putFloat(KEY_PLAYER_SPEED, v.coerceIn(0.25f, 2.0f))?.apply()
+    }
+
+    fun isSmbShowOnHome(): Boolean =
+        prefs?.getBoolean(KEY_SMB_SHOW_HOME, true) ?: true
+
+    fun setSmbShowOnHome(v: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_SMB_SHOW_HOME, v)?.apply()
+    }
+
+    fun isLowEndMode(): Boolean =
+        prefs?.getBoolean(KEY_LOW_END, false) ?: false
+
+    fun setLowEndMode(v: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_LOW_END, v)?.apply()
     }
 
     fun isFirstRun(): Boolean {

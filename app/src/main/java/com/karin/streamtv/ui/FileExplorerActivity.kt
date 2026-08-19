@@ -67,6 +67,7 @@ class FileExplorerActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "FileExplorer"
         private const val REQUEST_STORAGE_PERMISSION = 5001
+        private const val REQUEST_MANAGE_STORAGE = 5002
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -128,6 +129,24 @@ class FileExplorerActivity : AppCompatActivity() {
     }
 
     private fun checkPermissionsAndLoad() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            !Environment.isExternalStorageManager()
+        ) {
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:${packageName}")
+            )
+            try {
+                startActivityForResult(intent, REQUEST_MANAGE_STORAGE)
+            } catch (e: Exception) {
+                startActivityForResult(
+                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                    REQUEST_MANAGE_STORAGE
+                )
+            }
+            return
+        }
+
         val permission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             Manifest.permission.READ_MEDIA_VIDEO
         } else {
@@ -138,6 +157,13 @@ class FileExplorerActivity : AppCompatActivity() {
             loadAllVideos()
         } else {
             ActivityCompat.requestPermissions(this, arrayOf(permission), REQUEST_STORAGE_PERMISSION)
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_MANAGE_STORAGE) {
+            checkPermissionsAndLoad()
         }
     }
 

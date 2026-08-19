@@ -2,8 +2,10 @@ package com.karin.streamtv.scraper
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.Response
@@ -13,6 +15,7 @@ import org.jsoup.nodes.Document
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 object ScrapingEngine {
@@ -25,6 +28,7 @@ object ScrapingEngine {
     var minRequestIntervalMs: Long = 200L
     var maxRetries: Int = 2
     var memCacheMaxSize: Int = 60
+    var memCacheMaxBytes: Long = 16L * 1024 * 1024 // ~16MB de HTML en RAM
     var memCacheTtlMs: Long = 15 * 60 * 1000L
     var diskCacheTtlMs: Long = 6 * 60 * 60 * 1000L
     var staleCacheMaxTtlMs: Long = 14L * 24 * 60 * 60 * 1000L
@@ -116,17 +120,44 @@ object ScrapingEngine {
     // endregion
 
     // region --- In-Memory Cache ---
-    private data class MemCacheEntry(val html: String, val timestamp: Long)
+    private data class MemCacheEntry(val html: String, val timestamp: Long) {
+        val bytes: Long get() = html.length.toLong()
+    }
 
     private val memCache = object : LinkedHashMap<String, MemCacheEntry>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MemCacheEntry>?): Boolean =
             size > memCacheMaxSize
     }
+    private var memCacheBytes = 0L
 
-    private fun memGet(key: String): MemCacheEntry? = synchronized(memCache) { memCache[key] }
-    private fun memPut(key: String, entry: MemCacheEntry) = synchronized(memCache) { memCache[key] = entry }
-    private fun memRemove(key: String) = synchronized(memCache) { memCache.remove(key) }
-    private fun memClear() = synchronized(memCache) { memCache.clear() }
+    private fun memGet(key: String): MemCacheEntry? = synchronized(memCache) {
+        val e = memCache[key]
+        if (e != null && System.currentTimeMillis() - e.timestamp > memCacheTtlMs) {
+            memCache.remove(key)
+            memCacheBytes -= e.bytes
+            null
+        } else e
+    }
+    private fun memPut(key: String, entry: MemCacheEntry) = synchronized(memCache) {
+        memCache.remove(key)?.let { memCacheBytes -= it.bytes }
+        memCache[key] = entry
+        memCacheBytes += entry.bytes
+        // Acota también por bytes, no solo por número de entradas.
+        while (memCacheBytes > memCacheMaxBytes) {
+            val it = memCache.entries.iterator()
+            if (!it.hasNext()) break
+            val eldest = it.next()
+            it.remove()
+            memCacheBytes -= eldest.value.bytes
+        }
+    }
+    private fun memRemove(key: String) = synchronized(memCache) {
+        memCache.remove(key)?.let { memCacheBytes -= it.bytes }
+    }
+    private fun memClear() = synchronized(memCache) {
+        memCache.clear()
+        memCacheBytes = 0L
+    }
     // endregion
 
     // region --- Disk Cache ---
@@ -205,7 +236,17 @@ object ScrapingEngine {
     private val concurrencySemaphore = Semaphore(maxConcurrentRequests)
 
     private suspend fun <T> withConcurrencyLimit(block: suspend () -> T): T {
-        concurrencySemaphore.acquire()
+        val acquired = try {
+            withContext(Dispatchers.IO) {
+                concurrencySemaphore.tryAcquire(10, TimeUnit.SECONDS)
+            }
+        } catch (_: InterruptedException) {
+            false
+        }
+        if (!acquired) {
+            Log.w(TAG, "Concurrency limit busy for 10s, bypassing to avoid deadlock")
+            return block()
+        }
         try {
             return block()
         } finally {

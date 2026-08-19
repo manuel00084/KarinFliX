@@ -25,7 +25,7 @@ class CalendarSeriesAdapter(
     private val onSeriesClick: (CalendarItem) -> Unit
 ) : RecyclerView.Adapter<CalendarSeriesAdapter.VH>() {
 
-    private val imageCache = object : LruCache<String, Bitmap>(10 * 1024 * 1024) {
+    private val imageCache = object : LruCache<String, Bitmap>(5 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val pendingJobs = mutableMapOf<String, Job>()

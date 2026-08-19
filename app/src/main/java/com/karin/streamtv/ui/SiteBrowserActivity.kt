@@ -23,6 +23,7 @@ import androidx.recyclerview.widget.RecyclerView
 import android.util.Log
 import com.karin.streamtv.R
 import com.karin.streamtv.model.Episode
+import com.karin.streamtv.model.EpisodeNavigation
 import com.karin.streamtv.model.SiteMenuItem
 import com.karin.streamtv.scraper.DynamicParser
 import com.karin.streamtv.scraper.MenuParser
@@ -226,11 +227,14 @@ filterBar = findViewById(R.id.filter_bar)
 
         val autoPlayUrl = intent.getStringExtra("autoplay_url")
         val autoPlayTitle = intent.getStringExtra("autoplay_title")
-        if (!autoPlayUrl.isNullOrBlank()) {
-            val ep = Episode(autoPlayTitle ?: "Episodio", autoPlayUrl, siteName = siteName)
-            loadHomepageAndAutoPlay(ep)
-        } else {
-            loadHomepage()
+        val seriesUrl = intent.getStringExtra("series_url")
+        when {
+            !seriesUrl.isNullOrBlank() -> loadSeriesPage(seriesUrl)
+            !autoPlayUrl.isNullOrBlank() -> {
+                val ep = Episode(autoPlayTitle ?: "Episodio", autoPlayUrl, siteName = siteName)
+                loadHomepageAndAutoPlay(ep)
+            }
+            else -> loadHomepage()
         }
     }
 
@@ -262,7 +266,10 @@ filterBar = findViewById(R.id.filter_bar)
                     if (scraper != null) scraper.getLatestEpisodes() else emptyList()
                 }
                 val menuDeferred = async(Dispatchers.IO) {
-                    val doc = ScrapingEngine.fetch(siteUrl, siteName, "${siteName}::home", forceFresh = false)
+                    // Misma clave que getLatestEpisodes() (GenericScraper.fetchDocument usa
+                    // "<name>::<url.hashCode>") para que colisionen en caché y no se
+                    // descargue la homepage dos veces en paralelo.
+                    val doc = ScrapingEngine.fetch(siteUrl, siteName, "${siteName}::${siteUrl.hashCode()}", forceFresh = false)
                     if (doc != null) Pair(MenuParser.extractMenu(doc), doc) else Pair(emptyList(), null)
                 }
 
@@ -310,6 +317,57 @@ filterBar = findViewById(R.id.filter_bar)
                 loadingOverlay.visibility = android.view.View.GONE
                 tvEmpty.visibility = android.view.View.VISIBLE
                 tvEmpty.text = "Error al cargar episodios"
+            }
+        }
+    }
+
+    private fun loadSeriesPage(seriesUrl: String) {
+        hideSearchBar()
+        filterBar.visibility = View.GONE
+        paginationBar.visibility = View.GONE
+        currentPageNum = 1
+        showingSearchResults = false
+        lastSearchQuery = ""
+        tvEmpty.visibility = android.view.View.GONE
+        showLoading("Cargando capítulos...")
+        nextPageUrl = null
+        prevPageUrl = null
+        btnNextPage.visibility = android.view.View.GONE
+        btnPrevPage.visibility = android.view.View.GONE
+
+        lifecycleScope.launch {
+            try {
+                val (episodes, doc) = withContext(Dispatchers.IO) {
+                    val doc = ScrapingEngine.fetch(seriesUrl, siteName, "${siteName}::serie::${seriesUrl.takeLast(80)}")
+                    val eps = if (doc != null) {
+                        val links = DynamicParser.parseEpisodeLinks(doc, siteName)
+                        if (links.isNotEmpty()) links else DynamicParser.parseDynamic(doc, siteName)
+                    } else emptyList()
+                    Pair(eps, doc)
+                }
+
+                loadingOverlay.visibility = android.view.View.GONE
+
+                currentPageUrl = seriesUrl
+                tvTitle.text = "$siteName - Capítulos"
+
+                if (episodes.isEmpty()) {
+                    tvEmpty.visibility = android.view.View.VISIBLE
+                    tvEmpty.text = "No se pudieron cargar los capítulos de la serie"
+                    return@launch
+                }
+
+                currentEpisodes = ArrayList(episodes)
+                setEpisodesAdapter(episodes) { episode ->
+                    openEpisode(episode)
+                }
+                if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
+                tvEmpty.visibility = android.view.View.GONE
+            } catch (e: Exception) {
+                Log.e("SiteBrowser", "loadSeriesPage error: ${e.message}", e)
+                loadingOverlay.visibility = android.view.View.GONE
+                tvEmpty.visibility = android.view.View.VISIBLE
+                tvEmpty.text = "Error al cargar los capítulos"
             }
         }
     }
@@ -838,25 +896,54 @@ setEpisodesAdapter(episodes) { episode ->
     }
 
     private var currentEpisodeUrl: String = ""
+    private var allEpisodes: List<Episode> = emptyList()
+    private var currentEpisodeIndex: Int = -1
+    private var currentNavigation: EpisodeNavigation = EpisodeNavigation()
+    private var episodeExtractionInProgress: Boolean = false
 
     private fun openEpisode(episode: Episode) {
         Log.d("SiteBrowser", "openEpisode called: url=${episode.url}, title=${episode.title}")
+        if (episodeExtractionInProgress) {
+            Log.d("SiteBrowser", "Extraction already in progress, ignoring duplicate openEpisode")
+            return
+        }
+        episodeExtractionInProgress = true
         currentEpisodeUrl = episode.url
+        currentEpisodeIndex = allEpisodes.indexOfFirst { it.url == episode.url }
         showLoading("Extrayendo servidores de video...")
         lifecycleScope.launch {
             try {
                 Log.d("SiteBrowser", "Starting server extraction for: ${episode.url}")
                 val scraper = ScraperRegistry.getScraper(siteName)
-                val servers = withContext(Dispatchers.IO) {
-                    scraper?.extractServers(episode.url) ?: ServerExtractor.extractServers(episode.url, siteName)
+                val (servers, nav) = kotlinx.coroutines.coroutineScope {
+                    val serversDeferred = async(Dispatchers.IO) {
+                        kotlinx.coroutines.withTimeoutOrNull(25_000) {
+                            scraper?.extractServers(episode.url) ?: ServerExtractor.extractServers(episode.url, siteName)
+                        }
+                    }
+                    val navDeferred = async(Dispatchers.IO) {
+                        try {
+                            kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                                scraper?.scrapeEpisodeNavigation(episode.url)
+                                    ?: ServerExtractor.extractEpisodeNavigation(episode.url, siteName)
+                            }
+                        } catch (e: Exception) {
+                            Log.w("SiteBrowser", "Navigation scrape failed: ${e.message}")
+                            null
+                        }
+                    }
+                    Pair(serversDeferred.await() ?: emptyList(), navDeferred.await() ?: EpisodeNavigation())
                 }
+                currentNavigation = nav
                 Log.d("SiteBrowser", "Server extraction complete: found ${servers.size} servers for ${episode.url}")
                 servers.forEach { Log.d("SiteBrowser", "  Server: ${it.name} -> ${it.serverUrl}") }
+                Log.d("SiteBrowser", "Navigation: prev=${currentNavigation.prevUrl}, next=${currentNavigation.nextUrl}")
                 loadingOverlay.visibility = android.view.View.GONE
 
                 if (servers.isEmpty()) {
                     Log.d("SiteBrowser", "No servers found, showing error instead of opening website")
                     loadingOverlay.visibility = android.view.View.GONE
+                    episodeExtractionInProgress = false
                     Toast.makeText(
                         this@SiteBrowserActivity,
                         "No se encontraron servidores de video para este episodio",
@@ -865,10 +952,12 @@ setEpisodesAdapter(episodes) { episode ->
                     return@launch
                 }
 
+                episodeExtractionInProgress = false
                 showServerSelectionDialog(servers, episode.title, episode.url)
             } catch (e: Exception) {
                 Log.e("SiteBrowser", "Error extracting servers: ${e.message}", e)
                 loadingOverlay.visibility = android.view.View.GONE
+                episodeExtractionInProgress = false
                 Toast.makeText(
                     this@SiteBrowserActivity,
                     "Error al extraer servidores de video",
@@ -883,69 +972,67 @@ setEpisodesAdapter(episodes) { episode ->
 
         val view = layoutInflater.inflate(R.layout.dialog_servers, null)
         val listView = view.findViewById<android.widget.ListView>(R.id.lv_servers)
-        val tvCount = view.findViewById<TextView>(R.id.tv_server_count)
-        val btnAddToQueue = view.findViewById<TextView>(R.id.btn_add_to_queue)
-        val tvQueueCount = view.findViewById<TextView>(R.id.btn_queue_count)
-        tvCount.text = "${sorted.size} servidores"
-
-        fun updateQueueBadge() {
-            val qSize = com.karin.streamtv.util.VideoQueue.size()
-            if (qSize > 0) {
-                tvQueueCount.visibility = android.view.View.VISIBLE
-                tvQueueCount.text = "Cola: $qSize"
-            } else {
-                tvQueueCount.visibility = android.view.View.GONE
-            }
-        }
-        updateQueueBadge()
+        val tvDialogTitle = view.findViewById<TextView>(R.id.tv_dialog_title)
+        val btnPrevEpisode = view.findViewById<TextView>(R.id.btn_prev_episode)
+        val btnNextEpisode = view.findViewById<TextView>(R.id.btn_next_episode)
+        val btnEpisodeList = view.findViewById<TextView>(R.id.btn_episode_list)
+        tvDialogTitle.text = title
 
         val resolutionLabels = java.util.concurrent.ConcurrentHashMap<String, String>()
         listView.adapter = ServerAdapter(sorted, title, resolutionLabels)
 
-        btnAddToQueue.setOnClickListener {
-            val best = sorted.firstOrNull()
-            val embedUrl = best?.serverUrl ?: episodeUrl
-            val item = com.karin.streamtv.model.PlaylistItem(
-                title = title,
-                url = episodeUrl,
-                embedUrl = embedUrl,
-                serverName = best?.name ?: siteName,
-                episodeNumber = ServerHelper.extractEpisodeNumber(title)
-            )
-            com.karin.streamtv.util.VideoQueue.add(item)
-            updateQueueBadge()
-            Toast.makeText(this, "Agregado a la cola (${com.karin.streamtv.util.VideoQueue.size()})", Toast.LENGTH_SHORT).show()
-        }
-        btnAddToQueue.onActionKey { btnAddToQueue.performClick() }
+        var dialog: android.app.AlertDialog? = null
 
-        val dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
+        dialog = android.app.AlertDialog.Builder(this, R.style.DialogTheme)
             .setView(view)
             .setNegativeButton("Cancelar", null)
             .create()
+
+        // Botones de navegación de episodios (scrapeados de la página del episodio)
+        val nav = currentNavigation
+        if (nav.prevUrl != null) {
+            btnPrevEpisode.visibility = android.view.View.VISIBLE
+            btnPrevEpisode.setOnClickListener {
+                dialog?.dismiss()
+                openEpisode(Episode(
+                    title = com.karin.streamtv.util.ServerHelper.titleFromEpisodeUrl(nav.prevUrl),
+                    url = nav.prevUrl,
+                    siteName = siteName
+                ))
+            }
+        }
+
+        if (nav.nextUrl != null) {
+            btnNextEpisode.visibility = android.view.View.VISIBLE
+            btnNextEpisode.setOnClickListener {
+                dialog?.dismiss()
+                openEpisode(Episode(
+                    title = com.karin.streamtv.util.ServerHelper.titleFromEpisodeUrl(nav.nextUrl),
+                    url = nav.nextUrl,
+                    siteName = siteName
+                ))
+            }
+        }
+
+        if (nav.listUrl != null) {
+            btnEpisodeList.setOnClickListener {
+                dialog?.dismiss()
+                val intent = Intent(this, SiteBrowserActivity::class.java).apply {
+                    putExtra("series_url", nav.listUrl)
+                    putExtra("site_name", siteName)
+                }
+                startActivity(intent)
+            }
+        }
 
         dialog.window?.setLayout(
             (resources.displayMetrics.widthPixels * 0.85).toInt(),
             android.view.WindowManager.LayoutParams.WRAP_CONTENT
         )
 
-        com.karin.streamtv.util.TvDialogHelper.makeListTvReady(dialog, listView, this)
+        com.karin.streamtv.util.TvDialogHelper.makeDialogTvReady(dialog, listView, this, btnPrevEpisode, btnEpisodeList, btnNextEpisode)
 
         dialog.show()
-
-        val btnShare = view.findViewById<TextView>(R.id.btn_share_karinlink)
-        btnShare.setOnClickListener {
-            dialog.dismiss()
-            val best = sorted.firstOrNull()
-            val embed = best?.serverUrl ?: episodeUrl
-            com.karin.streamtv.karinlink.KarinLinkShareDialog(
-                this,
-                episodeTitle = title,
-                episodeUrl = episodeUrl,
-                embedUrl = embed,
-                siteName = siteName
-            ).show()
-        }
-        btnShare.onActionKey { btnShare.performClick() }
 
         detectServerResolutions(sorted, view as ViewGroup, listView.adapter as android.widget.BaseAdapter, resolutionLabels)
 
@@ -1045,13 +1132,11 @@ setEpisodesAdapter(episodes) { episode ->
             val tvName = row.findViewById<android.widget.TextView>(R.id.tv_server_name)
             val tvStars = row.findViewById<android.widget.TextView>(R.id.tv_server_stars)
             val tvRes = row.findViewById<android.widget.TextView>(R.id.tv_res_badge)
-            val btnFb = row.findViewById<android.view.View>(R.id.btn_share_fb)
-            val btnWa = row.findViewById<android.view.View>(R.id.btn_share_wa)
             val btnExt = row.findViewById<android.widget.TextView>(R.id.btn_play_external)
 
             val stars = "\u2605".repeat(server.speedRating.coerceIn(1, 5))
             val fastTag = if (server.speedRating >= 4) " \u26A1" else ""
-            tvName.text = "${server.name}$fastTag"
+            tvName.text = "${position + 1}. ${server.name}$fastTag"
             tvStars.text = stars
             val detected = resolutionLabels[server.serverUrl]
             if (detected != null) {
@@ -1076,17 +1161,9 @@ setEpisodesAdapter(episodes) { episode ->
 
             row.setOnClickListener { openEmbedWebView(server, title, servers) }
 
-            btnFb.setOnClickListener {
-                ServerHelper.shareUrl(this@SiteBrowserActivity, server.serverUrl, server.name, "com.facebook.katana")
-            }
-            btnWa.setOnClickListener {
-                ServerHelper.shareUrl(this@SiteBrowserActivity, server.serverUrl, server.name, "com.whatsapp")
-            }
             btnExt.setOnClickListener { openExternalPlayer(server) }
 
             if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) {
-                btnFb.isFocusable = false
-                btnWa.isFocusable = false
                 btnExt.isFocusable = false
             }
 
@@ -1131,9 +1208,12 @@ setEpisodesAdapter(episodes) { episode ->
 
     override fun onResume() {
         super.onResume()
+        // Al volver del player el progreso pudo cambiar; refresca los badges.
+        (rvEpisodes.adapter as? EpisodeAdapter)?.invalidateProgressCache()
     }
 
     private fun setEpisodesAdapter(list: List<Episode>, onEpisodeClick: (Episode) -> Unit) {
+        allEpisodes = list
         (rvEpisodes.adapter as? EpisodeAdapter)?.destroy()
         rvEpisodes.adapter = EpisodeAdapter(list, siteUrl, onEpisodeClick = onEpisodeClick)
     }

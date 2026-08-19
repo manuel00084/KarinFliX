@@ -128,6 +128,21 @@ class MainActivity : FragmentActivity() {
             btnFiles.setOnClickListener { openVideoFilePicker() }
             btnFiles.onActionKey { btnFiles.performClick() }
 
+            findViewById<TextView>(R.id.btn_credits).apply {
+                setOnClickListener { startActivity(Intent(this@MainActivity, CreditsActivity::class.java)) }
+                onActionKey { performClick() }
+            }
+
+            findViewById<TextView>(R.id.btn_terms).apply {
+                setOnClickListener { startActivity(Intent(this@MainActivity, TermsAndConditionsActivity::class.java)) }
+                onActionKey { performClick() }
+            }
+
+            findViewById<TextView>(R.id.btn_tutorial).apply {
+                setOnClickListener { startActivity(Intent(this@MainActivity, TutorialActivity::class.java)) }
+                onActionKey { performClick() }
+            }
+
             historySection = findViewById(R.id.history_section)
             rvHistory = findViewById(R.id.rv_history)
             rvHistory.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)

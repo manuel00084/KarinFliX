@@ -4,6 +4,7 @@ import android.util.Base64
 import android.util.Log
 import com.karin.streamtv.model.VideoServer
 import com.karin.streamtv.model.VideoSource
+import com.karin.streamtv.model.EpisodeNavigation
 import com.karin.streamtv.util.HtmlClean
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -237,6 +238,77 @@ object ServerExtractor {
         }
 
         return null
+    }
+
+    suspend fun extractEpisodeNavigation(episodeUrl: String, siteName: String): com.karin.streamtv.model.EpisodeNavigation {
+        val cacheKey = "${siteName}::nav::${episodeUrl.hashCode()}"
+        val doc = try {
+            ScrapingEngine.fetch(episodeUrl, siteName, cacheKey)
+        } catch (e: Exception) {
+            Log.e(TAG, "Nav fetch failed: ${e.message}")
+            null
+        } ?: return com.karin.streamtv.model.EpisodeNavigation()
+        return extractNavigationFromDoc(doc)
+    }
+
+    fun extractNavigationFromDoc(doc: Document): com.karin.streamtv.model.EpisodeNavigation {
+        var prevUrl: String? = null
+        var prevTitle: String? = null
+        var nextUrl: String? = null
+        var nextTitle: String? = null
+        var listUrl: String? = null
+
+        val controls = doc.selectFirst("div.controles")
+        if (controls != null) {
+            val links = controls.select("a[href]")
+            for (link in links) {
+                val href = link.attr("abs:href").ifBlank { link.attr("href") }
+                val text = link.text().trim().lowercase()
+                if (href.isBlank()) continue
+
+                when {
+                    text.contains("anterior") || text.contains("previous") -> {
+                        prevUrl = href
+                        prevTitle = link.text().trim()
+                    }
+                    text.contains("siguiente") || text.contains("next") -> {
+                        nextUrl = href
+                        nextTitle = link.text().trim()
+                    }
+                    text.contains("lista") || text.contains("list") -> {
+                        listUrl = href
+                    }
+                }
+            }
+        }
+
+        if (prevUrl == null && nextUrl == null) {
+            val allLinks = doc.select("a[href*='/ver/']")
+            val currentPath = doc.location().substringAfterLast("/ver/", "")
+            for (link in allLinks) {
+                val href = link.attr("abs:href").ifBlank { continue }
+                val linkPath = href.substringAfterLast("/ver/", "")
+                if (linkPath == currentPath || linkPath.isBlank()) continue
+                val text = link.text().trim().lowercase()
+                if (text.contains("anterior") || text.contains("previous")) {
+                    prevUrl = href
+                    prevTitle = link.text().trim()
+                } else if (text.contains("siguiente") || text.contains("next")) {
+                    nextUrl = href
+                    nextTitle = link.text().trim()
+                }
+            }
+        }
+
+        if (listUrl == null) {
+            val listLink = doc.selectFirst("a[href*='/anime/']")
+            if (listLink != null) {
+                listUrl = listLink.attr("abs:href").ifBlank { listLink.attr("href") }
+            }
+        }
+
+        Log.d(TAG, "Navigation: prev=$prevUrl, next=$nextUrl, list=$listUrl")
+        return com.karin.streamtv.model.EpisodeNavigation(prevUrl, prevTitle, nextUrl, nextTitle, listUrl)
     }
 
     fun isAdUrl(url: String): Boolean {

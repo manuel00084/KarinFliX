@@ -34,7 +34,15 @@ object DiskImageCache {
 
     private fun memCacheSizeBytes(): Int {
         val maxMem = Runtime.getRuntime().maxMemory()
-        return (maxMem / 16).toInt().coerceIn(4 * 1024 * 1024, 64 * 1024 * 1024)
+        // Caché RAM acotada y conservadora: los equipos de poca memoria no deben
+        // destinar la sexta parte del heap a bitmaps. Tope duro de 32MB.
+        return (maxMem / 32).toInt().coerceIn(2 * 1024 * 1024, 32 * 1024 * 1024)
+    }
+
+    /** Vacía la caché RAM (bitmaps decodificados). El disco se conserva intacto,
+     *  así la próxima visita re-carga al instante sin memoria acumulada. */
+    fun trimMemory() {
+        memoryCache.evictAll()
     }
 
     private fun memKeyOf(url: String, w: Int, h: Int): String = "$url#$w#$h"

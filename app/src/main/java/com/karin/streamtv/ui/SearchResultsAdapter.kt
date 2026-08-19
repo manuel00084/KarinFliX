@@ -29,7 +29,7 @@ class SearchResultsAdapter(
 ) : RecyclerView.Adapter<SearchResultsAdapter.ViewHolder>() {
 
     private val results = mutableListOf<SearchManager.SearchResult>()
-    private val imageCache = object : LruCache<String, Bitmap>(20 * 1024 * 1024) {
+    private val imageCache = object : LruCache<String, Bitmap>(10 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val pendingJobs = mutableMapOf<String, Job>()

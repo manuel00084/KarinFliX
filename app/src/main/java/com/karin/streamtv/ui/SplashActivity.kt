@@ -29,6 +29,7 @@ class SplashActivity : AppCompatActivity() {
             setContentView(R.layout.activity_splash)
 
             Http.initCache(cacheDir)
+            com.karin.streamtv.scraper.ScrapingEngine.init(this)
             WatchHistory.init(this)
             EpisodeProgress.init(this)
             DiskImageCache.init(this)

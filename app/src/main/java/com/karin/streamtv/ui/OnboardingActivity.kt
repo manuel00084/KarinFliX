@@ -3,6 +3,7 @@ package com.karin.streamtv.ui
 import android.content.Intent
 import android.os.Bundle
 import android.view.KeyEvent
+import android.widget.CheckBox
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.karin.streamtv.R
@@ -19,10 +20,17 @@ class OnboardingActivity : AppCompatActivity() {
 
     private var termsRead = false
     private var tutorialRead = false
+    private lateinit var btnAccept: TextView
+    private lateinit var cbTerms: CheckBox
+    private lateinit var cbTutorial: CheckBox
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_onboarding)
+
+        btnAccept = findViewById(R.id.btn_accept)
+        cbTerms = findViewById(R.id.cb_terms)
+        cbTutorial = findViewById(R.id.cb_tutorial)
 
         findViewById<TextView>(R.id.btn_view_terms).apply {
             setOnClickListener { openTerms() }
@@ -34,10 +42,15 @@ class OnboardingActivity : AppCompatActivity() {
             onActionKey { openTutorial() }
         }
 
-        findViewById<TextView>(R.id.btn_accept).apply {
+        btnAccept.apply {
             setOnClickListener { acceptAndStart() }
             onActionKey { acceptAndStart() }
         }
+
+        val listener = android.widget.CompoundButton.OnCheckedChangeListener { _, _ -> updateAcceptState() }
+        cbTerms.setOnCheckedChangeListener(listener)
+        cbTutorial.setOnCheckedChangeListener(listener)
+        updateAcceptState()
 
         if (DeviceUtils.isTvDevice(this)) {
             findViewById<TextView>(R.id.btn_view_terms)?.requestFocus()
@@ -52,12 +65,16 @@ class OnboardingActivity : AppCompatActivity() {
         startActivityForResult(Intent(this, TutorialActivity::class.java), REQ_TUTORIAL)
     }
 
+    private fun updateAcceptState() {
+        btnAccept.isEnabled = cbTerms.isChecked && cbTutorial.isChecked
+    }
+
     private fun acceptAndStart() {
-        if (!termsRead) {
+        if (!cbTerms.isChecked) {
             openTerms()
             return
         }
-        if (!tutorialRead) {
+        if (!cbTutorial.isChecked) {
             openTutorial()
             return
         }
@@ -69,8 +86,16 @@ class OnboardingActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
-            REQ_TERMS -> termsRead = true
-            REQ_TUTORIAL -> tutorialRead = true
+            REQ_TERMS -> {
+                termsRead = true
+                cbTerms.isChecked = true
+                updateAcceptState()
+            }
+            REQ_TUTORIAL -> {
+                tutorialRead = true
+                cbTutorial.isChecked = true
+                updateAcceptState()
+            }
         }
     }
 

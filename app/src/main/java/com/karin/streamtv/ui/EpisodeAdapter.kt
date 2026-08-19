@@ -29,11 +29,40 @@ class EpisodeAdapter(
     private val onEpisodeClick: (Episode) -> Unit
 ) : RecyclerView.Adapter<EpisodeAdapter.ViewHolder>() {
 
-    private val imageCache = object : LruCache<String, Bitmap>(15 * 1024 * 1024) {
+    private val imageCache = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val pendingJobs = mutableMapOf<String, Job>()
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    // Caché en memoria del progreso por anime+episodio: evita leer
+    // SharedPreferences + parsear JSON varias veces por tarjeta en el main
+    // thread durante el bind/scroll de grids grandes.
+    private data class ProgressState(
+        val watched: Boolean,
+        val lastPos: Long,
+        val duration: Long
+    )
+    private val progressCache = HashMap<String, ProgressState>()
+    private val animeIdCache = HashMap<String, String>()
+
+    private fun progressState(animeId: String, episodeNumber: Int): ProgressState {
+        val key = "$animeId#$episodeNumber"
+        return progressCache.getOrPut(key) {
+            val lastPos = EpisodeProgress.getLastPosition(animeId, episodeNumber)
+            val duration = EpisodeProgress.getDuration(animeId, episodeNumber)
+            ProgressState(
+                watched = EpisodeProgress.isWatched(animeId, episodeNumber),
+                lastPos = lastPos,
+                duration = duration
+            )
+        }
+    }
+
+    fun invalidateProgressCache() {
+        progressCache.clear()
+        notifyDataSetChanged()
+    }
 
     private val selectedUrls = LinkedHashSet<String>()
     private var selectionMode = false
@@ -111,17 +140,17 @@ class EpisodeAdapter(
             }
         }
 
-        val animeId = EpisodeProgress.generateAnimeId(episode.url)
-        val isWatched = EpisodeProgress.isWatched(animeId, position + 1)
-        val lastPos = EpisodeProgress.getLastPosition(animeId, position + 1)
-        val duration = EpisodeProgress.getDuration(animeId, position + 1)
+        val animeId = animeIdCache.getOrPut(episode.url) {
+            EpisodeProgress.generateAnimeId(episode.url)
+        }
+        val state = progressState(animeId, position + 1)
 
-        if (isWatched) {
+        if (state.watched) {
             holder.watchedBadge.visibility = View.VISIBLE
             holder.partialBadge.visibility = View.GONE
             holder.itemView.contentDescription = "${episode.title} - Visto"
-        } else if (lastPos > 0 && duration > 0) {
-            val progress = ((lastPos * 100) / duration).toInt().coerceIn(1, 99)
+        } else if (state.lastPos > 0 && state.duration > 0) {
+            val progress = ((state.lastPos * 100) / state.duration).toInt().coerceIn(1, 99)
             holder.partialBadge.visibility = View.VISIBLE
             holder.partialProgress.text = "${progress}% visto"
             holder.watchedBadge.visibility = View.GONE
@@ -131,9 +160,6 @@ class EpisodeAdapter(
             holder.partialBadge.visibility = View.GONE
             holder.itemView.contentDescription = episode.title
         }
-
-        holder.itemView.setOnClickListener { onEpisodeClick(episode) }
-        holder.itemView.onActionKey { onEpisodeClick(episode) }
 
         val isSelected = selectionMode && selectedUrls.contains(episode.url)
         holder.selectedCheck?.visibility = if (isSelected) View.VISIBLE else View.GONE

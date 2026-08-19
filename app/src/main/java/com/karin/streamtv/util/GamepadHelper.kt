@@ -5,8 +5,10 @@ import android.view.View
 
 fun View.onActionKey(action: () -> Unit) {
     setOnKeyListener { _, keyCode, event ->
-        if (event.action == KeyEvent.ACTION_DOWN && GamepadHelper.isSelect(keyCode)) {
-            action()
+        if (GamepadHelper.isSelect(keyCode)) {
+            // Consume ACTION_DOWN y ACTION_UP: si solo se consume DOWN, el framework
+            // genera un click sintético en UP y la acción se dispara dos veces.
+            if (event.action == KeyEvent.ACTION_DOWN) action()
             true
         } else false
     }

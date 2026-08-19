@@ -81,6 +81,9 @@ dependencies {
     // HTTP
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
+    // jcifs-ng (SMB client for network file sharing) - used by KarinLink/SmbClient
+    implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
+
     // HTML Parser (replaces fragile regex extraction)
     implementation 'org.jsoup:jsoup:1.17.2'
 
@@ -109,6 +112,10 @@ dependencies {
     implementation 'androidx.media3:media3-effect:1.9.3'
     implementation 'androidx.media3:media3-common:1.9.3'
     implementation 'androidx.media3:media3-datasource-cronet:1.9.3'
+
+    // Chromecast support (Media3 Cast)
+    implementation 'androidx.media3:media3-cast:1.9.3'
+    implementation 'com.google.android.gms:play-services-cast-framework:21.5.0'
 
     // Unit tests
     testImplementation 'junit:junit:4.13.2'

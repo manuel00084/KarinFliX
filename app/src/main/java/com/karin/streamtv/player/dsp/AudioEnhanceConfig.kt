@@ -20,6 +20,14 @@ object AudioEnhanceConfig {
         SPEAKER("True MaxBass")
     }
 
+    enum class ContentType(val label: String) {
+        NEUTRAL("Neutral"),
+        ANIME("Anime"),
+        MUSIC("Música"),
+        MOVIES("Películas"),
+        NEWS("Noticias")
+    }
+
     enum class IrPreset(val label: String) {
         NONE("Ninguno"),
         ROOM("Sala"),
@@ -751,5 +759,28 @@ object AudioEnhanceConfig {
             reverbMix = (base.reverbMix + 0.02f).coerceIn(0f, 0.5f),
             surroundWidth = (base.surroundWidth + 0.1f).coerceIn(0f, 1.5f)
         )
+    }
+
+    private const val KEY_CONTENT_TYPE = "content_type"
+
+    private var currentContentType: ContentType = ContentType.NEUTRAL
+
+    fun setContentType(ct: ContentType) {
+        currentContentType = ct
+        val idx = ct.ordinal
+        prefs?.edit()?.putInt(KEY_CONTENT_TYPE, idx)?.apply()
+    }
+
+    fun getContentType(): ContentType = currentContentType
+
+    fun detectContentType(siteName: String, url: String?): ContentType {
+        val sn = siteName.lowercase()
+        val u = url?.lowercase() ?: ""
+        return when {
+            sn.contains("music") || u.contains("music") -> ContentType.MUSIC
+            sn.contains("movie") || sn.contains("pelicula") || u.contains("movie") -> ContentType.MOVIES
+            sn.contains("noticia") || sn.contains("news") -> ContentType.NEWS
+            else -> ContentType.NEUTRAL
+        }
     }
 }

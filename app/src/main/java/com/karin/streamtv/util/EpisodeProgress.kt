@@ -71,8 +71,17 @@ object EpisodeProgress {
     }
 
     fun clearProgress(animeId: String) {
-        prefs?.edit()?.remove(KEY_WATCHED + "_" + animeId)?.apply()
-        prefs?.edit()?.remove("last_" + animeId)?.apply()
+        val editor = prefs?.edit() ?: return
+        editor.remove(KEY_WATCHED + "_" + animeId)
+        editor.remove("last_" + animeId)
+        // Limpia también las claves de posición/duración de ese anime, que antes
+        // quedaban huérfanas para siempre (fuga de disco).
+        val prefixPos = KEY_LAST_POSITION + "_" + animeId + "_"
+        val prefixDur = "duration_" + animeId + "_"
+        prefs?.all?.keys?.forEach { key ->
+            if (key.startsWith(prefixPos) || key.startsWith(prefixDur)) editor.remove(key)
+        }
+        editor.apply()
     }
 
     fun getProgressPercent(animeId: String, totalEpisodes: Int): Int {

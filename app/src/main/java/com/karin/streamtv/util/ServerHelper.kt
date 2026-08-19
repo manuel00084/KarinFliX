@@ -20,6 +20,36 @@ object ServerHelper {
         return 0
     }
 
+    /**
+     * Construye un título legible de episodio a partir de su URL,
+     * p.ej. "https://sitio/ver/beyblade-x-latino-episodio-99"
+     * -> "Beyblade X Latino - Episodio 99".
+     */
+    fun titleFromEpisodeUrl(url: String): String {
+        val clean = url.substringAfter("/ver/").substringAfterLast('/')
+            .substringBefore('?').trim()
+        if (clean.isBlank()) return "Episodio"
+        val episodeMarkers = listOf(
+            "-episodio-", "-episode-", "-capitulo-", "-capitulo", "-episodio"
+        )
+        for (marker in episodeMarkers) {
+            val idx = clean.indexOf(marker)
+            if (idx > 0) {
+                val seriesPart = clean.substring(0, idx)
+                val numPart = clean.substring(idx + marker.length)
+                val series = seriesPart.replace("-", " ")
+                    .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+                val num = numPart.replace(Regex("""\D"""), "")
+                if (num.isNotBlank()) {
+                    return "$series - Episodio $num"
+                }
+                return "$series - Episodio"
+            }
+        }
+        return clean.replace("-", " ")
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    }
+
     fun shareUrl(activity: Activity, url: String, label: String, targetPackage: String) {
         try {
             val intent = Intent(Intent.ACTION_SEND).apply {

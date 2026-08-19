@@ -16,6 +16,12 @@ class KarinLinkManager(private val context: Context) {
         private const val PREFS_NAME = "karin_link"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_DEVICE_NAME = "device_name"
+        private const val KEY_REMOTE_FS = "remote_fs_enabled"
+        private const val KEY_FS_TOKEN = "fs_token"
+
+        private val TOKEN_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+        @Volatile private var cachedToken: String? = null
     }
 
     val deviceId: String by lazy {
@@ -30,6 +36,65 @@ class KarinLinkManager(private val context: Context) {
         prefs.getString(KEY_DEVICE_NAME, null)
             ?: Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
             ?: "KarinFLiX-$deviceId"
+    }
+
+    var deviceNameMutable: String
+        get() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_DEVICE_NAME, null)
+            ?: Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+            ?: "KarinFLiX-$deviceId"
+        set(name) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_DEVICE_NAME, name)
+                .apply()
+        }
+
+    /** Alias to match KarinLinkConfigActivity expectation */
+    fun setDeviceName(name: String) { deviceNameMutable = name }
+
+    var isRemoteFileAccessEnabled: Boolean
+        get() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_REMOTE_FS, false)
+        set(v) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_REMOTE_FS, v)
+                .apply()
+        }
+
+    /** Alias to match KarinLinkConfigActivity expectation */
+    fun setRemoteFileAccess(enabled: Boolean) { isRemoteFileAccessEnabled = enabled }
+
+    val fsToken: String
+        get() {
+            cachedToken?.let { return it }
+            val t = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_FS_TOKEN, null)
+            if (t != null) { cachedToken = t; return t }
+            val newTok = generateFsToken()
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_FS_TOKEN, newTok)
+                .apply()
+            cachedToken = newTok
+            return newTok
+        }
+
+    /** Alias */
+    fun regenerateFsToken(): String {
+        val tok = generateFsToken()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_FS_TOKEN, tok)
+            .apply()
+        cachedToken = tok
+        return tok
+    }
+
+    private fun generateFsToken(): String {
+        val random = java.util.Random()
+        return (1..32).map { TOKEN_CHARS[random.nextInt(TOKEN_CHARS.length)] }.joinToString("")
     }
 
     val discoveryManager = DiscoveryManager(context)

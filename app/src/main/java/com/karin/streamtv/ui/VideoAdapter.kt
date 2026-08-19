@@ -34,7 +34,7 @@ class VideoAdapter(
 ) : RecyclerView.Adapter<VideoAdapter.ViewHolder>() {
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private val thumbCache = object : androidx.collection.LruCache<Long, Bitmap>(20 * 1024 * 1024) {
+    private val thumbCache = object : androidx.collection.LruCache<Long, Bitmap>(10 * 1024 * 1024) {
         override fun sizeOf(key: Long, value: Bitmap): Int = value.byteCount
     }
 

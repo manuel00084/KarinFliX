@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -27,15 +28,15 @@ import androidx.media3.common.util.UnstableApi
 import android.graphics.PixelFormat
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import com.karin.streamtv.R
 import com.karin.streamtv.util.AutoPlayManager
-import com.karin.streamtv.util.DeviceUtils
+
 import com.karin.streamtv.util.EpisodeProgress
 import com.karin.streamtv.util.GamepadHelper
 import com.karin.streamtv.util.onActionKey
@@ -82,10 +83,9 @@ class ExoPlayerActivity : AppCompatActivity() {
     private lateinit var btnUnlock: ImageButton
     private lateinit var btnVolume: ImageButton
     private lateinit var btnAudioPreset: TextView
-    private lateinit var btnInterp: TextView
     private lateinit var btnVideoProfile: TextView
-    private lateinit var btnUpscaler: TextView
-    private lateinit var btnInfo: TextView
+    private lateinit var btnCast: ImageButton
+    private var castHelper: CastHelper? = null
     private var seekDragging = false
     private var selectedHeight = -1
     private var gestureStartY = 0f
@@ -115,8 +115,6 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var episodeNumber: Int = 0
     private var videoTitle: String = ""
     private var serverName: String = ""
-    private var lastCpuTimeMs = 0L
-    private var lastCpuTicks = 0L
     private var currentEpisodeUrl: String = ""
     private var autoPlayTriggered: Boolean = false
     private var useEnhancedMode = false
@@ -136,6 +134,7 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var allServerNames: Array<String> = emptyArray()
     private var currentServerIndex: Int = 0
     private var serverFailoverTriggered = false
+    private var wasPlayingBeforePause = false
     private val fallbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     /** Auto-reproducir al abrir: lo gobierna el toggle "PlayNow" de Ajustes. */
@@ -145,8 +144,21 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var retryCount = 0
     private var isNetworkBack = true
     private var wasInterrupted = false
-    private var wasPlayingBeforePause = true
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var bandwidthMeter: DefaultBandwidthMeter? = null
+    private var currentNetworkTier: NetworkTier = NetworkTier.UNKNOWN
+    private var lastBandwidthBits: Long = -1L
+
+    enum class NetworkTier(val label: String, val maxBitrateBps: Int) {
+        UNKNOWN("Desconocido", Int.MAX_VALUE),
+        SLOW_2G("2G lenta", 300_000),
+        FAST_2G("2G rápida", 500_000),
+        SLOW_3G("3G lenta", 750_000),
+        FAST_3G("3G rápida", 1_500_000),
+        FAST_4G("4G / Wi-Fi lento", 3_000_000),
+        FAST_WIFI("4G / Wi-Fi rápido", 5_000_000),
+        ETHERNET("Ethernet / fibra", Int.MAX_VALUE);
+    }
     private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private val rebufferWatchdog = object : Runnable {
@@ -183,15 +195,6 @@ class ExoPlayerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (DeviceUtils.isTvDevice(this)) {
-            startActivity(
-                android.content.Intent(this, com.karin.streamtv.ui.tv.TvExoPlayerActivity::class.java)
-                    .putExtras(intent)
-            )
-            finish()
-            return
-        }
-
         setContentView(R.layout.activity_exo_player)
 
         playerContainer = findViewById(R.id.player_container)
@@ -227,10 +230,11 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnFullscreen = findViewById(R.id.btn_fullscreen)
         btnLock = findViewById(R.id.btn_lock)
         btnUnlock = findViewById(R.id.btn_unlock)
-        btnInterp = findViewById(R.id.btn_interp)
         btnVideoProfile = findViewById(R.id.btn_video_profile)
-        btnUpscaler = findViewById(R.id.btn_upscaler)
-        btnInfo = findViewById(R.id.btn_info)
+        btnCast = findViewById(R.id.btn_cast)
+
+        castHelper = CastHelper(this)
+        setupCastButton()
 
         trackSelector = TrackSelectorFactory.create(this)
 
@@ -298,12 +302,18 @@ class ExoPlayerActivity : AppCompatActivity() {
         if (referer.startsWith("http://")) referer = "https://" + referer.substringAfter("http://")
 
         useEnhancedMode = com.karin.streamtv.util.DeviceProfile.get(this).let { profile ->
-            // En gama baja el pipeline GL de mejora/interpolación es muy pesado:
-            // la APTA se adapta apagándolo automáticamente (auto-adaptación),
-            // salvo que el usuario lo fuerza explícitamente.
+            // El usuario siempre manda: si activó explícitamente mejoras, interpolación
+            // o calidad GL, el pipeline se enciende aunque el perfil sea de gama baja.
+            val userEnabled = VideoEnhanceConfig.isInterpolationEnabled() ||
+                VideoEnhanceConfig.isGlQualityMode() ||
+                VideoEnhanceConfig.snapshotEnhancements().any { it }
+            if (userEnabled) return@let true
+            // En gama baja y sin nada activado, el pipeline GL de mejora/interpolación
+            // es muy pesado: la APTA se adapta apagándolo automáticamente (auto-adaptación).
             if (!profile.supportsInterpolation && !profile.supportsGlEnhance) return@let false
             VideoEnhanceConfig.isEnabled() || VideoEnhanceConfig.isInterpolationEnabled() || VideoEnhanceConfig.isGlQualityMode()
         }
+        Log.i(TAG, "useEnhancedMode=$useEnhancedMode interp=${VideoEnhanceConfig.isInterpolationEnabled()} gl=${VideoEnhanceConfig.isGlQualityMode()} enh=${VideoEnhanceConfig.snapshotEnhancements()} tier=${com.karin.streamtv.util.DeviceProfile.get(this).tier}")
 
         val dbgExtra = intent.getIntExtra("debug_mode", -1)
         if (dbgExtra >= 0) VideoEnhanceConfig.setDebugMode(dbgExtra)
@@ -361,11 +371,6 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnAudioPreset.setOnClickListener { showDspDialog() }
         btnVideoProfile.setOnClickListener { showVideoProfileDialog() }
         updateVideoProfileButton()
-        btnInterp.setOnClickListener { showInterpolationDialog() }
-        updateInterpButton()
-        btnUpscaler.setOnClickListener { showUpscalerDialog() }
-        btnInfo.setOnClickListener { showInfoDialog() }
-        updateUpscalerButton()
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
             override fun onStartTrackingTouch(seekBar: SeekBar?) { seekDragging = true }
@@ -380,10 +385,31 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     private fun registerNetworkMonitor() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+
+        bandwidthMeter = DefaultBandwidthMeter.Builder(this).build()
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        (bandwidthMeter as? androidx.media3.exoplayer.upstream.BandwidthMeter)?.addEventListener(
+            mainHandler,
+            object : androidx.media3.exoplayer.upstream.BandwidthMeter.EventListener {
+                override fun onBandwidthSample(totalLoadTimeMs: Int, totalLoadSizeBytes: Long, bitrateEstimate: Long) {
+                    if (bitrateEstimate > 0 && bitrateEstimate != lastBandwidthBits) {
+                        lastBandwidthBits = bitrateEstimate
+                        val tier = classifyNetworkSpeed(bitrateEstimate)
+                        if (tier != currentNetworkTier) {
+                            currentNetworkTier = tier
+                            Log.i(TAG, "Network tier updated: ${tier.label} (${bitrateEstimate} bps)")
+                            applyNetworkTierBitrateCap(tier)
+                        }
+                    }
+                }
+            }
+        )
+
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 runOnUiThread {
                     isNetworkBack = true
+                    updateNetworkTier(network)
                     if (wasInterrupted) {
                         wasInterrupted = false
                         Log.i(TAG, "Network available - attempting resume")
@@ -395,15 +421,70 @@ class ExoPlayerActivity : AppCompatActivity() {
                 runOnUiThread {
                     isNetworkBack = false
                     wasInterrupted = true
+                    currentNetworkTier = NetworkTier.UNKNOWN
                     Log.w(TAG, "Network lost - pausing playback")
                     player?.pause()
                     showLoading("Sin conexión - esperando red...")
                     reconnectHandler.removeCallbacks(rebufferWatchdog)
                 }
             }
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                runOnUiThread {
+                    updateNetworkTier(network)
+                }
+            }
         }
         networkCallback = callback
         cm.registerDefaultNetworkCallback(callback)
+    }
+
+    private fun updateNetworkTier(network: Network?) {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val caps = cm.getNetworkCapabilities(network) ?: run {
+            currentNetworkTier = NetworkTier.SLOW_3G
+            applyNetworkTierBitrateCap(currentNetworkTier)
+            return
+        }
+        val tier = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NetworkTier.ETHERNET
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> {
+                if (caps.linkDownstreamBandwidthKbps > 20000) NetworkTier.FAST_WIFI else NetworkTier.FAST_4G
+            }
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                val down = caps.linkDownstreamBandwidthKbps
+                if (down < 800) NetworkTier.SLOW_3G else if (down < 2000) NetworkTier.FAST_4G else NetworkTier.FAST_WIFI
+            }
+            else -> NetworkTier.SLOW_3G
+        }
+        if (tier != currentNetworkTier) {
+            currentNetworkTier = tier
+            Log.i(TAG, "Network tier updated: ${tier.label}")
+            applyNetworkTierBitrateCap(tier)
+        }
+    }
+
+    private fun classifyNetworkSpeed(bps: Long): NetworkTier {
+        return when {
+            bps >= 20_000_000 -> NetworkTier.ETHERNET
+            bps >= 5_000_000 -> NetworkTier.FAST_WIFI
+            bps >= 3_000_000 -> NetworkTier.FAST_4G
+            bps >= 1_500_000 -> NetworkTier.FAST_3G
+            bps >= 750_000 -> NetworkTier.SLOW_3G
+            bps >= 500_000 -> NetworkTier.FAST_2G
+            bps >= 300_000 -> NetworkTier.SLOW_2G
+            else -> NetworkTier.SLOW_2G
+        }
+    }
+
+    private fun applyNetworkTierBitrateCap(tier: NetworkTier) {
+        val ts = trackSelector ?: return
+        val currentHeight = selectedHeight
+        ts.setParameters(
+            ts.buildUponParameters()
+                .setMaxVideoSize(C.LENGTH_UNSET, currentHeight)
+                .setMaxVideoBitrate(tier.maxBitrateBps)
+                .setMaxAudioBitrate(Int.MAX_VALUE)
+        )
     }
 
     private fun setupGestureControls() {
@@ -694,7 +775,9 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun showMoreDialog() {
         val options = listOf(
             "🎛 Perfil de audio (DSP)",
-            "✨ Enhancement"
+            "✨ Enhancement",
+            "🔍 Escalado de video",
+            "🎞 MotionX2 60p"
         )
         AlertDialog.Builder(this)
             .setTitle("Opciones avanzadas")
@@ -702,6 +785,8 @@ class ExoPlayerActivity : AppCompatActivity() {
                 when (which) {
                     0 -> showDspDialog()
                     1 -> showVideoProfileDialog()
+                    2 -> showUpscalerDialog()
+                    3 -> showInterpolationDialog()
                 }
             }
             .setNegativeButton("Cerrar", null)
@@ -781,6 +866,59 @@ class ExoPlayerActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupCastButton() {
+        val helper = castHelper ?: return
+        if (helper.isDeviceConnected()) {
+            btnCast.visibility = View.VISIBLE
+        }
+
+        helper.onCastSessionChanged = { connected ->
+            runOnUiThread {
+                btnCast.visibility = if (connected) View.VISIBLE else View.GONE
+                if (connected) {
+                    castCurrentVideo()
+                }
+            }
+        }
+
+        btnCast.setOnClickListener {
+            showCastDialog()
+        }
+    }
+
+    private fun showCastDialog() {
+        val helper = castHelper ?: return
+        val options = arrayOf(
+            "Enviar video a Chromecast",
+            "Desconectar Chromecast"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Chromecast")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> castCurrentVideo()
+                    1 -> {
+                        helper.disconnect()
+                        Toast.makeText(this, "Desconectado de Chromecast", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun castCurrentVideo() {
+        val helper = castHelper ?: return
+        val url = currentVideoUrl
+        if (url.isBlank()) {
+            Toast.makeText(this, "No hay video para enviar", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        helper.castVideo(url, videoTitle, "Ep. $episodeNumber")
+        Toast.makeText(this, "Enviando a Chromecast...", Toast.LENGTH_SHORT).show()
+    }
+
     private fun applySavedSpeed() {
         val p = player ?: return
         val s = com.karin.streamtv.util.AppPreferences.getPlayerSpeed()
@@ -789,7 +927,15 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun showVideoProfileDialog() {
+        val before = VideoEnhanceConfig.snapshotEnhancements()
         VideoEnhanceUi.showAdvanced(this) {
+            if (!useEnhancedMode) {
+                val changed = VideoEnhanceConfig.snapshotEnhancements() != before
+                if (changed) {
+                    useEnhancedMode = true
+                    restartWithEnhanced()
+                }
+            }
             updateVideoProfileButton()
             showController()
         }
@@ -829,7 +975,6 @@ if (which == 0) {
                     VideoEnhanceConfig.setInterpolationMode(mode)
                     VideoEnhanceConfig.setInterpolationEnabled(true)
                 }
-                updateInterpButton()
                 if (VideoEnhanceConfig.isInterpolationEnabled() && !useEnhancedMode) {
                     useEnhancedMode = true
                     restartWithEnhanced()
@@ -838,13 +983,6 @@ if (which == 0) {
             }
             .setNegativeButton("Cerrar", null)
             .show()
-    }
-
-    private fun updateInterpButton() {
-        val enabled = VideoEnhanceConfig.isInterpolationEnabled()
-        val mode = VideoEnhanceConfig.interpolationMode()
-        btnInterp.text = if (!enabled) "MotionX2 60p: OFF"
-                         else "MotionX2 60p: ${mode.label}"
     }
 
     private fun restartWithEnhanced() {
@@ -898,182 +1036,10 @@ if (which == 0) {
             .setTitle("Escalado de Video")
             .setSingleChoiceItems(labels, selectedIdx) { _, which ->
                 VideoEnhanceConfig.setUpscalerMode(modes[which])
-                updateUpscalerButton()
                 showController()
             }
             .setNegativeButton("Cerrar", null)
             .show()
-    }
-
-    private fun updateUpscalerButton() {
-        val mode = VideoEnhanceConfig.getUpscalerMode()
-        btnUpscaler.text = "Escala: ${mode.label}"
-    }
-
-    private fun showInfoDialog() {
-        val p = player
-        val r = processor?.renderer
-        val cfg = com.karin.streamtv.player.VideoEnhanceConfig
-
-        // Datos de ExoPlayer (formato, codec, resolución, bitrate)
-        var videoFormat: androidx.media3.common.Format? = null
-        var audioFormat: androidx.media3.common.Format? = null
-        try {
-            p?.currentTracks?.groups?.forEach { group ->
-                for (i in 0 until group.length) {
-                    if (!group.isTrackSupported(i)) continue
-                    val f = group.getTrackFormat(i)
-                    if (f.sampleMimeType?.startsWith("video/") == true && videoFormat == null) videoFormat = f
-                    if (f.sampleMimeType?.startsWith("audio/") == true && audioFormat == null) audioFormat = f
-                }
-            }
-        } catch (_: Throwable) {}
-
-        val vf = videoFormat
-        val codecName = try {
-            p?.videoFormat?.codecs ?: vf?.codecs ?: "—"
-        } catch (_: Throwable) { "—" }
-        val mime = vf?.sampleMimeType ?: "—"
-        val isLocal = isLocalUrl(currentVideoUrl)
-        val serverLabel = if (isLocal) "Video local (dispositivo)" else serverNameOrUrl()
-        val enhanced = useEnhancedMode && processor != null
-        val interpOn = r?.interpolationActive == true
-        val upscaler = cfg.getUpscalerMode()
-
-        val sb = StringBuilder()
-        sb.appendLine("🎬 ${if (videoTitle.isNotBlank()) videoTitle else "(sin título)"}")
-        if (episodeNumber > 0) sb.appendLine("   Episodio $episodeNumber")
-        sb.appendLine()
-
-        // Fuente
-        sb.appendLine("🌐 Fuente: $serverLabel")
-        if (!isLocal && serverName.isNotBlank()) sb.appendLine("   Servidor: $serverName")
-        sb.appendLine()
-
-        // Video
-        val inW = r?.videoInputWidth() ?: 0
-        val inH = r?.videoInputHeight() ?: 0
-        val outW = viewWidth()
-        val outH = viewHeight()
-        sb.appendLine("📹 VIDEO")
-        sb.appendLine("   Formato: ${formatShort(mime)}")
-        sb.appendLine("   Códec: ${codecName.ifBlank { "—" }}")
-        sb.appendLine("   Resolución entrada: ${if (inW > 0) "${inW}×${inH}" else vf?.let { "${it.width}×${it.height}" } ?: "—"}")
-        sb.appendLine("   Resolución salida: ${if (outW > 0) "${outW}×${outH}" else "—"}")
-        val bitrate = vf?.bitrate ?: -1
-        sb.appendLine("   Bitrate video: ${if (bitrate > 0) formatBytes(bitrate) + "/s" else "—"}")
-        sb.appendLine()
-
-        // Audio
-        sb.appendLine("🔊 AUDIO")
-        val aBitrate = audioFormat?.bitrate ?: -1
-        sb.appendLine("   Códec: ${audioFormat?.codecs?.ifBlank { "—" } ?: "—"}")
-        sb.appendLine("   Bitrate: ${if (aBitrate > 0) formatBytes(aBitrate) + "/s" else "—"}")
-        sb.appendLine()
-
-        // FPS
-        sb.appendLine("⏱ FPS")
-        sb.appendLine("   Entrada (fuente): ${"%.1f".format(r?.sourceFps ?: 0f)} fps")
-        sb.appendLine("   Salida (render): ${"%.1f".format(r?.outputFps ?: 0f)} fps")
-        sb.appendLine("   Tiempo frame: ${"%.2f".format(r?.frameMs ?: 0f)} ms")
-        sb.appendLine("   Interpolación: ${if (interpOn) "ACTIVA" else "inactiva"}")
-        sb.appendLine("   Frames caídos: ${r?.droppedFrames ?: 0}")
-        sb.appendLine()
-
-        // Recursos
-        val mem = runtimeMemInfo()
-        sb.appendLine("💾 RECURSOS")
-        sb.appendLine("   RAM (app): ${mem.first} MB  (heap ${mem.second}/${mem.third} MB)")
-        sb.appendLine("   CPU: ${cpuUsageString()}")
-        sb.appendLine("   VRAM: ${vramInfo(r)}")
-        sb.appendLine()
-
-        // Pipeline
-        sb.appendLine("⚙️ PIPELINE")
-        sb.appendLine("   Motor: ${if (enhanced) "Media3 + GL 60fps" else "ExoPlayer estándar"}")
-        sb.appendLine("   Upscaler: ${if (enhanced) upscaler.label else "—"}")
-        sb.appendLine("   Calidad: ${r?.qualityLabel ?: cfg.qualityLabel()}")
-        sb.appendLine("   FrameMs target: 16.6 ms")
-
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Análisis de reproducción")
-            .setMessage(sb.toString())
-            .setPositiveButton("Actualizar", { _, _ -> showInfoDialog() })
-            .setNegativeButton("Cerrar", null)
-            .setOnDismissListener(null)
-            .show()
-    }
-
-    private fun formatShort(mime: String): String = when {
-        mime.contains("av1") -> "AV1"
-        mime.contains("vp9") -> "VP9"
-        mime.contains("vp8") -> "VP8"
-        mime.contains("hevc") || mime.contains("h265") -> "HEVC (H.265)"
-        mime.contains("avc") || mime.contains("h264") -> "H.264 (AVC)"
-        mime.contains("mp4") -> "MP4"
-        mime.contains("webm") -> "WebM"
-        mime.contains("mpeg") -> "MPEG"
-        mime.contains("mp3") -> "MP3"
-        mime.contains("aac") -> "AAC"
-        mime.contains("opus") -> "Opus"
-        mime.contains("flac") -> "FLAC"
-        mime.contains("ac3") -> "AC-3"
-        mime.contains("eac3") -> "E-AC-3"
-        mime.contains("dts") -> "DTS"
-        else -> mime.ifBlank { "—" }
-    }
-
-    private fun formatBytes(bits: Int): String {
-        val b = bits / 8L
-        return when {
-            b >= 1_000_000 -> "%.1f MB".format(b / 1_000_000f)
-            b >= 1_000 -> "%.1f kB".format(b / 1_000f)
-            else -> "$b B"
-        }
-    }
-
-    private fun viewWidth(): Int = processor?.renderer?.viewWidth() ?: 0
-
-    private fun viewHeight(): Int = processor?.renderer?.viewHeight() ?: 0
-
-    private fun serverNameOrUrl(): String {
-        val raw = currentVideoUrl
-        if (raw.isBlank()) return "—"
-        return try {
-            android.net.Uri.parse(raw).host?.removePrefix("www.") ?: raw
-        } catch (_: Throwable) { raw }
-    }
-
-    private fun runtimeMemInfo(): Triple<String, Long, Long> {
-        val rt = Runtime.getRuntime()
-        val total = rt.totalMemory() / (1024 * 1024)
-        val free = rt.freeMemory() / (1024 * 1024)
-        val used = total - free
-        val max = rt.maxMemory() / (1024 * 1024)
-        return Triple("$used", used, max)
-    }
-
-    private fun cpuUsageString(): String {
-        return try {
-            // CPU usada por la app vía /proc/self/stat (user+system ticks)
-            val stat = java.io.File("/proc/self/stat").readText()
-            val fields = stat.split(" ")
-            // fields 14 (utime) y 15 (stime) - índices 13 y 14 en array de 1-based
-            val utime = fields.getOrNull(13)?.toLongOrNull() ?: 0L
-            val stime = fields.getOrNull(14)?.toLongOrNull() ?: 0L
-            val now = System.currentTimeMillis()
-            val dtMs = (now - lastCpuTimeMs).coerceAtLeast(1L)
-            val dTicks = ((utime + stime) - lastCpuTicks).coerceAtLeast(0L)
-            lastCpuTimeMs = now
-            lastCpuTicks = utime + stime
-            val pct = dTicks * 100f / dtMs
-            "%.1f%%".format(pct.coerceAtMost(100f))
-        } catch (_: Throwable) { "—" }
-    }
-
-    private fun vramInfo(r: com.karin.streamtv.player.Media3SixtyFpsProcessor.InterpolationRenderer?): String {
-        if (r == null) return "— (no GL)"
-        return "~${r.approxVramMb()} MB"
     }
 
     private fun applySavedVolume() {
@@ -1650,9 +1616,24 @@ if (which == 0) {
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
             || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY
             || keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE
-            || keyCode == KeyEvent.KEYCODE_SPACE
-            || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+            || keyCode == KeyEvent.KEYCODE_SPACE) {
             togglePlayPause()
+            return true
+        }
+        // Navegación con control remoto: con el panel oculto, OK/ENTER muestra
+        // los controles; con el panel visible, el botón enfocado recibe el OK.
+        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+            || keyCode == KeyEvent.KEYCODE_ENTER
+            || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+        ) {
+            if (controllerPanel.visibility != View.VISIBLE) {
+                showController()
+                return true
+            }
+            return super.onKeyDown(keyCode, event)
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            showController()
             return true
         }
         return super.onKeyDown(keyCode, event)
@@ -1695,6 +1676,8 @@ if (which == 0) {
             } catch (_: Exception) {}
         }
         networkCallback = null
+        castHelper?.release()
+        castHelper = null
         val proc = processor
         processor = null
         trackSelector = null

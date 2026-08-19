@@ -233,4 +233,13 @@ object VideoEnhanceConfig {
 
     fun seekBarToSuperRes(progress: Int): Float = progress / 100f
     fun superResToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
+
+    fun snapshotEnhancements(): List<Boolean> = listOf(
+        superResEnabled(),
+        detailBoostEnabled(),
+        lightBoostEnabled(),
+        hdrEnabled(),
+        grainEnabled(),
+        adaptiveSharpEnabled()
+    )
 }
