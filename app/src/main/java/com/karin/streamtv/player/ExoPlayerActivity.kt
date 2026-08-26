@@ -12,8 +12,13 @@ import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -369,7 +374,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnQuality.setOnClickListener { showQualityDialog() }
         btnVolume.setOnClickListener { showVolumeDialog() }
         btnAudioPreset.setOnClickListener { showDspDialog() }
-        btnVideoProfile.setOnClickListener { showVideoProfileDialog() }
+        btnVideoProfile.setOnClickListener { showMoreDialog() }
         updateVideoProfileButton()
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {}
@@ -775,22 +780,65 @@ class ExoPlayerActivity : AppCompatActivity() {
     private fun showMoreDialog() {
         val options = listOf(
             "🎛 Perfil de audio (DSP)",
-            "✨ Enhancement",
+            "── Mejoras de video ──",
+            "🔹 Detail Boost",
+            "💡 Light Boost",
+            "🎨 Color Boost",
+            "🧱 Low Bitrate Boost",
+            "── Movimiento y escala ──",
             "🔍 Escalado de video",
-            "🎞 MotionX2 60p"
+            "🎞 MotionX2 Boost",
+            "── Herramientas ──",
+            "🖥 Demo mode"
         )
         AlertDialog.Builder(this)
             .setTitle("Opciones avanzadas")
             .setItems(options.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> showDspDialog()
-                    1 -> showVideoProfileDialog()
-                    2 -> showUpscalerDialog()
-                    3 -> showInterpolationDialog()
+                    2 -> showSingleFeatureDialog("Detail Boost", { VideoEnhanceConfig.detailBoostEnabled() }, { VideoEnhanceConfig.getDetailBoost() }, "Realza bordes y micro-detalles (texturas, pelo, vegetación) con máscara de enfoque, sin ruido ni halos artificiales.") { en, v -> VideoEnhanceConfig.setDetailBoostEnabled(en); VideoEnhanceConfig.setDetailBoost(v) }
+                    3 -> showSingleFeatureDialog(
+                        "Light Boost",
+                        { VideoEnhanceConfig.lightBoostEnabled() },
+                        { VideoEnhanceConfig.getLightBoost() },
+                        "Levanta sombras y tonos medios para revelar detalle en escenas oscuras o lavadas, sin quemar luces ni desnaturalizar la imagen.",
+                        "Estilo HDR (suma glow y tonemap sobre Light Boost)",
+                        { VideoEnhanceConfig.lightBoostHdrEnabled() },
+                        { en -> VideoEnhanceConfig.setLightBoostHdrEnabled(en); if (en) { VideoEnhanceConfig.setLightBoostEnabled(true); if (!useEnhancedMode) { useEnhancedMode = true; restartWithEnhanced() } } }
+                    ) { en, v -> VideoEnhanceConfig.setLightBoostEnabled(en); VideoEnhanceConfig.setLightBoost(v) }
+                    4 -> showSingleFeatureDialog("Color Boost", { VideoEnhanceConfig.colorBoostEnabled() }, { VideoEnhanceConfig.colorBoostToSeekBar(VideoEnhanceConfig.getColorBoost()) / 100f }, "Aumenta la saturación de forma inteligente (más en colores apagados, menos en pieles), simulando un gamut más amplio tipo cine para mayor riqueza.") { en, v -> VideoEnhanceConfig.setColorBoostEnabled(en); VideoEnhanceConfig.setColorBoost(0.5f + v * 1.5f) }
+                    5 -> showSingleFeatureDialog("Low Bitrate Boost", { VideoEnhanceConfig.superResEnabled() }, { VideoEnhanceConfig.getSuperRes() }, "Repara artefactos de compresión en videos de baja calidad (bloques, bandas de color y bordes dentados), restaurando detalle y suavidad sin amplificar el ruido.") { en, v -> VideoEnhanceConfig.setSuperResEnabled(en); VideoEnhanceConfig.setSuperRes(v) }
+                    7 -> showUpscalerDialog()
+                    8 -> showInterpolationDialog()
+                    10 -> showDemoDialog()
                 }
             }
             .setNegativeButton("Cerrar", null)
             .show()
+    }
+
+    private fun showSingleFeatureDialog(
+        title: String,
+        enabled: () -> Boolean,
+        value: () -> Float,
+        description: String? = null,
+        extraToggleLabel: String? = null,
+        extraToggle: (() -> Boolean)? = null,
+        onExtraToggle: ((Boolean) -> Unit)? = null,
+        onSave: (Boolean, Float) -> Unit
+    ) {
+        val before = VideoEnhanceConfig.snapshotEnhancements()
+        VideoEnhanceUi.showSingleFeature(this, title, enabled, value, onSave, description, extraToggleLabel, extraToggle, onExtraToggle) {
+            if (!useEnhancedMode) {
+                val changed = VideoEnhanceConfig.snapshotEnhancements() != before
+                if (changed) {
+                    useEnhancedMode = true
+                    restartWithEnhanced()
+                }
+            }
+            updateVideoProfileButton()
+            showController()
+        }
     }
 
     private fun showServerPickerDialog() {
@@ -926,23 +974,37 @@ class ExoPlayerActivity : AppCompatActivity() {
         btnSpeed.text = speedLabel(s)
     }
 
-    private fun showVideoProfileDialog() {
-        val before = VideoEnhanceConfig.snapshotEnhancements()
-        VideoEnhanceUi.showAdvanced(this) {
-            if (!useEnhancedMode) {
-                val changed = VideoEnhanceConfig.snapshotEnhancements() != before
-                if (changed) {
+    private fun showDemoDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(56, 24, 56, 16)
+        }
+        val cb = CheckBox(this).apply {
+            text = "Activar Demo mode (split screen)"
+            isChecked = VideoEnhanceConfig.getDebugMode() == 8
+            setPadding(0, 8, 0, 8)
+        }
+        container.addView(cb)
+        AlertDialog.Builder(this)
+            .setTitle("Demo mode")
+            .setView(container)
+            .setPositiveButton("Cerrar") { _, _ ->
+                val mode = if (cb.isChecked) 8 else 0
+                VideoEnhanceConfig.setDebugMode(mode)
+                if (cb.isChecked && !useEnhancedMode) {
                     useEnhancedMode = true
                     restartWithEnhanced()
                 }
+                processor?.renderer?.setDebugModeValue(mode)
+                updateVideoProfileButton()
+                showController()
             }
-            updateVideoProfileButton()
-            showController()
-        }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun updateVideoProfileButton() {
-        btnVideoProfile.text = "Enhancement: ON"
+        btnVideoProfile.text = "Mejoras"
     }
 
     private fun skipToPlaylist(delta: Int) {
@@ -962,25 +1024,52 @@ class ExoPlayerActivity : AppCompatActivity() {
     }
 
     private fun showInterpolationDialog() {
-        val labels = arrayOf("Apagado") + VideoEnhanceConfig.InterpolationMode.entries.map { it.label }
+        val items = listOf("Apagado") + VideoEnhanceConfig.InterpolationMode.entries.map { it.label }
         val selectedIdx = if (!VideoEnhanceConfig.isInterpolationEnabled()) 0
                           else VideoEnhanceConfig.interpolationMode().ordinal + 1
-        AlertDialog.Builder(this)
-            .setTitle("MotionX2 60p")
-            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
-if (which == 0) {
-                    VideoEnhanceConfig.setInterpolationEnabled(false)
-                } else {
-                    val mode = VideoEnhanceConfig.InterpolationMode.entries[which - 1]
-                    VideoEnhanceConfig.setInterpolationMode(mode)
-                    VideoEnhanceConfig.setInterpolationEnabled(true)
+        val isHighEnd = com.karin.streamtv.util.DeviceProfile.get(this).tier == com.karin.streamtv.util.DeviceProfile.Tier.HIGH
+        val scroll = ScrollView(this)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 24, 40, 16)
+        }
+        container.addView(TextView(this).apply {
+            text = "Crea fotogramas intermedios para duplicar la velocidad (24/30fps → ~60fps) y suavizar el movimiento. El modo 'Alta gama' es más exigente y solo se recomienda en equipos potentes."
+            textSize = 13f
+            setPadding(0, 0, 0, 16)
+            setTextColor(android.graphics.Color.parseColor("#AAB0B8"))
+        })
+        val group = RadioGroup(this)
+        items.forEachIndexed { idx, label ->
+            val rb = RadioButton(this).apply {
+                text = label
+                isChecked = idx == selectedIdx
+                setPadding(0, 8, 0, 8)
+                setOnClickListener {
+                    if (idx == 0) {
+                        VideoEnhanceConfig.setInterpolationEnabled(false)
+                    } else {
+                        val mode = VideoEnhanceConfig.InterpolationMode.entries[idx - 1]
+                        if (mode == VideoEnhanceConfig.InterpolationMode.HIGH_END && !isHighEnd) {
+                            Toast.makeText(this@ExoPlayerActivity, "⚠️ Modo alta gama: pensado solo para equipos potentes. En este dispositivo puede causar tirones.", Toast.LENGTH_LONG).show()
+                        }
+                        VideoEnhanceConfig.setInterpolationMode(mode)
+                        VideoEnhanceConfig.setInterpolationEnabled(true)
+                    }
+                    if (VideoEnhanceConfig.isInterpolationEnabled() && !useEnhancedMode) {
+                        useEnhancedMode = true
+                        restartWithEnhanced()
+                    }
+                    showController()
                 }
-                if (VideoEnhanceConfig.isInterpolationEnabled() && !useEnhancedMode) {
-                    useEnhancedMode = true
-                    restartWithEnhanced()
-                }
-                showController()
             }
+            group.addView(rb)
+        }
+        container.addView(group)
+        scroll.addView(container)
+        AlertDialog.Builder(this)
+            .setTitle("MotionX2 Boost")
+            .setView(scroll)
             .setNegativeButton("Cerrar", null)
             .show()
     }
@@ -1029,15 +1118,39 @@ if (which == 0) {
 
     private fun showUpscalerDialog() {
         val modes = VideoEnhanceConfig.mainUpscalers
-        val labels = modes.map { it.label }.toTypedArray()
         val current = VideoEnhanceConfig.getUpscalerMode()
-        val selectedIdx = modes.indexOfFirst { it == current }.coerceAtLeast(0)
+        val scroll = ScrollView(this)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 24, 40, 16)
+        }
+        container.addView(TextView(this).apply {
+            text = "Sube la resolución con la que se muestra el video en pantalla. HW (bilineal/bicúbico) es rápido y suave; Anime4K y FSR 1.0 dan más nitidez al ampliar contenido de baja resolución, pero usan más recursos."
+            textSize = 13f
+            setPadding(0, 0, 0, 16)
+            setTextColor(android.graphics.Color.parseColor("#AAB0B8"))
+        })
+        val group = RadioGroup(this)
+        var checkedId = -1
+        modes.forEachIndexed { idx, mode ->
+            val rb = RadioButton(this).apply {
+                id = idx + 1
+                text = mode.label
+                setPadding(0, 8, 0, 8)
+                setOnClickListener {
+                    VideoEnhanceConfig.setUpscalerMode(mode)
+                    showController()
+                }
+            }
+            if (mode == current) checkedId = rb.id
+            group.addView(rb)
+        }
+        if (checkedId != -1) group.check(checkedId) else group.clearCheck()
+        container.addView(group)
+        scroll.addView(container)
         AlertDialog.Builder(this)
             .setTitle("Escalado de Video")
-            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
-                VideoEnhanceConfig.setUpscalerMode(modes[which])
-                showController()
-            }
+            .setView(scroll)
             .setNegativeButton("Cerrar", null)
             .show()
     }

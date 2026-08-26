@@ -70,24 +70,6 @@ class SettingsActivity : FragmentActivity() {
         btnBack.setOnClickListener { finish() }
         btnBack.onActionKey { btnBack.performClick() }
 
-        val btnTutorial = findViewById<android.widget.LinearLayout>(R.id.row_tutorial)
-        btnTutorial.setOnClickListener {
-            startActivity(android.content.Intent(this, TutorialActivity::class.java))
-        }
-        btnTutorial.onActionKey { btnTutorial.performClick() }
-
-        val rowTerms = findViewById<android.widget.LinearLayout>(R.id.row_terms)
-        rowTerms.setOnClickListener {
-            startActivity(android.content.Intent(this, TermsAndConditionsActivity::class.java))
-        }
-        rowTerms.onActionKey { rowTerms.performClick() }
-
-        val rowCredits = findViewById<android.widget.LinearLayout>(R.id.row_credits)
-        rowCredits.setOnClickListener {
-            startActivity(android.content.Intent(this, CreditsActivity::class.java))
-        }
-        rowCredits.onActionKey { rowCredits.performClick() }
-
         setupCodecRow()
 
         if (DeviceUtils.isTvDevice(this)) {

@@ -8,7 +8,8 @@ object VideoEnhanceConfig {
     enum class InterpolationMode(val label: String, val intValue: Int) {
         X2("Frame x2 (simple)", 1),
         BLEND("Suavizado (Blend)", 2),
-        HYBRID("Doubling + Micro-Blend (recomendado)", 4)
+        HYBRID("Doubling + Micro-Blend (recomendado)", 4),
+        HIGH_END("Interpolacion Real (Solo para Gama Alta)", 8)
     }
 
     enum class CodecMode(val label: String, val hint: String) {
@@ -34,6 +35,7 @@ object VideoEnhanceConfig {
     private const val KEY_BRIGHTNESS = "brightness"
     private const val KEY_SHARPNESS = "sharpness"
     private const val KEY_COLOR_BOOST = "color_boost"
+    private const val KEY_COLOR_BOOST_EN = "color_boost_en"
     private const val KEY_DENOISE = "denoise"
     private const val KEY_DEBAND = "deband"
     private const val KEY_DEBLOCK = "deblock"
@@ -54,6 +56,7 @@ object VideoEnhanceConfig {
     private const val KEY_DETAIL_BOOST_EN = "detail_boost_en"
     private const val KEY_LIGHT_BOOST = "light_boost"
     private const val KEY_LIGHT_BOOST_EN = "light_boost_en"
+    private const val KEY_LIGHT_BOOST_HDR = "light_boost_hdr"
     private const val KEY_SUPER_RES = "super_res"
     private const val KEY_SUPER_RES_EN = "super_res_en"
     private const val KEY_DEBUG_MODE = "debug_mode"
@@ -96,6 +99,8 @@ object VideoEnhanceConfig {
     fun getSharpness(): Float = prefs?.getFloat(KEY_SHARPNESS, 0.0f) ?: 0.0f
     fun setSharpness(v: Float) { prefs?.edit()?.putFloat(KEY_SHARPNESS, v)?.apply() }
 
+    fun colorBoostEnabled(): Boolean = prefs?.getBoolean(KEY_COLOR_BOOST_EN, false) ?: false
+    fun setColorBoostEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_COLOR_BOOST_EN, b)?.apply() }
     fun getColorBoost(): Float = prefs?.getFloat(KEY_COLOR_BOOST, 1.0f) ?: 1.0f
     fun setColorBoost(v: Float) { prefs?.edit()?.putFloat(KEY_COLOR_BOOST, v)?.apply() }
 
@@ -149,6 +154,8 @@ object VideoEnhanceConfig {
     fun setLightBoostEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_LIGHT_BOOST_EN, b)?.apply() }
     fun getLightBoost(): Float = prefs?.getFloat(KEY_LIGHT_BOOST, 0.7f) ?: 0.7f
     fun setLightBoost(v: Float) { prefs?.edit()?.putFloat(KEY_LIGHT_BOOST, v.coerceIn(0f, 1f))?.apply() }
+    fun lightBoostHdrEnabled(): Boolean = prefs?.getBoolean(KEY_LIGHT_BOOST_HDR, false) ?: false
+    fun setLightBoostHdrEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_LIGHT_BOOST_HDR, b)?.apply() }
 
     fun superResEnabled(): Boolean = prefs?.getBoolean(KEY_SUPER_RES_EN, false) ?: false
     fun setSuperResEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_SUPER_RES_EN, b)?.apply() }
@@ -156,7 +163,7 @@ object VideoEnhanceConfig {
     fun setSuperRes(v: Float) { prefs?.edit()?.putFloat(KEY_SUPER_RES, v.coerceIn(0f, 1f))?.apply() }
 
     fun getDebugMode(): Int = prefs?.getInt(KEY_DEBUG_MODE, 0) ?: 0
-    fun setDebugMode(v: Int) { prefs?.edit()?.putInt(KEY_DEBUG_MODE, v.coerceIn(0, 7))?.apply() }
+    fun setDebugMode(v: Int) { prefs?.edit()?.putInt(KEY_DEBUG_MODE, v.coerceIn(0, 8))?.apply() }
 
     fun getUpscalerMode(): UpscalerMode {
         val idx = prefs?.getInt(KEY_UPSCALER_MODE, 0) ?: 0
@@ -186,6 +193,7 @@ object VideoEnhanceConfig {
         5 -> "MOTION"
         6 -> "V0V1"
         7 -> "VISUAL"
+        8 -> "DEMO"
         else -> "OFF"
     }
 
@@ -239,6 +247,7 @@ object VideoEnhanceConfig {
         detailBoostEnabled(),
         lightBoostEnabled(),
         hdrEnabled(),
+        colorBoostEnabled(),
         grainEnabled(),
         adaptiveSharpEnabled()
     )
