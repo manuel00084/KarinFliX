@@ -112,6 +112,8 @@ dependencies {
     implementation 'androidx.media3:media3-effect:1.9.3'
     implementation 'androidx.media3:media3-common:1.9.3'
     implementation 'androidx.media3:media3-datasource-cronet:1.9.3'
+    implementation 'androidx.media3:media3-datasource:1.9.3'
+    implementation 'androidx.media3:media3-database:1.9.3'
 
     // Chromecast support (Media3 Cast)
     implementation 'androidx.media3:media3-cast:1.9.3'

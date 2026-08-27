@@ -1,11 +1,15 @@
 ﻿package com.karin.streamtv.player
 
+import android.app.Activity
 import android.content.Context
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.os.Build
 import android.util.Log
 import android.view.Surface
+import android.view.Window
+import android.view.WindowManager
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -81,6 +85,22 @@ class Media3SixtyFpsProcessor(
         )
         glSurface.setRenderer(renderer)
         glSurface.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+        if (context is Activity) applyDisplayRate(context.window)
+    }
+
+    /**
+     * Elige y aplica la mejor tasa de refresco del panel (60/120 Hz) para mostrar
+     * "60p reales" y deja que el MEMC propio del televisor/móvil coopere cuando la
+     * interpolación de la app está apagada. Llamar al iniciar la reproducción.
+     */
+    fun applyDisplayRate(window: Window) {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        val display = wm?.defaultDisplay
+        if (display != null) {
+            DisplayRateManager.apply(window, display, VideoEnhanceConfig.isInterpolationEnabled())
+        }
+        renderer?.targetDisplayFps = DisplayRateManager.targetDisplayFps
+        Log.i(TAG, "Display rate target=${DisplayRateManager.targetDisplayFps.toInt()}fps native=${DisplayRateManager.nativeRefreshRate.toInt()}hz mode=${DisplayRateManager.selectedModeId}")
     }
 
     fun connectPlayer(player: ExoPlayer) {
@@ -195,6 +215,7 @@ class Media3SixtyFpsProcessor(
 
         private var downTexId = 0
         private var downFbo = 0
+        private var blueNoiseTexId = 0
 
         private var renderScale = 1f
         private var drsFbo = 0
@@ -257,6 +278,8 @@ class Media3SixtyFpsProcessor(
                 vec2 dirV = vec2(0.0, lumaT - lumaB);
                 float lenH = abs(dirH.x) + 0.001;
                 float lenV = abs(dirV.y) + 0.001;
+                // Direccionamiento anisotrópico (estilo FSR 4/EDA): prioriza el gradiente
+                // dominante en vez de un promedio isotrópico, mejor reconstrucción de bordes.
                 vec2 dir = normalize(dirH * lenH + dirV * lenV + vec2(0.001));
                 float peak = -1.0 / mix(8.0, 5.0, uSharpness);
                 vec2 dir2 = dir * texel;
@@ -280,7 +303,21 @@ class Media3SixtyFpsProcessor(
                 result -= (sp3 - c) * peakVal3;
                 result -= (sp4 - c) * peakVal4;
                 result = clamp(c + (result - c) * 1.3, vec3(0.0), vec3(1.0));
-                return result;
+
+                // Clamp anti-overshoot (estilo FSR 3.1): restringe a vecinos para no
+                // crear halos ni ringing en bordes afilados.
+                vec3 mn = min(c, min(min(t, b), min(l, r)));
+                vec3 mx = max(c, max(max(t, b), max(l, r)));
+                result = clamp(result, mn, mx);
+
+                // Preservación de tono/saturación (estilo FSR 4): el sharpening no debe
+                // distorsionar el color; escala solo la luma y conserva la croma.
+                float lumaR2 = dot(result, vec3(0.2126, 0.7152, 0.0722));
+                float lumaC2 = lumaC;
+                float lGain = (lumaR2 - lumaC2) * 0.7;
+                result = c + vec3(lGain);
+
+                return clamp(result, vec3(0.0), vec3(1.0));
             }
 
             void main() {
@@ -292,6 +329,7 @@ class Media3SixtyFpsProcessor(
         @Volatile var interpolationActive = false
             private set
         @Volatile var sourceFps = 24f
+        @Volatile var targetDisplayFps = 60f
         @Volatile var outputFps = 0f
         @Volatile var frameMs = 0f
         @Volatile var motionLevel = 0f
@@ -327,6 +365,8 @@ class Media3SixtyFpsProcessor(
         private var passthroughLatch = false
 
         private var stopped = false
+        private var rateAppliedAt = -1f
+        private var rateAppliedInterp = false
 
         private var viewWidth = 0
         private var viewHeight = 0
@@ -425,6 +465,10 @@ class Media3SixtyFpsProcessor(
         private var gMotionTexLoc = -1
         private var gPosLoc = -1
         private var gTexLoc = -1
+        private var blueNoiseTexLoc = -1
+        private var blueNoiseSizeLoc = -1
+        private var ditherEnabledLoc = -1
+        private var ditherStrengthLoc = -1
 
         private fun trackOutputFps(frameStartNs: Long, now: Long) {
             fpsFrames++
@@ -493,6 +537,7 @@ class Media3SixtyFpsProcessor(
                 GLES20.glDeleteTextures(11, intArrayOf(inputTexId, prevTexId, motionTexId, staticTexId, motionAccumId, downTexId, globalTexId, coarseTexId, motionBwdId, motionBwdAccumId, drsTexId), 0)
                 inputTexId = 0; prevTexId = 0; motionTexId = 0; staticTexId = 0; motionAccumId = 0; downTexId = 0; globalTexId = 0; coarseTexId = 0; motionBwdId = 0; motionBwdAccumId = 0; drsTexId = 0
             }
+            if (blueNoiseTexId != 0) { GLES20.glDeleteTextures(1, intArrayOf(blueNoiseTexId), 0); blueNoiseTexId = 0 }
             inputSurfaceTexture?.release()
             inputSurfaceTexture = null
             cachedOutputSurface?.release()
@@ -558,6 +603,10 @@ class Media3SixtyFpsProcessor(
             uniform float uFsrScale;
             uniform float uFsrSharpness;
             uniform vec2 uVideoRes;
+            uniform sampler2D uBlueNoiseTex;
+            uniform vec2 uBlueNoiseSize;
+            uniform float uDitherEnabled;
+            uniform float uDitherStrength;
 
             vec3 adjustSaturation(vec3 c, float s) {
                 float g = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -566,6 +615,23 @@ class Media3SixtyFpsProcessor(
 
             float hash(vec2 p) {
                 return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+            }
+
+            float interleavedGradientNoise(vec2 uv) {
+                return fract(52.9829189 * fract(dot(uv, vec2(0.06711056, 0.00583715))));
+            }
+
+            vec3 blueNoiseDither(vec3 color, vec2 fragCoord, float strength) {
+                if (uDitherEnabled < 0.5 || strength < 0.001) return color;
+                float noise;
+                if (uBlueNoiseSize.x > 0.5) {
+                    vec2 noiseCoord = fragCoord / uBlueNoiseSize;
+                    noise = texture2D(uBlueNoiseTex, noiseCoord).r;
+                } else {
+                    noise = interleavedGradientNoise(fragCoord);
+                }
+                color += (noise - 0.5) * strength * (1.0 / 255.0);
+                return clamp(color, 0.0, 1.0);
             }
 
             vec3 anime4kEdge(vec3 color, vec2 uv, vec2 inputTexel) {
@@ -696,9 +762,17 @@ class Media3SixtyFpsProcessor(
                     vec3 interp;
                     float mask;
                     if (uMode > 3.5) {
-                        // Híbrido recomendado: frame-doubling + micro-blend
+                        // Híbrido recomendado: frame-doubling + micro-blend adaptativo al movimiento.
+                        // El blend prev->curr solo suaviza donde la escena está quieta; se atenúa
+                        // con el movimiento local para eliminar estelas/ghosting durante el movimiento
+                        // y se acota al rango de ambos frames para no generar halos de color.
+                        vec4 mh = texture2D(uMotionTex, vTexCoord);
+                        float localMov = clamp(mh.a * 6.0, 0.0, 1.0);
+                        float blend = 0.12 * (1.0 - localMov);
                         vec3 pv = texture2D(uPrevTex, vTexCoord).rgb;
-                        interp = mix(curr.rgb, pv, 0.10);
+                        vec3 lo = min(pv, curr.rgb);
+                        vec3 hi = max(pv, curr.rgb);
+                        interp = clamp(mix(curr.rgb, pv, blend), lo, hi);
                         mask = 1.0;
                     } else if (uMode > 2.5) {
                         vec2 mt = uMotionTexel * 3.0;
@@ -768,7 +842,11 @@ class Media3SixtyFpsProcessor(
                         float maskConf = m0.b * m0.a;
                         float panBoost = smoothstep(0.06, 0.19, length(uGlobalVec));
                         float warpBase = mix(0.1 + 0.9 * clamp(maskConf, 0.0, 1.0), 0.92, panBoost);
-                        float warpSel = clamp(trust * consistency * warpBase, 0.0, 1.0);
+                        // Consenso fwd-bwd + confianza de ambos vectores: en oclusiones
+                        // (baja confianza) se descarta la interpolación warpeada y se prefiere
+                        // la mezcla segura, eliminando fantasmas en objetos que aparecen/desaparecen.
+                        float confMin = min(confF, confB);
+                        float warpSel = clamp(trust * consistency * warpBase * (0.35 + 0.65 * confMin), 0.0, 1.0);
                         vec3 cf = mix(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb, uFactor);
                         interp = mix(cf, interp, warpSel);
                         interp = mix(interp, clamp(interp, min(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb), max(texture2D(uPrevTex, vTexCoord).rgb, curr.rgb)), 0.8);
@@ -833,6 +911,8 @@ class Media3SixtyFpsProcessor(
                 }
 
                 color = clamp(color, 0.0, 1.0);
+                vec2 fragPx = vTexCoord * uVideoRes;
+                color = blueNoiseDither(color, fragPx, uDitherStrength);
                 gl_FragColor = vec4(color, 1.0);
             }
         """.trimIndent()
@@ -894,6 +974,9 @@ class Media3SixtyFpsProcessor(
                               clamp(-db * pgy / pdenom, -8.0, 8.0));
 
                 float conf = (0.15 + 0.85 * coarse.b) * (0.35 + 0.65 * (1.0 - smoothstep(0.0, 0.6, length(b))));
+                // Penaliza vectores que no casan (residual de matching) para descartar
+                // outliers en bordes/oclusiones -> vectores más fiables y menos ghosting.
+                conf *= 1.0 - smoothstep(0.04, 0.18, abs(pl0 - l0));
 
                 vec4 old = texture2D(uOldMotionTex, vTexCoord);
                 vec2 oldF = (old.xy * 2.0 - 1.0) * 16.0;
@@ -965,6 +1048,9 @@ class Media3SixtyFpsProcessor(
                               clamp(-db * pgy / pdenom, -8.0, 8.0));
 
                 float conf = (0.15 + 0.85 * coarse.b) * (0.35 + 0.65 * (1.0 - smoothstep(0.0, 0.6, length(b))));
+                // Penaliza vectores que no casan (residual de matching) para descartar
+                // outliers en bordes/oclusiones -> vectores más fiables y menos ghosting.
+                conf *= 1.0 - smoothstep(0.04, 0.18, abs(pl0 - l0));
 
                 vec4 old = texture2D(uOldMotionTex, vTexCoord);
                 vec2 oldF = (old.xy * 2.0 - 1.0) * 16.0;
@@ -1171,6 +1257,8 @@ class Media3SixtyFpsProcessor(
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
 
+            blueNoiseTexId = generateBlueNoiseTexture()
+
             val fbos = IntArray(5)
             GLES20.glGenFramebuffers(5, fbos, 0)
             prevFbo = fbos[0]
@@ -1229,6 +1317,10 @@ class Media3SixtyFpsProcessor(
             fsrScaleLoc = GLES20.glGetUniformLocation(program, "uFsrScale")
             fsrSharpnessLoc = GLES20.glGetUniformLocation(program, "uFsrSharpness")
             videoResLoc = GLES20.glGetUniformLocation(program, "uVideoRes")
+            blueNoiseTexLoc = GLES20.glGetUniformLocation(program, "uBlueNoiseTex")
+            blueNoiseSizeLoc = GLES20.glGetUniformLocation(program, "uBlueNoiseSize")
+            ditherEnabledLoc = GLES20.glGetUniformLocation(program, "uDitherEnabled")
+            ditherStrengthLoc = GLES20.glGetUniformLocation(program, "uDitherStrength")
             posLoc = GLES20.glGetAttribLocation(program, "aPosition")
             texLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
 
@@ -1345,7 +1437,7 @@ class Media3SixtyFpsProcessor(
             val cfg = VideoEnhanceConfig
             qualityLabel = cfg.qualityLabel()
             val mode = if (cfg.isInterpolationEnabled()) cfg.interpolationMode().intValue else 0
-            val interpWanted = cfg.isInterpolationEnabled() && mode > 0 && sourceFps < 50f
+            val interpWanted = cfg.isInterpolationEnabled() && mode > 0 && sourceFps < targetDisplayFps - 2f
             val debugNeedsPrev = debugMode == 1 || debugMode == 5
 
             val st = inputSurfaceTexture
@@ -1434,6 +1526,7 @@ class Media3SixtyFpsProcessor(
                 segmentStartNs = 0L
                 staticScene = false
                 passthroughLatch = false
+                srcPhase = 0.0
                 synchronized(metaLock) { metaQueue.clear() }
             }
 
@@ -1451,9 +1544,25 @@ class Media3SixtyFpsProcessor(
                 passthroughLatch = false
                 1f
             } else if (interpolating || debugMode == 7) {
-                computeFactor(now)
+                computeFactor(targetDisplayFps)
             } else {
                 1f
+            }
+
+            // Avisa a la superficie GL (API 30+) la tasa objetivo y la compatibilidad,
+            // para que el panel/dispositivo presente a 60/120 Hz reales y su MEMC propio
+            // coopere (o se abstenga) según si la interpolación de la app está activa.
+            if (Build.VERSION.SDK_INT >= 30 && glSurface.isAttachedToWindow) {
+                val interpOn = cfg.isInterpolationEnabled()
+                if (rateAppliedAt != targetDisplayFps || rateAppliedInterp != interpOn) {
+                    rateAppliedAt = targetDisplayFps
+                    rateAppliedInterp = interpOn
+                    try {
+                        glSurface.setFrameRateReflect(targetDisplayFps, DisplayRateManager.surfaceCompatibility(interpOn))
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "glSurface.setFrameRate failed: ${t.message}")
+                    }
+                }
             }
 
             val renderStartNs = System.nanoTime()
@@ -1508,12 +1617,18 @@ class Media3SixtyFpsProcessor(
             }
         }
 
-        private fun computeFactor(now: Long): Float {
-            val iv = intervalNs
-            if (segmentStartNs > 0 && iv > 0) {
-                return ((now - segmentStartNs).toFloat() / iv.toFloat()).coerceIn(0f, 1f)
-            }
-            return 1f
+        // Acumulador de fase bloqueado al vsync: cada render del GLSurfaceView ocurre en
+        // un refresco del display, así que avanzamos la fase sourceFps/targetDisplayFps por
+        // frame. Esto produce EXACTAMENTE targetDisplayFps cuadros/segundo (60p o 120p
+        // reales) interpolando entre prev y curr, sea cual sea el fps de la fuente.
+        private var srcPhase = 0.0
+
+        private fun computeFactor(displayFps: Float): Float {
+            val sf = sourceFps.coerceAtLeast(1f)
+            val tf = displayFps.coerceAtLeast(sf)
+            srcPhase += (sf / tf).toDouble()
+            if (srcPhase >= 1.0) srcPhase -= 1.0
+            return srcPhase.toFloat().coerceIn(0f, 1f)
         }
 
         private fun normalizeMatrix(m: FloatArray) {
@@ -1587,6 +1702,14 @@ class Media3SixtyFpsProcessor(
             GLES20.glUniform1f(fsrScaleLoc, upscalerMode.scaleFactor)
             GLES20.glUniform1f(fsrSharpnessLoc, upscalerMode.sharpness)
             GLES20.glUniform2f(videoResLoc, videoWidth.toFloat(), videoHeight.toFloat())
+
+            // Blue noise dithering
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE7)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, blueNoiseTexId)
+            GLES20.glUniform1i(blueNoiseTexLoc, 7)
+            GLES20.glUniform2f(blueNoiseSizeLoc, 64f, 64f)
+            GLES20.glUniform1f(ditherEnabledLoc, if (cfg.ditherEnabled()) 1f else 0f)
+            GLES20.glUniform1f(ditherStrengthLoc, if (cfg.ditherEnabled()) cfg.getDither() else 0f)
 
             drawQuad(posLoc, texLoc)
 
@@ -2057,6 +2180,49 @@ class Media3SixtyFpsProcessor(
 
         fun setDebugModeValue(mode: Int) {
             debugMode = mode.coerceIn(0, 7)
+        }
+
+        private fun generateBlueNoiseTexture(): Int {
+            val size = 64
+            val texIds = IntArray(1)
+            GLES20.glGenTextures(1, texIds, 0)
+            val texId = texIds[0]
+            val data = ByteArray(size * size)
+            val rng = java.util.Random(42)
+            for (i in data.indices) data[i] = (rng.nextFloat() * 255).toInt().toByte()
+            for (iter in 0 until 4) {
+                val binned = FloatArray(size * size)
+                val sorted = data.map { it.toInt() and 0xFF }.sorted()
+                val threshold = sorted[size * size / 2]
+                for (i in binned.indices) binned[i] = if ((data[i].toInt() and 0xFF) > threshold) 1f else 0f
+                val filtered = FloatArray(size * size)
+                for (y in 0 until size) for (x in 0 until size) {
+                    var sum = 0f; var wsum = 0f
+                    for (dy in -1..1) for (dx in -1..1) {
+                        val wx = 1f / (1f + (dx * dx + dy * dy))
+                        val nx = (x + dx + size) % size
+                        val ny = (y + dy + size) % size
+                        sum += binned[ny * size + nx] * wx
+                        wsum += wx
+                    }
+                    filtered[y * size + x] = sum / wsum
+                }
+                val indices = (0 until size * size).sortedBy { filtered[it] }
+                for (i in indices.indices) {
+                    data[indices[i]] = (i * 255f / (size * size - 1)).toInt().toByte()
+                }
+            }
+            val buffer = ByteBuffer.allocateDirect(size * size).order(java.nio.ByteOrder.nativeOrder())
+            buffer.put(data)
+            buffer.position(0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_REPEAT)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_REPEAT)
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE, size, size, 0,
+                GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, buffer)
+            return texId
         }
 
         private fun buildProgram(vs: String, fs: String): Int {

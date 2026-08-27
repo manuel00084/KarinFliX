@@ -90,7 +90,7 @@ class FileExplorerActivity : AppCompatActivity() {
         rvVideos.layoutManager = GridLayoutManager(this, 3)
         rvFolders.layoutManager = GridLayoutManager(this, 3)
 
-        videoAdapter = VideoAdapter(emptyList(), cr) { item ->
+        videoAdapter = VideoAdapter(emptyList(), this) { item ->
             playVideo(item)
         }
         rvVideos.adapter = videoAdapter

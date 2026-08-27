@@ -39,6 +39,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import com.karin.streamtv.player.VideoCache
 import com.karin.streamtv.R
 import com.karin.streamtv.util.AutoPlayManager
 
@@ -742,26 +743,6 @@ class ExoPlayerActivity : AppCompatActivity() {
         )
     }
 
-    private fun showAudioPresetDialog() {
-        val presets = com.karin.streamtv.player.dsp.AudioEnhanceConfig.Preset.entries
-        val current = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
-        val labels = presets.map { it.label }.toTypedArray()
-        val selectedIdx = presets.indexOf(current).coerceAtLeast(0)
-
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Perfil de audio")
-            .setSingleChoiceItems(labels, selectedIdx) { _, which ->
-                val preset = presets[which]
-                com.karin.streamtv.player.dsp.AudioEnhanceConfig.applyParams(
-                    com.karin.streamtv.player.dsp.AudioEnhanceConfig.Params().withPreset(preset)
-                )
-                updateAudioPresetButton()
-                showController()
-            }
-            .setNegativeButton("Cerrar", null)
-            .show()
-    }
-
     private fun updateAudioPresetButton() {
         val preset = com.karin.streamtv.player.dsp.AudioEnhanceConfig.preset()
         val enabled = com.karin.streamtv.player.dsp.AudioEnhanceConfig.isEnabled()
@@ -777,42 +758,46 @@ class ExoPlayerActivity : AppCompatActivity() {
         }
     }
 
+    private data class FeatureEntry(val label: String, val action: (() -> Unit)?)
+
     private fun showMoreDialog() {
-        val options = listOf(
-            "🎛 Perfil de audio (DSP)",
-            "── Mejoras de video ──",
-            "🔹 Detail Boost",
-            "💡 Light Boost",
-            "🎨 Color Boost",
-            "🧱 Low Bitrate Boost",
-            "── Movimiento y escala ──",
-            "🔍 Escalado de video",
-            "🎞 MotionX2 Boost",
-            "── Herramientas ──",
-            "🖥 Demo mode"
+        val entries = listOf(
+            FeatureEntry("🎛 Perfil de audio (DSP)") { showDspDialog() },
+            FeatureEntry("── Mejoras de video ──", null),
+            FeatureEntry("🔹 Detail Boost") {
+                showSingleFeatureDialog("Detail Boost", { VideoEnhanceConfig.detailBoostEnabled() }, { VideoEnhanceConfig.getDetailBoost() }, "Realza bordes y micro-detalles (texturas, pelo, vegetación) con máscara de enfoque, sin ruido ni halos artificiales.") { en, v -> VideoEnhanceConfig.setDetailBoostEnabled(en); VideoEnhanceConfig.setDetailBoost(v) }
+            },
+            FeatureEntry("💡 Light Boost") {
+                showSingleFeatureDialog(
+                    "Light Boost",
+                    { VideoEnhanceConfig.lightBoostEnabled() },
+                    { VideoEnhanceConfig.getLightBoost() },
+                    "Levanta sombras y tonos medios para revelar detalle en escenas oscuras o lavadas, sin quemar luces ni desnaturalizar la imagen.",
+                    "Estilo HDR (suma glow y tonemap sobre Light Boost)",
+                    { VideoEnhanceConfig.lightBoostHdrEnabled() },
+                    { en -> VideoEnhanceConfig.setLightBoostHdrEnabled(en); if (en) { VideoEnhanceConfig.setLightBoostEnabled(true); if (!useEnhancedMode) { useEnhancedMode = true; restartWithEnhanced() } } }
+                ) { en, v -> VideoEnhanceConfig.setLightBoostEnabled(en); VideoEnhanceConfig.setLightBoost(v) }
+            },
+            FeatureEntry("🎨 Color Boost") {
+                showSingleFeatureDialog("Color Boost", { VideoEnhanceConfig.colorBoostEnabled() }, { VideoEnhanceConfig.colorBoostToSeekBar(VideoEnhanceConfig.getColorBoost()) / 100f }, "Aumenta la saturación de forma inteligente (más en colores apagados, menos en pieles), simulando un gamut más amplio tipo cine para mayor riqueza.") { en, v -> VideoEnhanceConfig.setColorBoostEnabled(en); VideoEnhanceConfig.setColorBoost(0.5f + v * 1.5f) }
+            },
+            FeatureEntry("🧱 Low Bitrate Boost") {
+                showSingleFeatureDialog("Low Bitrate Boost", { VideoEnhanceConfig.superResEnabled() }, { VideoEnhanceConfig.getSuperRes() }, "Repara artefactos de compresión en videos de baja calidad (bloques, bandas de color y bordes dentados), restaurando detalle y suavidad sin amplificar el ruido.") { en, v -> VideoEnhanceConfig.setSuperResEnabled(en); VideoEnhanceConfig.setSuperRes(v) }
+            },
+            FeatureEntry("🌀 Profundidad") {
+                showSingleFeatureDialog("Profundidad", { VideoEnhanceConfig.depthEnabled() }, { VideoEnhanceConfig.getDepth() }, "Refuerza la sensación de profundidad en 2D (sin gafas): vignette que enfatiza el centro y contraste de planos para que los objetos se despeguen del fondo.") { en, v -> VideoEnhanceConfig.setDepthEnabled(en); VideoEnhanceConfig.setDepth(v) }
+            },
+            FeatureEntry("── Movimiento y escala ──", null),
+            FeatureEntry("🔍 Escalado de video") { showUpscalerDialog() },
+            FeatureEntry("🎞 MotionX2 Boost") { showInterpolationDialog() },
+            FeatureEntry("── Herramientas ──", null),
+            FeatureEntry("🖥 Demo mode") { showDemoDialog() },
+            FeatureEntry("👓 3D Vision") { show3DDialog() }
         )
+        val options = entries.map { it.label }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Opciones avanzadas")
-            .setItems(options.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> showDspDialog()
-                    2 -> showSingleFeatureDialog("Detail Boost", { VideoEnhanceConfig.detailBoostEnabled() }, { VideoEnhanceConfig.getDetailBoost() }, "Realza bordes y micro-detalles (texturas, pelo, vegetación) con máscara de enfoque, sin ruido ni halos artificiales.") { en, v -> VideoEnhanceConfig.setDetailBoostEnabled(en); VideoEnhanceConfig.setDetailBoost(v) }
-                    3 -> showSingleFeatureDialog(
-                        "Light Boost",
-                        { VideoEnhanceConfig.lightBoostEnabled() },
-                        { VideoEnhanceConfig.getLightBoost() },
-                        "Levanta sombras y tonos medios para revelar detalle en escenas oscuras o lavadas, sin quemar luces ni desnaturalizar la imagen.",
-                        "Estilo HDR (suma glow y tonemap sobre Light Boost)",
-                        { VideoEnhanceConfig.lightBoostHdrEnabled() },
-                        { en -> VideoEnhanceConfig.setLightBoostHdrEnabled(en); if (en) { VideoEnhanceConfig.setLightBoostEnabled(true); if (!useEnhancedMode) { useEnhancedMode = true; restartWithEnhanced() } } }
-                    ) { en, v -> VideoEnhanceConfig.setLightBoostEnabled(en); VideoEnhanceConfig.setLightBoost(v) }
-                    4 -> showSingleFeatureDialog("Color Boost", { VideoEnhanceConfig.colorBoostEnabled() }, { VideoEnhanceConfig.colorBoostToSeekBar(VideoEnhanceConfig.getColorBoost()) / 100f }, "Aumenta la saturación de forma inteligente (más en colores apagados, menos en pieles), simulando un gamut más amplio tipo cine para mayor riqueza.") { en, v -> VideoEnhanceConfig.setColorBoostEnabled(en); VideoEnhanceConfig.setColorBoost(0.5f + v * 1.5f) }
-                    5 -> showSingleFeatureDialog("Low Bitrate Boost", { VideoEnhanceConfig.superResEnabled() }, { VideoEnhanceConfig.getSuperRes() }, "Repara artefactos de compresión en videos de baja calidad (bloques, bandas de color y bordes dentados), restaurando detalle y suavidad sin amplificar el ruido.") { en, v -> VideoEnhanceConfig.setSuperResEnabled(en); VideoEnhanceConfig.setSuperRes(v) }
-                    7 -> showUpscalerDialog()
-                    8 -> showInterpolationDialog()
-                    10 -> showDemoDialog()
-                }
-            }
+            .setItems(options) { _, which -> entries[which].action?.invoke() }
             .setNegativeButton("Cerrar", null)
             .show()
     }
@@ -1003,6 +988,60 @@ class ExoPlayerActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun show3DDialog() {
+        val modes = listOf("Apagado", "Anaglifo Rojo/Cian", "Anaglifo Rojo/Verde", "Anaglifo Azul/Rojo", "Google Cardboard (SBS)")
+        val current = VideoEnhanceConfig.get3DMode().coerceIn(0, 4)
+        val scroll = ScrollView(this)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 24, 40, 16)
+        }
+        container.addView(TextView(this).apply {
+            text = "Convierte video 2D a 3D (sin pantalla especial). Anaglifo usa gafas de color (rojo/cian, rojo/verde o azul/rojo); Cardboard usa un visor de realidad virtual. La profundidad se estima por brillo, así que es un efecto, no 3D real de cámara."
+            textSize = 13f
+            setPadding(0, 0, 0, 16)
+            setTextColor(android.graphics.Color.parseColor("#AAB0B8"))
+        })
+        val group = RadioGroup(this)
+        modes.forEachIndexed { idx, label ->
+            val rb = RadioButton(this).apply {
+                text = label
+                isChecked = idx == current
+                setPadding(0, 8, 0, 8)
+                setOnClickListener {
+                    VideoEnhanceConfig.set3DMode(idx)
+                    showController()
+                }
+            }
+            group.addView(rb)
+        }
+        container.addView(group)
+        container.addView(TextView(this).apply {
+            text = "Intensidad (paralaje)"
+            textSize = 13f
+            setPadding(0, 12, 0, 4)
+        })
+        val sb = SeekBar(this).apply {
+            max = 100
+            progress = (VideoEnhanceConfig.get3DStrength() * 100).toInt().coerceIn(0, 100)
+        }
+        sb.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, p: Int, fromUser: Boolean) {
+                VideoEnhanceConfig.set3DStrength(p / 100f)
+                showController()
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
+        container.addView(sb)
+        scroll.addView(container)
+        AlertDialog.Builder(this)
+            .setTitle("3D Vision")
+            .setView(scroll)
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
     private fun updateVideoProfileButton() {
         btnVideoProfile.text = "Mejoras"
     }
@@ -1125,13 +1164,60 @@ class ExoPlayerActivity : AppCompatActivity() {
             setPadding(40, 24, 40, 16)
         }
         container.addView(TextView(this).apply {
-            text = "Sube la resolución con la que se muestra el video en pantalla. HW (bilineal/bicúbico) es rápido y suave; Anime4K y FSR 1.0 dan más nitidez al ampliar contenido de baja resolución, pero usan más recursos."
+            text = "Sube la resolución con la que se muestra el video en pantalla. Ordenados de menos a más recursos: Bilineal y RAVU (rápidos y suaves), Bicúbico (más nítido, media carga), KX Híbrido (nueva calidad media con muy bajo consumo: sin memoria extra, también fluye en equipos modestos), FSR+ 1.1 Mod y Anime4K DoG (máxima nitidez al ampliar contenido de baja resolución, pero consumen más recursos)."
             textSize = 13f
             setPadding(0, 0, 0, 16)
             setTextColor(android.graphics.Color.parseColor("#AAB0B8"))
         })
         val group = RadioGroup(this)
         var checkedId = -1
+        // Barra de calidad (solo para FSR+ 1.1 Mod): controla la relación de upscale 1.5x..2.5x.
+        val qualityLabel = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, 10, 0, 4)
+            setTextColor(android.graphics.Color.parseColor("#E0E4E8"))
+        }
+        val qualityBar = SeekBar(this).apply {
+            min = 150
+            max = 250
+            progress = com.karin.streamtv.player.VideoEnhanceConfig.fsrQualityToSeekBar(
+                com.karin.streamtv.player.VideoEnhanceConfig.getFsrQualityScale())
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: android.widget.SeekBar?, p: Int, fromUser: Boolean) {
+                    val scale = com.karin.streamtv.player.VideoEnhanceConfig.seekBarToFsrQuality(p)
+                    com.karin.streamtv.player.VideoEnhanceConfig.setFsrQualityScale(scale)
+                    val tag = when {
+                        scale <= 1.6f -> "Rendimiento"
+                        scale >= 2.4f -> "Ultra"
+                        scale >= 1.9f -> "Calidad"
+                        else -> "Balanceado"
+                    }
+                    qualityLabel.text = "Calidad FSR+: ${"%.2f".format(scale)}x  ·  $tag"
+                }
+                override fun onStartTrackingTouch(s: android.widget.SeekBar?) {}
+                override fun onStopTrackingTouch(s: android.widget.SeekBar?) {}
+            })
+        }
+        val qualityLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 6, 0, 10)
+            addView(qualityLabel)
+            addView(qualityBar)
+            visibility = if (current == com.karin.streamtv.player.VideoEnhanceConfig.UpscalerMode.FSR) View.VISIBLE else View.GONE
+        }
+        val updateQualityUi = { mode: com.karin.streamtv.player.VideoEnhanceConfig.UpscalerMode ->
+            qualityLayout.visibility = if (mode == com.karin.streamtv.player.VideoEnhanceConfig.UpscalerMode.FSR) View.VISIBLE else View.GONE
+            if (mode == com.karin.streamtv.player.VideoEnhanceConfig.UpscalerMode.FSR) {
+                val sc = com.karin.streamtv.player.VideoEnhanceConfig.getFsrQualityScale()
+                val tag = when {
+                    sc <= 1.6f -> "Rendimiento"
+                    sc >= 2.4f -> "Ultra"
+                    sc >= 1.9f -> "Calidad"
+                    else -> "Balanceado"
+                }
+                qualityLabel.text = "Calidad FSR+: ${"%.2f".format(sc)}x  ·  $tag"
+            }
+        }
         modes.forEachIndexed { idx, mode ->
             val rb = RadioButton(this).apply {
                 id = idx + 1
@@ -1139,6 +1225,7 @@ class ExoPlayerActivity : AppCompatActivity() {
                 setPadding(0, 8, 0, 8)
                 setOnClickListener {
                     VideoEnhanceConfig.setUpscalerMode(mode)
+                    updateQualityUi(mode)
                     showController()
                 }
             }
@@ -1147,6 +1234,8 @@ class ExoPlayerActivity : AppCompatActivity() {
         }
         if (checkedId != -1) group.check(checkedId) else group.clearCheck()
         container.addView(group)
+        container.addView(qualityLayout)
+        updateQualityUi(current)
         scroll.addView(container)
         AlertDialog.Builder(this)
             .setTitle("Escalado de Video")
@@ -1234,7 +1323,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             playWithEnhancedPipeline(resolved.url, megaFactory)
             return
         }
-        val loadControl = RamAwareLoadControl.create(this)
+        val loadControl = RamAwareLoadControl.create(this, isLocalUrl(resolved.url))
 
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, CodecSelectorFactory.renderersFactory(this))
             .setLoadControl(loadControl)
@@ -1248,7 +1337,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             )
             .setMediaSourceFactory(
                 androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
-                    .setDataSourceFactory(megaFactory)
+                    .setDataSourceFactory(VideoCache.wrap(this, megaFactory))
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(android.os.PowerManager.PARTIAL_WAKE_LOCK)
@@ -1334,7 +1423,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             runOnUiThread { triggerFallback(url) }
         }
 
-        val exoPlayer = processor!!.createPlayer(trackSelector, dataSourceFactory)
+        val exoPlayer = processor!!.createPlayer(trackSelector, dataSourceFactory, isLocalUrl(url))
         player = exoPlayer
         applySavedVolume()
         applySavedSpeed()
@@ -1449,7 +1538,7 @@ class ExoPlayerActivity : AppCompatActivity() {
                 )
             } catch (_: Exception) {}
         }
-        val loadControl = RamAwareLoadControl.create(this)
+        val loadControl = RamAwareLoadControl.create(this, isLocalUrl(url))
 
         val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this, CodecSelectorFactory.renderersFactory(this))
             .setLoadControl(loadControl)
@@ -1467,7 +1556,7 @@ class ExoPlayerActivity : AppCompatActivity() {
                         if (isLocalUrl(url)) {
                             androidx.media3.datasource.DefaultDataSource.Factory(this)
                         } else {
-                            VideoDataSource.factory(this, referer)
+                            VideoCache.wrap(this, VideoDataSource.factory(this, referer))
                         }
                     )
             )

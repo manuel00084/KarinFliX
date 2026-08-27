@@ -126,6 +126,8 @@ object VideoEnhanceConfig {
     private const val KEY_DEBUG_MODE = "debug_mode"
     private const val KEY_UPSCALER_MODE = "upscaler_mode"
     private const val KEY_DRS = "dynamic_resolution"
+    private const val KEY_DITHER = "dither"
+    private const val KEY_DITHER_EN = "dither_en"
 
     private var prefs: SharedPreferences? = null
 
@@ -193,6 +195,11 @@ object VideoEnhanceConfig {
     // para máxima nitidez; los dispositivos débiles pueden reactivarlo.
     fun isDynamicResolutionEnabled(): Boolean = prefs?.getBoolean(KEY_DRS, false) ?: false
     fun setDynamicResolutionEnabled(v: Boolean) { prefs?.edit()?.putBoolean(KEY_DRS, v)?.apply() }
+
+    fun ditherEnabled(): Boolean = prefs?.getBoolean(KEY_DITHER_EN, false) ?: false
+    fun setDitherEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_DITHER_EN, b)?.apply() }
+    fun getDither(): Float = prefs?.getFloat(KEY_DITHER, 0.5f) ?: 0.5f
+    fun setDither(v: Float) { prefs?.edit()?.putFloat(KEY_DITHER, v.coerceIn(0f, 1f))?.apply() }
 
     fun debugModeLabel(mode: Int): String = when (mode) {
         1 -> "PREV"

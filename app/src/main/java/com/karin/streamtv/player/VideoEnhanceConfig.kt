@@ -22,7 +22,9 @@ object VideoEnhanceConfig {
         BILINEAR("Bilineal (HW)", 1f),
         BICUBIC("Bicúbico (HW)", 2f),
         DOG("Anime4K DoG", 3f),
-        FSR("FSR 1.0", 4f)
+        FSR("FSR+ 1.1 Mod", 4f),
+        RAVU("RAVU-lite", 5f),
+        KX("KX Híbrido", 6f)
     }
 
     private const val PREF_NAME = "karin_video_enhance"
@@ -56,13 +58,22 @@ object VideoEnhanceConfig {
     private const val KEY_DETAIL_BOOST_EN = "detail_boost_en"
     private const val KEY_LIGHT_BOOST = "light_boost"
     private const val KEY_LIGHT_BOOST_EN = "light_boost_en"
-    private const val KEY_LIGHT_BOOST_HDR = "light_boost_hdr"
+        private const val KEY_LIGHT_BOOST_HDR = "light_boost_hdr"
+        private const val KEY_DEPTH_EN = "depth_en"
+        private const val KEY_DEPTH = "depth"
+        private const val KEY_3D_MODE = "3d_mode"
+        private const val KEY_3D_STRENGTH = "3d_strength"
+        private const val KEY_3D_CROSSFEED = "3d_crossfeed"
+        private const val KEY_TONE_CURVE = "tone_curve"
     private const val KEY_SUPER_RES = "super_res"
     private const val KEY_SUPER_RES_EN = "super_res_en"
     private const val KEY_DEBUG_MODE = "debug_mode"
     private const val KEY_UPSCALER_MODE = "upscaler_mode"
     private const val KEY_CODEC_MODE = "codec_mode"
     private const val KEY_GL_QUALITY_MODE = "gl_quality_mode"
+    private const val KEY_DITHER = "dither"
+    private const val KEY_DITHER_EN = "dither_en"
+    private const val KEY_FSR_QUALITY = "fsr_quality"
 
     private var prefs: SharedPreferences? = null
 
@@ -157,6 +168,20 @@ object VideoEnhanceConfig {
     fun lightBoostHdrEnabled(): Boolean = prefs?.getBoolean(KEY_LIGHT_BOOST_HDR, false) ?: false
     fun setLightBoostHdrEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_LIGHT_BOOST_HDR, b)?.apply() }
 
+    fun depthEnabled(): Boolean = prefs?.getBoolean(KEY_DEPTH_EN, false) ?: false
+    fun setDepthEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_DEPTH_EN, b)?.apply() }
+    fun getDepth(): Float = prefs?.getFloat(KEY_DEPTH, 0.6f) ?: 0.6f
+    fun setDepth(v: Float) { prefs?.edit()?.putFloat(KEY_DEPTH, v.coerceIn(0f, 1f))?.apply() }
+
+    fun get3DMode(): Int = prefs?.getInt(KEY_3D_MODE, 0) ?: 0
+    fun set3DMode(v: Int) { prefs?.edit()?.putInt(KEY_3D_MODE, v.coerceIn(0, 4))?.apply() }
+    fun get3DStrength(): Float = prefs?.getFloat(KEY_3D_STRENGTH, 0.5f) ?: 0.5f
+    fun set3DStrength(v: Float) { prefs?.edit()?.putFloat(KEY_3D_STRENGTH, v.coerceIn(0f, 1f))?.apply() }
+    fun get3DCrossfeed(): Float = prefs?.getFloat(KEY_3D_CROSSFEED, 0.15f) ?: 0.15f
+    fun set3DCrossfeed(v: Float) { prefs?.edit()?.putFloat(KEY_3D_CROSSFEED, v.coerceIn(0f, 0.5f))?.apply() }
+    fun getToneCurve(): Int = prefs?.getInt(KEY_TONE_CURVE, 0) ?: 0
+    fun setToneCurve(v: Int) { prefs?.edit()?.putInt(KEY_TONE_CURVE, v.coerceIn(0, 5))?.apply() }
+
     fun superResEnabled(): Boolean = prefs?.getBoolean(KEY_SUPER_RES_EN, false) ?: false
     fun setSuperResEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_SUPER_RES_EN, b)?.apply() }
     fun getSuperRes(): Float = prefs?.getFloat(KEY_SUPER_RES, 0.7f) ?: 0.7f
@@ -172,7 +197,8 @@ object VideoEnhanceConfig {
     fun setUpscalerMode(mode: UpscalerMode) { prefs?.edit()?.putInt(KEY_UPSCALER_MODE, mode.ordinal)?.apply() }
 
     val mainUpscalers: List<UpscalerMode>
-        get() = listOf(UpscalerMode.OFF, UpscalerMode.BILINEAR, UpscalerMode.BICUBIC, UpscalerMode.DOG, UpscalerMode.FSR)
+        get() = listOf(UpscalerMode.OFF,
+UpscalerMode.BILINEAR, UpscalerMode.RAVU, UpscalerMode.BICUBIC, UpscalerMode.KX, UpscalerMode.FSR, UpscalerMode.DOG)
 
     fun codecMode(): CodecMode {
         val idx = prefs?.getInt(KEY_CODEC_MODE, 0) ?: 0
@@ -183,70 +209,29 @@ object VideoEnhanceConfig {
     fun isGlQualityMode(): Boolean = prefs?.getBoolean(KEY_GL_QUALITY_MODE, false) ?: false
     fun setGlQualityMode(v: Boolean) { prefs?.edit()?.putBoolean(KEY_GL_QUALITY_MODE, v)?.apply() }
 
-    fun glQualityLabel(): String = if (isGlQualityMode()) "Calidad GL: ON" else "Calidad GL: OFF"
+    fun ditherEnabled(): Boolean = prefs?.getBoolean(KEY_DITHER_EN, false) ?: false
+    fun setDitherEnabled(b: Boolean) { prefs?.edit()?.putBoolean(KEY_DITHER_EN, b)?.apply() }
+    fun getDither(): Float = prefs?.getFloat(KEY_DITHER, 0.5f) ?: 0.5f
+    fun setDither(v: Float) { prefs?.edit()?.putFloat(KEY_DITHER, v.coerceIn(0f, 1f))?.apply() }
 
-    fun debugModeLabel(mode: Int): String = when (mode) {
-        1 -> "PREV"
-        2 -> "CURR"
-        3 -> "UV"
-        4 -> "FACTOR"
-        5 -> "MOTION"
-        6 -> "V0V1"
-        7 -> "VISUAL"
-        8 -> "DEMO"
-        else -> "OFF"
+    // Calidad del upscaler "FSR+ 1.1 Mod": relación de upscale aplicada al buffer DRS.
+    // 1.50 = Rendimiento (más rápido), 2.00 = Calidad (por defecto), 2.50 = Ultra
+    // (más nítido pero más lento y más memoria de FBO). Se guarda x100 (150..250).
+    fun getFsrQualityScale(): Float = (prefs?.getInt(KEY_FSR_QUALITY, 200) ?: 200) / 100f
+    fun setFsrQualityScale(v: Float) {
+        prefs?.edit()?.putInt(KEY_FSR_QUALITY, (v * 100).toInt().coerceIn(150, 250))?.apply()
     }
+    fun seekBarToFsrQuality(progress: Int): Float = progress / 100f
+    fun fsrQualityToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(150, 250)
 
-    fun seekBarToSaturation(progress: Int): Float = 0.5f + (progress / 100f) * 1.5f
-    fun saturationToSeekBar(value: Float): Int = ((value - 0.5f) / 1.5f * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToContrast(progress: Int): Float = 0.5f + (progress / 100f) * 1.5f
-    fun contrastToSeekBar(value: Float): Int = ((value - 0.5f) / 1.5f * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToBrightness(progress: Int): Float = -0.5f + (progress / 100f) * 1.0f
-    fun brightnessToSeekBar(value: Float): Int = ((value + 0.5f) / 1.0f * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToSharpness(progress: Int): Float = (progress / 100f) * 2.0f
-    fun sharpnessToSeekBar(value: Float): Int = (value / 2.0f * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToColorBoost(progress: Int): Float = 0.5f + (progress / 100f) * 1.5f
     fun colorBoostToSeekBar(value: Float): Int = ((value - 0.5f) / 1.5f * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToDenoise(progress: Int): Float = progress / 100f
-    fun denoiseToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToDeband(progress: Int): Float = (progress / 100f) * 0.06f
-    fun debandToSeekBar(value: Float): Int = (value / 0.06f * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToDeblock(progress: Int): Float = progress / 100f
-    fun deblockToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToLocalContrast(progress: Int): Float = progress / 100f
-    fun localContrastToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToGrain(progress: Int): Float = progress / 100f
-    fun grainToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToDehaze(progress: Int): Float = progress / 100f
-    fun dehazeToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToHdr(progress: Int): Float = progress / 100f
-    fun hdrToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToDetailBoost(progress: Int): Float = progress / 100f
-    fun detailBoostToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToLightBoost(progress: Int): Float = progress / 100f
-    fun lightBoostToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
-
-    fun seekBarToSuperRes(progress: Int): Float = progress / 100f
-    fun superResToSeekBar(value: Float): Int = (value * 100).toInt().coerceIn(0, 100)
 
     fun snapshotEnhancements(): List<Boolean> = listOf(
         superResEnabled(),
         detailBoostEnabled(),
         lightBoostEnabled(),
         hdrEnabled(),
+        depthEnabled(),
         colorBoostEnabled(),
         grainEnabled(),
         adaptiveSharpEnabled()

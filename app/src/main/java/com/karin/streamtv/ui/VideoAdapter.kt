@@ -1,7 +1,10 @@
 package com.karin.streamtv.ui
 
 import android.content.ContentResolver
+import android.content.Context
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.provider.MediaStore
 import android.view.LayoutInflater
 import android.view.View
@@ -29,13 +32,14 @@ data class VideoItem(
 
 class VideoAdapter(
     private var items: List<VideoItem>,
-    private val contentResolver: ContentResolver,
+    private val context: Context,
     private val onItemClick: (VideoItem) -> Unit
 ) : RecyclerView.Adapter<VideoAdapter.ViewHolder>() {
 
+    private val cr: ContentResolver = context.contentResolver
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private val thumbCache = object : androidx.collection.LruCache<Long, Bitmap>(10 * 1024 * 1024) {
-        override fun sizeOf(key: Long, value: Bitmap): Int = value.byteCount
+    private val thumbCache = object : androidx.collection.LruCache<String, Bitmap>(10 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
 
     fun submitList(newItems: List<VideoItem>) {
@@ -50,8 +54,7 @@ class VideoAdapter(
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val item = items[position]
-        holder.bind(item)
+        holder.bind(items[position])
     }
 
     override fun getItemCount() = items.size
@@ -67,24 +70,21 @@ class VideoAdapter(
             tvFolder.text = item.folder
             tvDuration.text = formatDuration(item.durationMs)
 
-            ivThumb.tag = item.id
+            ivThumb.tag = item.uri
 
-            val cached = thumbCache.get(item.id)
+            val cached = thumbCache.get(item.uri)
             if (cached != null) {
                 ivThumb.setImageBitmap(cached)
             } else {
-                ivThumb.setImageResource(android.R.color.darker_gray)
+                ivThumb.setImageBitmap(null)
+                val uriToLoad = item.uri
                 scope.launch(Dispatchers.IO) {
-                    val thumb = loadThumbnail(item.id)
+                    val thumb = loadThumbnail(item)
                     if (thumb != null) {
-                        thumbCache.put(item.id, thumb)
-                        if (adapterPosition != RecyclerView.NO_POSITION &&
-                            items.getOrNull(adapterPosition)?.id == item.id
-                        ) {
-                            launch(Dispatchers.Main) {
-                                if (ivThumb.tag == item.id) {
-                                    ivThumb.setImageBitmap(thumb)
-                                }
+                        thumbCache.put(uriToLoad, thumb)
+                        launch(Dispatchers.Main) {
+                            if (ivThumb.tag == uriToLoad) {
+                                ivThumb.setImageBitmap(thumb)
                             }
                         }
                     }
@@ -95,17 +95,46 @@ class VideoAdapter(
             itemView.onActionKey { onItemClick(item) }
         }
 
-        private fun loadThumbnail(id: Long): Bitmap? {
-            return try {
-                MediaStore.Video.Thumbnails.getThumbnail(
-                    contentResolver,
-                    id,
-                    MediaStore.Video.Thumbnails.MINI_KIND,
-                    null
-                )
-            } catch (_: Exception) {
-                null
+        private fun loadThumbnail(item: VideoItem): Bitmap? {
+            var pfd: android.os.ParcelFileDescriptor? = null
+            val retriever = MediaMetadataRetriever()
+            try {
+                val uri = Uri.parse(item.uri)
+                when {
+                    uri.scheme == "content" -> {
+                        pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                        if (pfd != null) {
+                            retriever.setDataSource(pfd.fileDescriptor)
+                        } else {
+                            retriever.setDataSource(context, uri)
+                        }
+                    }
+                    uri.scheme == "file" -> retriever.setDataSource(uri.path ?: item.relativePath)
+                    item.relativePath.isNotBlank() && item.relativePath.startsWith("/") ->
+                        retriever.setDataSource(item.relativePath)
+                    else -> retriever.setDataSource(item.uri)
+                }
+                var frame = retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                if (frame == null) frame = retriever.getFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST)
+                if (frame == null) frame = retriever.getFrameAtTime(0)
+                if (frame != null) return scaleBitmap(frame, 320)
+            } catch (e: Exception) {
+                android.util.Log.e("KarinThumb", "extract failed: ${e.message}")
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+                try { pfd?.close() } catch (_: Exception) {}
             }
+            return try {
+                MediaStore.Video.Thumbnails.getThumbnail(cr, item.id, MediaStore.Video.Thumbnails.MINI_KIND, null)
+            } catch (_: Exception) { null }
+        }
+
+        private fun scaleBitmap(src: Bitmap, maxDim: Int): Bitmap {
+            val scale = maxDim.toFloat() / maxOf(src.width, src.height).toFloat()
+            if (scale >= 1f) return src
+            return Bitmap.createScaledBitmap(
+                src, (src.width * scale).toInt(), (src.height * scale).toInt(), true
+            )
         }
     }
 
