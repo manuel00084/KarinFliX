@@ -17,6 +17,11 @@ object AppPreferences {
     private const val KEY_SMB_SHOW_HOME = "smb_show_on_home"
     private const val KEY_LOW_END = "low_end_mode"
     private const val KEY_FIRST_RUN = "first_run_done"
+    private const val KEY_CODEC_MODE = "codec_mode"
+
+    const val CODEC_HW = 0
+    const val CODEC_SW_GOOGLE = 1
+    const val CODEC_AUTO = 2
 
     private var prefs: SharedPreferences? = null
 
@@ -103,6 +108,23 @@ object AppPreferences {
 
     fun setFirstRunDone() {
         prefs?.edit()?.putBoolean(KEY_FIRST_RUN, true)?.apply()
+    }
+
+    fun getCodecMode(): Int {
+        return prefs?.getInt(KEY_CODEC_MODE, CODEC_HW) ?: CODEC_HW
+    }
+
+    fun setCodecMode(mode: Int) {
+        prefs?.edit()?.putInt(KEY_CODEC_MODE, mode)?.apply()
+    }
+
+    fun getCodecModeLabel(): String {
+        return when (getCodecMode()) {
+            CODEC_HW -> "Hardware (chip)"
+            CODEC_SW_GOOGLE -> "Software (Google)"
+            CODEC_AUTO -> "Auto"
+            else -> "Hardware (chip)"
+        }
     }
 
 }

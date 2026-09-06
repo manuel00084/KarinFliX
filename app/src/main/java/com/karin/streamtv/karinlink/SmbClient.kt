@@ -24,6 +24,7 @@ object SmbClient {
         data class Entries(val entries: List<SmbFileInfo>) : SmbResult()
         data class Stream(val stream: InputStream, val length: Long) : SmbResult()
         data class Error(val message: String) : SmbResult()
+        object Success : SmbResult()
     }
 
     data class SmbFileInfo(
@@ -35,14 +36,21 @@ object SmbClient {
     )
 
     private fun buildContext(ref: SmbRef): CIFSContext {
+        val props = java.util.Properties().apply {
+            setProperty("jcifs.smb.client.connTimeout", "15000")
+            setProperty("jcifs.smb.client.responseTimeout", "30000")
+            setProperty("jcifs.smb.client.soTimeout", "30000")
+        }
         val config = try {
-            jcifs.config.PropertyConfiguration(java.util.Properties())
+            jcifs.config.PropertyConfiguration(props)
         } catch (e: jcifs.CIFSException) {
             Log.w(TAG, "PropertyConfiguration fallback: ${e.message}")
             BaseConfiguration(true)
         }
         val base = BaseContext(config)
         val cred = when {
+            ref.user != null && ref.password != null && !ref.domain.isNullOrBlank() ->
+                NtlmPasswordAuthenticator(ref.domain, ref.user, ref.password)
             ref.user != null && ref.password != null -> NtlmPasswordAuthenticator(ref.user, ref.password)
             else -> NtlmPasswordAuthenticator()
         }
@@ -185,6 +193,125 @@ object SmbClient {
         } catch (e: Exception) {
             Log.w(TAG, "openStream error: ${e.message}")
             SmbResult.Error(e.message ?: "Error al abrir stream")
+        }
+    }
+
+    /**
+     * Crea un directorio remoto en [ref.remotePath] dentro de [ref.share].
+     */
+    fun mkdir(ref: SmbRef): SmbResult {
+        return try {
+            val ctx = buildContext(ref)
+            val smbFile = SmbFile(ref.smbUrl, ctx)
+            if (smbFile.exists()) {
+                return SmbResult.Error("La carpeta ya existe")
+            }
+            smbFile.mkdir()
+            SmbResult.Success
+        } catch (e: Exception) {
+            Log.w(TAG, "mkdir error: ${e.message}")
+            SmbResult.Error(e.message ?: "Error al crear carpeta")
+        }
+    }
+
+    /**
+     * Borra un archivo o directorio remoto (recursivo para carpetas).
+     */
+    fun delete(ref: SmbRef): SmbResult {
+        return try {
+            val ctx = buildContext(ref)
+            deleteRecursive(SmbFile(ref.smbUrl, ctx))
+            SmbResult.Success
+        } catch (e: Exception) {
+            Log.w(TAG, "delete error: ${e.message}")
+            SmbResult.Error(e.message ?: "Error al borrar")
+        }
+    }
+
+    private fun deleteRecursive(f: SmbFile) {
+        if (f.isDirectory) {
+            f.listFiles()?.forEach { deleteRecursive(it) }
+        }
+        f.delete()
+    }
+
+    /**
+     * Copia un archivo local hacia el recurso SMB [ref] (remoto).
+     * Si [ref] apunta a una carpeta, el archivo conserva su nombre.
+     */
+    fun copyLocalToSmb(local: java.io.File, ref: SmbRef): SmbResult {
+        return try {
+            val ctx = buildContext(ref)
+            val targetUrl = if (ref.smbUrl.endsWith("/")) {
+                "${ref.smbUrl}${local.name}"
+            } else {
+                "${ref.smbUrl}/${local.name}"
+            }
+            val dest = SmbFile(targetUrl, ctx)
+            if (local.isDirectory) {
+                dest.mkdir()
+                local.listFiles()?.forEach { child ->
+                    copyLocalToSmb(child, ref.copy(remotePath = "${ref.remotePath.trimEnd('/')}/${local.name}/${child.name}"))
+                }
+            } else {
+                local.inputStream().use { input ->
+                    dest.outputStream.use { out -> input.copyTo(out) }
+                }
+            }
+            SmbResult.Success
+        } catch (e: Exception) {
+            Log.w(TAG, "copyLocalToSmb error: ${e.message}")
+            SmbResult.Error(e.message ?: "Error al copiar hacia SMB")
+        }
+    }
+
+    /**
+     * Copia un archivo SMB [ref] hacia un archivo local [dest].
+     */
+    fun copySmbToLocal(ref: SmbRef, dest: java.io.File): SmbResult {
+        return try {
+            val ctx = buildContext(ref)
+            val src = SmbFile(ref.smbUrl, ctx)
+            if (src.isDirectory) {
+                dest.mkdirs()
+                src.listFiles()?.forEach { child ->
+                    val name = child.name ?: return@forEach
+                    copySmbToLocal(
+                        ref.copy(remotePath = "${ref.remotePath.trimEnd('/')}/$name"),
+                        java.io.File(dest, name)
+                    )
+                }
+            } else {
+                dest.parentFile?.mkdirs()
+                src.inputStream.use { input ->
+                    dest.outputStream().use { out -> input.copyTo(out) }
+                }
+            }
+            SmbResult.Success
+        } catch (e: Exception) {
+            Log.w(TAG, "copySmbToLocal error: ${e.message}")
+            SmbResult.Error(e.message ?: "Error al copiar desde SMB")
+        }
+    }
+
+    /**
+     * Renombra un archivo/carpeta remoto [ref] a [newName] (mismo directorio).
+     */
+    fun rename(ref: SmbRef, newName: String): SmbResult {
+        return try {
+            val ctx = buildContext(ref)
+            val src = SmbFile(ref.smbUrl, ctx)
+            val parent = ref.remotePath.substringBeforeLast('/', "/")
+            val newPath = if (parent.endsWith("/")) "$parent$newName" else "$parent/$newName"
+            val dest = SmbFile(
+                ref.copy(remotePath = newPath).smbUrl,
+                ctx
+            )
+            src.renameTo(dest)
+            SmbResult.Success
+        } catch (e: Exception) {
+            Log.w(TAG, "rename error: ${e.message}")
+            SmbResult.Error(e.message ?: "Error al renombrar")
         }
     }
 }

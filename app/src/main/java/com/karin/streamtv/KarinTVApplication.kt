@@ -17,8 +17,6 @@ class KarinTVApplication : Application() {
         com.karin.streamtv.util.EpisodeProgress.init(this)
         com.karin.streamtv.util.DiskImageCache.init(this)
         com.karin.streamtv.scraper.ScrapingEngine.init(this)
-        com.karin.streamtv.player.VideoEnhanceConfig.init(this)
-        com.karin.streamtv.player.dsp.AudioEnhanceConfig.init(this)
     }
 
     override fun onTrimMemory(level: Int) {

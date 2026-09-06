@@ -4,7 +4,6 @@ import android.util.Log
 import android.view.ViewGroup
 import com.karin.streamtv.model.VideoServer
 import com.karin.streamtv.model.VideoSource
-import com.karin.streamtv.player.VideoExtractorHelper
 import com.karin.streamtv.util.Http
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -43,12 +42,7 @@ object ServerResolutionDetector {
         if (ServerDirectResolver.usesHttpResolver(embedUrl)) {
             return ServerDirectResolver.resolve(embedUrl, referer)?.url
         }
-        val extractor = VideoExtractorHelper(container)
-        return try {
-            extractor.extractSuspend(embedUrl, source.name, referer)
-        } finally {
-            extractor.destroy()
-        }
+        return null
     }
 
     private suspend fun classify(streamUrl: String, embedUrl: String): String? {

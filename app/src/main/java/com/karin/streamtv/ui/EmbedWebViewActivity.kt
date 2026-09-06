@@ -1891,31 +1891,23 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
         if (cssToInject.isNotEmpty()) {
             view?.evaluateJavascript(VIDEO_AD_SKIP_JS, null)
             view?.evaluateJavascript(cssToInject, null)
-            if (com.karin.streamtv.player.VideoEnhanceConfig.isEnabled()) {
-                view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
-            }
+            view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
             mainHandler.postDelayed({
                 view?.evaluateJavascript(VIDEO_AD_SKIP_JS, null)
                 view?.evaluateJavascript(cssToInject, null)
-                if (com.karin.streamtv.player.VideoEnhanceConfig.isEnabled()) {
-                    view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
-                }
+                view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
             }, 2000)
             mainHandler.postDelayed({
                 view?.evaluateJavascript(ADBLOCK_JS, null)
                 view?.evaluateJavascript(VIDEO_AD_SKIP_JS, null)
                 view?.evaluateJavascript(cssToInject, null)
-                if (com.karin.streamtv.player.VideoEnhanceConfig.isEnabled()) {
-                    view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
-                }
+                view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
             }, 5000)
             mainHandler.postDelayed({
                 view?.evaluateJavascript(ADBLOCK_JS, null)
                 view?.evaluateJavascript(VIDEO_AD_SKIP_JS, null)
                 view?.evaluateJavascript(cssToInject, null)
-                if (com.karin.streamtv.player.VideoEnhanceConfig.isEnabled()) {
-                    view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
-                }
+                view?.evaluateJavascript(VIDEO_ENHANCE_CSS, null)
             }, 10000)
         }
     }

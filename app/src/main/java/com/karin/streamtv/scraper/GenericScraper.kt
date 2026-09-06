@@ -76,7 +76,7 @@ abstract class GenericScraper : BaseScraper {
         }
         if (cards.isEmpty()) {
             Log.w(tag, "No cards found with any selector. Falling back to dynamic parser...")
-            return DynamicParser.parseDynamic(doc, name)
+        return DynamicParser.parseDynamic(doc, name, minCards = 1)
         }
         Log.d(tag, "Found ${cards.size} card(s) with selector '$usedCardSel' (tried ${cardSel.size})")
 
