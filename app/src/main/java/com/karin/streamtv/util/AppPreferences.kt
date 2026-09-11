@@ -7,17 +7,20 @@ object AppPreferences {
 
     private const val PREF_NAME = "karin_flix_settings"
 
-    private const val KEY_SERVER_FALLBACK = "server_fallback_enabled"
-    private const val KEY_AUTOPLAY = "autoplay_enabled"
-    private const val KEY_KARIN_LINK = "karin_link_enabled"
-    private const val KEY_PLAYNOW = "playnow_enabled"
-    private const val KEY_VIDEO_PLAYER_MODE = "video_player_mode_enabled"
-    private const val KEY_PLAYER_VOLUME = "player_volume"
-    private const val KEY_PLAYER_SPEED = "player_speed"
-    private const val KEY_SMB_SHOW_HOME = "smb_show_on_home"
-    private const val KEY_LOW_END = "low_end_mode"
-    private const val KEY_FIRST_RUN = "first_run_done"
-    private const val KEY_CODEC_MODE = "codec_mode"
+    const val KEY_SERVER_FALLBACK = "server_fallback_enabled"
+    const val KEY_AUTOPLAY = "autoplay_enabled"
+    const val KEY_KARIN_LINK = "karin_link_enabled"
+    const val KEY_PLAYNOW = "playnow_enabled"
+    const val KEY_VIDEO_PLAYER_MODE = "video_player_mode_enabled"
+    const val KEY_PLAYER_VOLUME = "player_volume"
+    const val KEY_PLAYER_SPEED = "player_speed"
+    const val KEY_SMB_SHOW_HOME = "smb_show_on_home"
+    const val KEY_LOW_END = "low_end_mode"
+    const val KEY_FIRST_RUN = "first_run_done"
+    const val KEY_CODEC_MODE = "codec_mode"
+    private const val KEY_VOLUME_BOOST = "volume_boost_level"
+    private const val KEY_AUDIO_PRESET = "audio_preset_index"
+    private const val KEY_FX_SOUND_ENABLED = "fx_sound_enabled"
 
     const val CODEC_HW = 0
     const val CODEC_SW_GOOGLE = 1
@@ -125,6 +128,38 @@ object AppPreferences {
             CODEC_AUTO -> "Auto"
             else -> "Hardware (chip)"
         }
+    }
+
+    fun getVolumeBoostLevel(): Float {
+        return prefs?.getFloat(KEY_VOLUME_BOOST, 1.0f) ?: 1.0f
+    }
+
+    fun setVolumeBoostLevel(level: Float) {
+        prefs?.edit()?.putFloat(KEY_VOLUME_BOOST, level)?.apply()
+    }
+
+    fun getVolumeBoostIndex(): Int {
+        return prefs?.getInt("${KEY_VOLUME_BOOST}_idx", 0) ?: 0
+    }
+
+    fun setVolumeBoostIndex(index: Int) {
+        prefs?.edit()?.putInt("${KEY_VOLUME_BOOST}_idx", index)?.apply()
+    }
+
+    fun getAudioPresetIndex(): Int {
+        return prefs?.getInt(KEY_AUDIO_PRESET, 0) ?: 0
+    }
+
+    fun setAudioPresetIndex(index: Int) {
+        prefs?.edit()?.putInt(KEY_AUDIO_PRESET, index)?.apply()
+    }
+
+    fun isFxSoundEnabled(): Boolean {
+        return prefs?.getBoolean(KEY_FX_SOUND_ENABLED, true) ?: true
+    }
+
+    fun setFxSoundEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_FX_SOUND_ENABLED, enabled)?.apply()
     }
 
 }

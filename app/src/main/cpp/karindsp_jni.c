@@ -57,11 +57,11 @@ static void nativeFree(JNIEnv* env, jobject thiz, jlong handle) {
 }
 
 static const JNINativeMethod kMethods[] = {
-    { "create",  "(I)J",     (void*)nativeCreate },
-    { "setIr",   "(J[F)V",   (void*)nativeSetIr },
-    { "render",  "(J[F[F)V", (void*)nativeRender },
-    { "reset",   "(J)V",     (void*)nativeReset },
-    { "free",    "(J)V",     (void*)nativeFree },
+    { "nativeCreate", "(I)J",     (void*)nativeCreate },
+    { "nativeSetIr",  "(J[F)V",   (void*)nativeSetIr },
+    { "nativeRender", "(J[F[F)V", (void*)nativeRender },
+    { "nativeReset",  "(J)V",     (void*)nativeReset },
+    { "nativeFree",   "(J)V",     (void*)nativeFree },
 };
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {

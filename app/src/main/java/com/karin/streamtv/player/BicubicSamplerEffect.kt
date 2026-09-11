@@ -10,9 +10,9 @@ import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 
-class BicubicSamplerEffect : GlEffect {
+class BicubicSamplerEffect(private var demoSplit: Boolean = false) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return BicubicSamplerProgram(context, useHdr)
+        return BicubicSamplerProgram(context, useHdr, demoSplit)
     }
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean = false
 }
@@ -20,8 +20,11 @@ class BicubicSamplerEffect : GlEffect {
 class BicubicSamplerProgram(
     context: Context,
     useHdr: Boolean,
+    private var demoSplit: Boolean = false,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val glProgram: GlProgram
+    private var inputWidth = 0
+    private var inputHeight = 0
 
     init {
         try {
@@ -36,14 +39,20 @@ class BicubicSamplerProgram(
         )
         glProgram.setFloatsUniform("uTransformationMatrix", GlUtil.create4x4IdentityMatrix())
         glProgram.setFloatsUniform("uTexTransformationMatrix", GlUtil.create4x4IdentityMatrix())
+        glProgram.setIntUniform("uDemoSplit", if (demoSplit) 1 else 0)
     }
 
-    override fun configure(inputWidth: Int, inputHeight: Int): Size = Size(inputWidth, inputHeight)
+    override fun configure(inputWidth: Int, inputHeight: Int): Size {
+        this.inputWidth = inputWidth
+        this.inputHeight = inputHeight
+        return Size(inputWidth, inputHeight)
+    }
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
             glProgram.use()
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+            glProgram.setFloatsUniform("uTexelSize", floatArrayOf(1f / inputWidth, 1f / inputHeight))
             glProgram.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         } catch (e: GlUtil.GlException) {
@@ -69,6 +78,8 @@ class BicubicSamplerProgram(
             #endif
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
+            uniform vec2 uTexelSize;
+            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta
             float cubic(float x) {
                 float x2 = x * x;
                 float x3 = x2 * x;
@@ -90,7 +101,7 @@ class BicubicSamplerProgram(
                 return 0.5 * x3 - 0.5 * x2;
             }
             vec4 textureBicubic(sampler2D tex, vec2 uv) {
-                vec2 texel = 1.0 / vec2(textureSize(tex, 0));
+                vec2 texel = uTexelSize;
                 vec2 pos = uv / texel - 0.5;
                 vec2 f = fract(pos);
                 vec2 base = floor(pos);
@@ -116,7 +127,7 @@ class BicubicSamplerProgram(
             }
             void main() {
                 vec4 c = textureBicubic(uTexSampler, vTexCoord);
-                vec2 texel = 1.0 / vec2(textureSize(uTexSampler, 0));
+                vec2 texel = uTexelSize;
                 vec2 base = (floor(vTexCoord / texel - 0.5) + 0.5) * texel;
                 vec4 mn = min(min(texture2D(uTexSampler, base),
                                   texture2D(uTexSampler, base + vec2(texel.x, 0.0))),
@@ -126,7 +137,9 @@ class BicubicSamplerProgram(
                                   texture2D(uTexSampler, base + vec2(texel.x, 0.0))),
                               max(texture2D(uTexSampler, base + vec2(0.0, texel.y)),
                                   texture2D(uTexSampler, base + texel)));
-                gl_FragColor = clamp(c, mn, mx);
+                vec4 demoOut = clamp(c, mn, mx);
+                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoOut.rgb = texture2D(uTexSampler, vTexCoord).rgb; }
+                gl_FragColor = demoOut;
             }
         """
     }

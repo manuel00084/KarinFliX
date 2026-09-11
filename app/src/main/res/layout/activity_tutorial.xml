@@ -210,7 +210,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="• MotionX2 60p (fluidez): inventa cuadros entre los reales para que el movimiento se vea más suave (como las teles modernas). No cambia la resolución, cambia la fluidez.\n  ➜ Apagado: el video corre a sus cuadros naturales (30p). Es igual de fluido y es el que menos gasta.\n  ➜ Frame x2, Suavizado, Doubling+Micro-Blend: distintos niveles de suavizado.\n  ▶ IMPORTANTE EN EQUIPOS DÉBILES: es la opción que MÁS exige al aparato. Apágalo si el video se te trababa."
+                    android:text="• MotionX2 Boost (fluidez): hace que el movimiento se vea más fluido, como las teles modernas. No cambia la resolución.\n  ➜ Apagado: el video corre a sus cuadros naturales. Es lo que menos gasta.\n  ➜ HYBRID (recomendado): combina cuadro nítido + un poco de mezcla suave. Mejor balance.\n  ➜ DOUBLING (Frame x2): muestra cada cuadro tal cual. Más ligero, menos suave.\n  ➜ BLEND (Suavizado): mezcla el cuadro anterior con el actual. Suave, pero puede verse fantasma.\n  ▶ IMPORTANTE EN EQUIPOS DÉBILES: apágalo si el video se te traba."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -247,7 +247,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="• Calidad = QUÉ se descarga (resolución).\n• Escala = CÓMO se estira esa imagen (grande/definición).\n• MotionX2 60p = FLUIDEZ (más cuadros por segundo).\n• Imagen mejorada = COLORES/NITIDEZ.\n• Sonido mejorado = CÓMO se escucha.\n\nRECUERDA: si tu equipo es de gama baja o está limitado, pon Calidad en 720/480, Escala en OFF y MotionX2 60p apagado. Así verás el video igual de bien pero corriendo fluido, incluso si no puedes bajar de resolución."
+                    android:text="• Calidad = QUÉ se descarga (resolución).\n• Escala = CÓMO se estira esa imagen (grande/definición).\n• MotionX2 Boost = FLUIDEZ (cómo se ve el movimiento).\n• Imagen mejorada = COLORES/NITIDEZ.\n• Sonido mejorado = CÓMO se escucha.\n\nRECUERDA: si tu equipo es de gama baja o está limitado, pon Calidad en 720/480, Escala en OFF y MotionX2 Boost apagado. Así verás el video igual de bien pero corriendo fluido, incluso si no puedes bajar de resolución."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"

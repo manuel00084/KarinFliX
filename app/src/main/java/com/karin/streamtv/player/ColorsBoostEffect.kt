@@ -10,14 +10,28 @@ import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 
-class DogSharpenEffect(
-    private var strength: Float = 1.0f,
+/**
+ * Colors Boost: colores más vívidos con barra de intensidad.
+ *
+ * Pipeline por píxel (adaptativo por contenido, sin historial):
+ * 1) Mide lo apagado del píxel, cuida sombras/blancos y detecta piel.
+ * 2) Saturación adaptativa: escenas apagadas reciben más, vívidas casi
+ *    nada, piel al mínimo.
+ * 3) Vibrance de remate con la misma respuesta adaptativa.
+ *
+ * Remate de color al final de la cadena (después de HDR/Cine), antes de
+ * MotionX2. Barato: sin taps extra (1 fetch) ni loops. GLES2 compatible.
+ */
+class ColorsBoostEffect(
+    private var strength: Float = 0.6f,
     private var demoSplit: Boolean = false,
 ) : GlEffect {
-    private var program: DogSharpenProgram? = null
+
+    private var program: ColorsBoostShaderProgram? = null
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return DogSharpenProgram(context, useHdr, strength, demoSplit).also { program = it }
+        return ColorsBoostShaderProgram(context, useHdr, strength, demoSplit)
+            .also { program = it }
     }
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean = strength <= 0f
 
@@ -27,15 +41,14 @@ class DogSharpenEffect(
     }
 }
 
-class DogSharpenProgram(
+class ColorsBoostShaderProgram(
     context: Context,
     useHdr: Boolean,
     private var strength: Float,
     private var demoSplit: Boolean = false,
 ) : BaseGlShaderProgram(useHdr, 1) {
+
     private val glProgram: GlProgram
-    private var inputWidth = 0
-    private var inputHeight = 0
 
     init {
         try {
@@ -54,8 +67,6 @@ class DogSharpenProgram(
     }
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
-        this.inputWidth = inputWidth
-        this.inputHeight = inputHeight
         return Size(inputWidth, inputHeight)
     }
 
@@ -63,10 +74,6 @@ class DogSharpenProgram(
         try {
             glProgram.use()
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-            glProgram.setFloatsUniform(
-                "uTexelSize",
-                floatArrayOf(1f / inputWidth, 1f / inputHeight),
-            )
             glProgram.setFloatUniform("uStrength", strength)
             glProgram.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
@@ -89,34 +96,45 @@ class DogSharpenProgram(
                 vTexCoord = (uTexTransformationMatrix * tp).xy;
             }
         """
+
         private const val FRAGMENT_SHADER = """
             #ifdef GL_ES
             precision highp float;
             #endif
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
-            uniform vec2 uTexelSize;
-            uniform float uStrength;
+            uniform float uStrength; // 0..1
             uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta
+
+            float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
             void main() {
-                vec3 lumW = vec3(0.2126, 0.7152, 0.0722);
-                vec2 uv = vTexCoord;
-                vec3 c = texture2D(uTexSampler, uv).rgb;
-                vec3 c1 = texture2D(uTexSampler, uv + vec2(-uTexelSize.x, 0.0)).rgb;
-                vec3 c2 = texture2D(uTexSampler, uv + vec2( uTexelSize.x, 0.0)).rgb;
-                vec3 c3 = texture2D(uTexSampler, uv + vec2(0.0, -uTexelSize.y)).rgb;
-                vec3 c4 = texture2D(uTexSampler, uv + vec2(0.0,  uTexelSize.y)).rgb;
-                vec3 c5 = texture2D(uTexSampler, uv + vec2(-uTexelSize.x, -uTexelSize.y)).rgb;
-                vec3 c6 = texture2D(uTexSampler, uv + vec2( uTexelSize.x, -uTexelSize.y)).rgb;
-                vec3 c7 = texture2D(uTexSampler, uv + vec2(-uTexelSize.x,  uTexelSize.y)).rgb;
-                vec3 c8 = texture2D(uTexSampler, uv + vec2( uTexelSize.x,  uTexelSize.y)).rgb;
-                vec3 gauss = (c1 + c2 + c3 + c4) * 0.15 + (c5 + c6 + c7 + c8) * 0.05 + c * 0.2;
-                float lumaOrig = dot(c, lumW);
-                float lumaGauss = dot(gauss, lumW);
-                float diff = lumaOrig - lumaGauss;
-                float lumaNew = clamp(lumaOrig + diff * uStrength, 0.0, 1.0);
-                vec3 chroma = c - vec3(lumaOrig);
-                vec3 demoRgb = clamp(vec3(lumaNew) + chroma, 0.0, 1.0);
+                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
+                if (uStrength <= 0.0) {
+                    gl_FragColor = vec4(c, 1.0);
+                    return;
+                }
+                float l0 = luma(c);
+                float mx0 = max(c.r, max(c.g, c.b));
+                float mn0 = min(c.r, min(c.g, c.b));
+                // Mascara de piel sobre el original (deteccion estable).
+                float skin = smoothstep(0.02, 0.1, c.r - c.g) * smoothstep(0.01, 0.08, c.r - c.b);
+                skin *= smoothstep(0.25, 0.45, c.r) * (1.0 - smoothstep(0.7, 0.85, c.r));
+                skin = clamp(skin, 0.0, 1.0);
+                // Adaptativo: lo apagado pide mas, lo vivido casi nada.
+                float satDeficit = 1.0 - clamp((mx0 - mn0) * 2.0, 0.0, 1.0);
+                // ...cuidando sombras (ruido) y blancos (clipping).
+                float toneW = smoothstep(0.02, 0.18, l0) * (1.0 - smoothstep(0.75, 0.98, l0));
+                float drive = clamp(satDeficit * (0.35 + 0.65 * toneW), 0.0, 1.0);
+                drive *= 1.0 - skin * 0.85;
+                // 1) Saturacion adaptativa.
+                vec3 outc = mix(vec3(l0), c, 1.0 + uStrength * (0.25 + 1.0 * drive));
+                // 2) Vibrance de remate, tambien adaptativa.
+                float mx = max(outc.r, max(outc.g, outc.b));
+                float mn = min(outc.r, min(outc.g, outc.b));
+                float vib = 0.35 * uStrength * drive * (1.0 - clamp((mx - mn) * 1.5, 0.0, 1.0));
+                outc = mix(vec3(luma(outc)), outc, 1.0 + vib);
+                vec3 demoRgb = clamp(outc, 0.0, 1.0);
                 if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }
                 gl_FragColor = vec4(demoRgb, 1.0);
             }

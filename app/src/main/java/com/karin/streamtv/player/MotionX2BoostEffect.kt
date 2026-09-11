@@ -10,28 +10,49 @@ import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 
+/**
+ * MotionX2 Boost: hace que el video SE VEA más fluido (efecto telenovela).
+ *
+ * Guarda el cuadro anterior REAL en una textura propia (FBO) para mezclar.
+ * Nota honesta: el shader es 1:1 (entra 1 cuadro, sale 1), así que no emite
+ * cuadros extra; DOUBLING muestra cada cuadro nítido sin mezcla y la
+ * repetición visible la hace el panel solo.
+ *
+ * Modos:
+ * - HYBRID (recomendado): cuadro nítido + micro-mezcla del anterior. Mejor balance.
+ * - DOUBLING: Frame x2, cada cuadro tal cual, sin mezcla. Más ligero, menos suave.
+ * - BLEND: mezcla suave entre anterior y actual. Suave, pero puede verse fantasma.
+ */
 enum class MotionX2Mode(val label: String) {
-    BLEND("Blend Simple (2x)"),
-    ADAPTIVE("Adaptativo (Edge-Aware)"),
-    MOTION_VECTORS("Vectores de Movimiento"),
-    FRAME_DUP("Duplicar + Blend")
+    HYBRID("HYBRID (Doubling + Micro-Blend)"),
+    DOUBLING("DOUBLING (Frame x2)"),
+    BLEND("BLEND (Suavizado)"),
 }
 
 class MotionX2BoostEffect(
-    private var mode: MotionX2Mode = MotionX2Mode.ADAPTIVE,
+    private var mode: MotionX2Mode = MotionX2Mode.HYBRID,
     private var strength: Float = 0.5f,
-    private var blendFactor: Float = 0.5f,
-    private var lowPower: Boolean = false
+    private var demoSplit: Boolean = false,
 ) : GlEffect {
+
+    private var program: MotionX2BoostShaderProgram? = null
+
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return MotionX2BoostShaderProgram(context, useHdr, mode, strength, blendFactor, lowPower)
+        return MotionX2BoostShaderProgram(context, useHdr, mode, strength, demoSplit)
+            .also { program = it }
     }
+
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean = strength <= 0f
 
-    fun updateMode(newMode: MotionX2Mode) { mode = newMode }
-    fun updateStrength(newStrength: Float) { strength = newStrength.coerceIn(0f, 1f) }
-    fun updateBlendFactor(newBlend: Float) { blendFactor = newBlend.coerceIn(0f, 1f) }
-    fun updateLowPower(enabled: Boolean) { lowPower = enabled }
+    fun updateMode(newMode: MotionX2Mode) {
+        mode = newMode
+        program?.updateMode(newMode)
+    }
+
+    fun updateStrength(newStrength: Float) {
+        strength = newStrength.coerceIn(0f, 1f)
+        program?.updateStrength(newStrength)
+    }
 }
 
 class MotionX2BoostShaderProgram(
@@ -39,70 +60,141 @@ class MotionX2BoostShaderProgram(
     useHdr: Boolean,
     private var mode: MotionX2Mode,
     private var strength: Float,
-    private var blendFactor: Float,
-    private var lowPower: Boolean
+    private var demoSplit: Boolean = false,
 ) : BaseGlShaderProgram(useHdr, 1) {
 
     private val glProgram: GlProgram
+    private val copyProgram: GlProgram
     private var inputWidth = 0
     private var inputHeight = 0
-    private var frameCount = 0L
-    private var prevFrameTexId = -1
+
+    // Historial real del cuadro previo (textura + FBO propios, GLES2 compatible).
+    private var histTexId = 0
+    private var histFboId = 0
+    private var histWidth = 0
+    private var histHeight = 0
+    private var hasHistory = false
+    private var lastPtsUs = -1L
 
     init {
         try {
             glProgram = GlProgram(VERTEX_SHADER, FRAGMENT_SHADER)
+            copyProgram = GlProgram(VERTEX_SHADER, COPY_FRAGMENT_SHADER)
         } catch (e: GlUtil.GlException) {
             throw VideoFrameProcessingException(e)
         }
-        glProgram.setBufferAttribute(
-            "aFramePosition",
-            GlUtil.getNormalizedCoordinateBounds(),
-            GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE,
-        )
-        glProgram.setFloatsUniform("uTransformationMatrix", GlUtil.create4x4IdentityMatrix())
-        glProgram.setFloatsUniform("uTexTransformationMatrix", GlUtil.create4x4IdentityMatrix())
+        for (p in arrayOf(glProgram, copyProgram)) {
+            p.setBufferAttribute(
+                "aFramePosition",
+                GlUtil.getNormalizedCoordinateBounds(),
+                GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE,
+            )
+            p.setFloatsUniform("uTransformationMatrix", GlUtil.create4x4IdentityMatrix())
+            p.setFloatsUniform("uTexTransformationMatrix", GlUtil.create4x4IdentityMatrix())
+        }
+        glProgram.setIntUniform("uDemoSplit", if (demoSplit) 1 else 0)
     }
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         this.inputWidth = inputWidth
         this.inputHeight = inputHeight
+        if (inputWidth != histWidth || inputHeight != histHeight) {
+            deleteHistory()
+            hasHistory = false
+        }
         return Size(inputWidth, inputHeight)
     }
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
+            ensureHistory()
+            if (presentationTimeUs < lastPtsUs) {
+                // Seek hacia atrás: el historial ya no vale.
+                hasHistory = false
+            }
+            lastPtsUs = presentationTimeUs
+
+            // 1. Pasada principal (al FBO de salida de Media3).
             glProgram.use()
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-            glProgram.setSamplerTexIdUniform("uPrevFrame", getPrevFrameTexId(inputTexId), 1)
-            glProgram.setFloatsUniform("uTexelSize", floatArrayOf(1f / inputWidth, 1f / inputHeight))
+            glProgram.setSamplerTexIdUniform("uPrevFrame", histTexId, 1)
             glProgram.setFloatUniform("uStrength", strength)
-            glProgram.setFloatUniform("uBlendFactor", blendFactor)
             glProgram.setIntUniform("uMode", mode.ordinal)
-            glProgram.setIntUniform("uLowPower", if (lowPower) 1 else 0)
-            glProgram.setFloatUniform("uFrameParity", (frameCount % 2).toFloat())
+            glProgram.setIntUniform("uFirstFrame", if (hasHistory) 0 else 1)
             glProgram.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-            frameCount++
-            storePrevFrame(inputTexId)
+            // 2. Guardar cuadro actual como historial (copia GLES2-safe).
+            val prevFbo = IntArray(1)
+            val prevVp = IntArray(4)
+            GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, prevFbo, 0)
+            GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, prevVp, 0)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, histFboId)
+            GLES20.glViewport(0, 0, histWidth, histHeight)
+            copyProgram.use()
+            copyProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+            copyProgram.bindAttributesAndUniforms()
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo[0])
+            GLES20.glViewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3])
+            hasHistory = true
         } catch (e: GlUtil.GlException) {
             throw VideoFrameProcessingException(e, presentationTimeUs)
         }
     }
 
-    private fun getPrevFrameTexId(currentTexId: Int): Int {
-        return if (prevFrameTexId >= 0) prevFrameTexId else currentTexId
+    override fun release() {
+        deleteHistory()
+        super.release()
     }
 
-    private fun storePrevFrame(texId: Int) {
-        prevFrameTexId = texId
+    private fun ensureHistory() {
+        if (histTexId != 0 && histWidth == inputWidth && histHeight == inputHeight) return
+        deleteHistory()
+        if (inputWidth <= 0 || inputHeight <= 0) return
+        val tex = IntArray(1)
+        GLES20.glGenTextures(1, tex, 0)
+        histTexId = tex[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, histTexId)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexImage2D(
+            GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA,
+            inputWidth, inputHeight, 0,
+            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null,
+        )
+        val fbo = IntArray(1)
+        GLES20.glGenFramebuffers(1, fbo, 0)
+        histFboId = fbo[0]
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, histFboId)
+        GLES20.glFramebufferTexture2D(
+            GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+            GLES20.GL_TEXTURE_2D, histTexId, 0,
+        )
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+        histWidth = inputWidth
+        histHeight = inputHeight
+        hasHistory = false
+    }
+
+    private fun deleteHistory() {
+        if (histFboId != 0) {
+            GLES20.glDeleteFramebuffers(1, intArrayOf(histFboId), 0)
+            histFboId = 0
+        }
+        if (histTexId != 0) {
+            GLES20.glDeleteTextures(1, intArrayOf(histTexId), 0)
+            histTexId = 0
+        }
+        histWidth = 0
+        histHeight = 0
     }
 
     fun updateMode(newMode: MotionX2Mode) { mode = newMode }
     fun updateStrength(newStrength: Float) { strength = newStrength.coerceIn(0f, 1f) }
-    fun updateBlendFactor(newBlend: Float) { blendFactor = newBlend.coerceIn(0f, 1f) }
-    fun updateLowPower(enabled: Boolean) { lowPower = enabled }
 
     companion object {
         private const val VERTEX_SHADER = """
@@ -117,6 +209,17 @@ class MotionX2BoostShaderProgram(
             }
         """
 
+        private const val COPY_FRAGMENT_SHADER = """
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexSampler;
+            void main() {
+                gl_FragColor = texture2D(uTexSampler, vTexCoord);
+            }
+        """
+
         private const val FRAGMENT_SHADER = """
             #ifdef GL_ES
             precision highp float;
@@ -124,115 +227,26 @@ class MotionX2BoostShaderProgram(
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
             uniform sampler2D uPrevFrame;
-            uniform vec2 uTexelSize;
             uniform float uStrength;
-            uniform float uBlendFactor;
-            uniform int uMode; // 0=BLEND, 1=ADAPTIVE, 2=MOTION_VECTORS, 3=FRAME_DUP
-            uniform int uLowPower; // 1=modo bajo consumo (sin bordes ni movimiento)
-            uniform float uFrameParity;
-
-            const vec3 LUM_COEFF = vec3(0.2126, 0.7152, 0.0722);
-            float luma(vec3 c) { return dot(c, LUM_COEFF); }
-
-            // Simple edge detection for adaptive blending
-            float edgeStrength(vec2 uv, sampler2D tex, vec2 texel) {
-                vec3 c = texture2D(tex, uv).rgb;
-                vec3 n = texture2D(tex, uv + vec2(0.0, -texel.y)).rgb;
-                vec3 s = texture2D(tex, uv + vec2(0.0,  texel.y)).rgb;
-                vec3 w = texture2D(tex, uv + vec2(-texel.x, 0.0)).rgb;
-                vec3 e = texture2D(tex, uv + vec2( texel.x, 0.0)).rgb;
-                float lc = luma(c);
-                float ln = luma(n); float ls = luma(s);
-                float lw = luma(w); float le = luma(e);
-                float edgeH = abs(le - lw);
-                float edgeV = abs(ln - ls);
-                return max(edgeH, edgeV);
-            }
-
-            // Optical flow approximation using block matching (simplified)
-            vec2 estimateMotion(vec2 uv, sampler2D curr, sampler2D prev, vec2 texel) {
-                // Search in 3x3 neighborhood
-                vec2 bestMotion = vec2(0.0);
-                float bestDiff = 1000.0;
-                vec3 centerCurr = texture2D(curr, uv).rgb;
-
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        if (dx == 0 && dy == 0) continue;
-                        vec2 offset = vec2(float(dx), float(dy)) * texel * 4.0;
-                        vec3 sample = texture2D(prev, uv + offset).rgb;
-                        float diff = length(centerCurr - sample);
-                        if (diff < bestDiff) {
-                            bestDiff = diff;
-                            bestMotion = vec2(float(dx), float(dy)) * 4.0;
-                        }
-                    }
-                }
-                return bestMotion * texel;
-            }
-
+            uniform int uMode; // 0=HYBRID, 1=DOUBLING, 2=BLEND
+            uniform int uFirstFrame;
+            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta
             void main() {
-                vec2 tx = uTexelSize;
-                vec3 current = texture2D(uTexSampler, vTexCoord).rgb;
-
-                // If first frame or parity even, just pass through
-                if (uFrameParity < 0.5) {
-                    gl_FragColor = vec4(current, 1.0);
+                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
+                if (uMode == 1 || uFirstFrame == 1 || uStrength <= 0.0) {
+                    // DOUBLING: cada cuadro nítido tal cual (la repetición la hace el panel).
+                    gl_FragColor = vec4(c, 1.0);
                     return;
                 }
-
-                vec3 previous = texture2D(uPrevFrame, vTexCoord).rgb;
-                vec3 result;
-
-                if (uLowPower > 0.5) {
-                    // ===== MODO BAJO CONSUMO (equipos con pocos recursos) =====
-                    // Sin edge detection ni búsqueda de movimiento: 2 fetches totales
-                    // (actual + previo). Blend suave al 50% para minimizar ghosting.
-                    result = mix(current, previous, uBlendFactor * 0.5 * uStrength);
-                }
-                else if (uMode == 0) {
-                    // ===== MODE 0: SIMPLE BLEND =====
-                    // Simple temporal blend: 50/50 current + previous
-                    result = mix(current, previous, uBlendFactor * uStrength);
-                }
-                else if (uMode == 1) {
-                    // ===== MODE 1: ADAPTIVE EDGE-AWARE =====
-                    // Detect edges, blend less on edges to avoid ghosting
-                    float edge = edgeStrength(vTexCoord, uTexSampler, tx);
-                    float edgeMask = smoothstep(0.02, 0.15, edge);
-                    float adaptiveBlend = mix(uBlendFactor, uBlendFactor * 0.3, edgeMask);
-                    result = mix(current, previous, adaptiveBlend * uStrength);
-                }
-                else if (uMode == 2) {
-                    // ===== MODE 2: MOTION VECTOR APPROXIMATION =====
-                    // Estimate motion and compensate
-                    vec2 motion = estimateMotion(vTexCoord, uTexSampler, uPrevFrame, tx);
-                    vec3 motionCompensated = texture2D(uPrevFrame, vTexCoord + motion).rgb;
-
-                    // Confidence based on how well motion compensated matches current
-                    float confidence = 1.0 - smoothstep(0.0, 0.1, length(current - motionCompensated));
-                    float mcBlend = uBlendFactor * confidence * uStrength;
-
-                    // Fallback to simple blend where motion estimation fails
-                    result = mix(current, motionCompensated, mcBlend);
-                    result = mix(result, mix(current, previous, uBlendFactor * 0.5), 1.0 - confidence);
-                }
-                else {
-                    // ===== MODE 3: FRAME DUPLICATION WITH BLEND =====
-                    // Duplicate frame but blend with previous for smoothness
-                    // This creates 2x fps by showing: frame1, blend, frame2, blend, frame3...
-                    result = mix(current, previous, uBlendFactor * 0.5 * uStrength);
-                }
-
-                // Chroma-preserving luminance blend for cleaner results
-                float currentLuma = luma(current);
-                float resultLuma = luma(result);
-                if (currentLuma > 0.001 && resultLuma > 0.001) {
-                    vec3 chroma = current - vec3(currentLuma);
-                    result = vec3(resultLuma) + chroma;
-                }
-
-                gl_FragColor = vec4(clamp(result, 0.0, 1.0), 1.0);
+                vec3 p = texture2D(uPrevFrame, vTexCoord).rgb;
+                float mot = length(c - p);
+                float m = smoothstep(0.03, 0.20, mot);
+                // HYBRID = micro-mezcla (25%), BLEND = mezcla completa (50%).
+                float micro = (uMode == 0) ? 0.25 : 0.5;
+                float k = clamp(m * uStrength, 0.0, 1.0) * micro;
+                vec3 demoRgb = mix(c, p, k);
+                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }
+                gl_FragColor = vec4(demoRgb, 1.0);
             }
         """
     }

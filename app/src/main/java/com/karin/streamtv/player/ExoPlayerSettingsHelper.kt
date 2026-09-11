@@ -2,36 +2,40 @@ package com.karin.streamtv.player
 
 import android.app.Activity
 import android.content.SharedPreferences
+import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.media3.exoplayer.ExoPlayer
+import com.karin.streamtv.util.AudioEffectsManager
 
 object ExoPlayerSettingsHelper {
 
     const val PREFS_NAME = "exoplayer_video_prefs"
+    const val KEY_DEPIXEL_EN = "depixel_enabled"
+    const val KEY_DEPIXEL_STRENGTH = "depixel_strength"
+    const val KEY_CINE_EN = "cine_enabled"
+    const val KEY_CINE_STRENGTH = "cine_strength"
+    const val KEY_CINE_AO = "cine_ao"
+    const val KEY_CINE_SAT = "cine_sat"
+    const val KEY_CINE_BRIGHT = "cine_bright"
+    const val KEY_HDR_EN = "hdr_enabled"
+    const val KEY_HDR_STRENGTH = "hdr_strength"
+    const val KEY_COLORS_EN = "colors_enabled"
+    const val KEY_COLORS_STRENGTH = "colors_strength"
     const val KEY_DETAIL_BOOST_EN = "detail_boost_enabled"
     const val KEY_DETAIL_BOOST_STRENGTH = "detail_boost_strength"
     const val KEY_DEMO_EN = "demo_enabled"
-    const val KEY_LOW_BITRATE_EN = "low_bitrate_enabled"
-    const val KEY_LOW_BITRATE_STRENGTH = "low_bitrate_strength"
-    const val KEY_LIGHT_BOOST_EN = "light_boost_enabled"
-    const val KEY_LIGHT_BOOST_STRENGTH = "light_boost_strength"
-    const val KEY_LIGHT_BOOST_WARMTH = "light_boost_warmth"
     const val KEY_MOTIONX2_EN = "motionx2_enabled"
     const val KEY_MOTIONX2_MODE = "motionx2_mode"
     const val KEY_MOTIONX2_STRENGTH = "motionx2_strength"
-    const val KEY_MOTIONX2_BLEND = "motionx2_blend"
-    const val KEY_COLORBOOST_EN = "colorboost_enabled"
-    const val KEY_COLORBOOST_SATURATION = "colorboost_saturation"
-    const val KEY_COLORBOOST_VIBRANCE = "colorboost_vibrance"
-    const val KEY_COLORBOOST_HUE = "colorboost_hue"
-    const val KEY_COLORBOOST_COLORFULNESS = "colorboost_colorfulness"
     const val KEY_UPSCALER_MODE = "upscaler_mode"
     const val KEY_FSR_SHARPNESS = "fsr_sharpness"
+    const val KEY_FSR_QUALITY = "fsr_quality"
     const val KEY_DOG_STRENGTH = "dog_strength"
 
     const val MODE_OFF = 0
@@ -40,13 +44,21 @@ object ExoPlayerSettingsHelper {
     const val MODE_FSR = 3
     const val MODE_DOG = 4
 
+    // region Resolución de conflictos
+    private fun isFsrActive(prefs: SharedPreferences) =
+        prefs.getInt(KEY_UPSCALER_MODE, MODE_OFF) == MODE_FSR
+
+    private fun toast(activity: Activity, msg: String) {
+        Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+    }
+    // endregion
+
     fun showAdvancedDialog(
         activity: Activity,
         prefs: SharedPreferences,
         player: ExoPlayer?,
         onEffectsChanged: (ExoPlayer) -> Unit,
         onStrengthChanged: (String, Float) -> Unit = { _, _ -> },
-        onWarmthChanged: (Float) -> Unit = { _ -> },
     ) {
         data class FeatureEntry(val label: String, val action: (() -> Unit)?)
 
@@ -54,90 +66,157 @@ object ExoPlayerSettingsHelper {
             "Apagado",
             "Bilineal",
             "Bicúbico",
-            "FSR (1.0 + 3.1 + 4.0)",
+            "FSR 1.0 (EASU + RCAS)",
             "DOG Sharpen",
         )
 
+        fun upscalerName(): String {
+            return upscalerLabels.getOrNull(prefs.getInt(KEY_UPSCALER_MODE, MODE_OFF)) ?: "Apagado"
+        }
+
+        fun onOff(en: Boolean) = if (en) "ON" else "OFF"
+        val fsrOn = isFsrActive(prefs)
+        val detailEn = prefs.getBoolean(KEY_DETAIL_BOOST_EN, false)
+        val cineEn = prefs.getBoolean(KEY_CINE_EN, false)
+        val hdrEn = prefs.getBoolean(KEY_HDR_EN, false)
+        val colorsEn = prefs.getBoolean(KEY_COLORS_EN, false)
+
+        // Orden = orden real del pipeline en ExoPlayerActivity para evitar confusión.
         val entries = listOf(
-            FeatureEntry("📐 Tipo de escalador") {
+            // 1. Escalador (exclusivo: solo uno a la vez)
+            FeatureEntry("📐 1. Escalador • ${upscalerName()}") {
                 val current = prefs.getInt(KEY_UPSCALER_MODE, MODE_OFF)
                 AlertDialog.Builder(activity)
-                    .setTitle("Escalador de video")
+                    .setTitle("Escalador de video (exclusivo)")
                     .setSingleChoiceItems(upscalerLabels, current) { dialog, which ->
-                        prefs.edit().putInt(KEY_UPSCALER_MODE, which).apply()
+                        val editor = prefs.edit().putInt(KEY_UPSCALER_MODE, which)
+                        // Conflicto FSR <-> Detail: FSR ya trae su propio realce,
+                        // sumar Detail mete ruido. Se apaga Detail automáticamente.
+                        if (which == MODE_FSR && prefs.getBoolean(KEY_DETAIL_BOOST_EN, false)) {
+                            editor.putBoolean(KEY_DETAIL_BOOST_EN, false)
+                            toast(activity, "Detail Boost apagado: incompatible con FSR")
+                        }
+                        editor.apply()
                         player?.let { onEffectsChanged(it) }
                         dialog.dismiss()
+                        when (which) {
+                            MODE_FSR -> showFsrDialog(
+                                activity = activity,
+                                prefs = prefs,
+                                player = player,
+                                onEffectsChanged = onEffectsChanged,
+                                onLiveQualityChange = { v -> onStrengthChanged("fsr_quality", v) },
+                                onLiveSharpnessChange = { v -> onStrengthChanged("fsr", v) },
+                            )
+                            MODE_DOG -> showDogDialog(
+                                activity = activity,
+                                prefs = prefs,
+                                player = player,
+                                onEffectsChanged = onEffectsChanged,
+                                onLiveChange = { v -> onStrengthChanged("dog", v) },
+                            )
+                        }
+                        // El menú se refresca la próxima vez que se abra (sin apilar diálogos).
                     }
                     .setNegativeButton("Cancelar", null)
                     .show()
             },
-            FeatureEntry("⚡ Low Bitrate Boost") {
+            // 2. Limpieza (siempre primero en el pipeline, sin conflictos)
+            FeatureEntry("🧱 2. Depixel Boost • ${onOff(prefs.getBoolean(KEY_DEPIXEL_EN, false))}") {
                 showSingleFeatureDialog(
                     activity = activity,
-                    title = "Low Bitrate Boost",
-                    getEnabled = { prefs.getBoolean(KEY_LOW_BITRATE_EN, false) },
-                    getValue = { prefs.getInt(KEY_LOW_BITRATE_STRENGTH, 60) / 100f },
-                    description = "Repara artefactos de baja tasa de bits: deblocking, " +
-                        "ruido mosquito, posterización, y recupera detalle perdido por compresión.",
-                    onLiveChange = { v -> onStrengthChanged("lowbitrate", v) },
+                    title = "Depixel Boost",
+                    getEnabled = { prefs.getBoolean(KEY_DEPIXEL_EN, false) },
+                    getValue = { prefs.getInt(KEY_DEPIXEL_STRENGTH, 60) / 100f },
+                    description = "Repara videos con bajo bitrate: quita grano en zonas planas, " +
+                        "suaviza bloques y artefactos, limpia el color guiado por luma y " +
+                        "no toca los bordes reales. Barato para equipos modestos.",
+                    onLiveChange = { v -> onStrengthChanged("depixel", v) },
                     onSave = { en, v ->
                         prefs.edit()
-                            .putBoolean(KEY_LOW_BITRATE_EN, en)
-                            .putInt(KEY_LOW_BITRATE_STRENGTH, (v * 100).toInt())
+                            .putBoolean(KEY_DEPIXEL_EN, en)
+                            .putInt(KEY_DEPIXEL_STRENGTH, (v * 100).toInt())
                             .apply()
                         player?.let { onEffectsChanged(it) }
                     },
                 )
             },
-            FeatureEntry("🔹 Detail Boost") {
-                val detailNote = if (prefs.getInt(KEY_UPSCALER_MODE, MODE_OFF) == MODE_FSR) {
-                    " ⚠️ Inactivo mientras FSR esté activo (evita sumar ruido). " +
-                        "Se reactiva al usar otro escalador."
-                } else ""
-                showSingleFeatureDialog(
-                    activity = activity,
-                    title = "Detail Boost",
-                    getEnabled = {
-                        prefs.getBoolean(KEY_DETAIL_BOOST_EN, false) &&
-                            prefs.getInt(KEY_UPSCALER_MODE, MODE_OFF) != MODE_FSR
-                    },
-                    getValue = { prefs.getInt(KEY_DETAIL_BOOST_STRENGTH, 70) / 100f },
+            // 3. Detalle (bloqueado mientras FSR esté activo)
+            FeatureEntry(
+                if (fsrOn) "🔹 3. Detail Boost • BLOQUEADO por FSR"
+                else "🔹 3. Detail Boost • ${onOff(detailEn)}",
+            ) {
+                if (isFsrActive(prefs)) {
+                    AlertDialog.Builder(activity)
+                        .setTitle("Detail Boost bloqueado")
+                        .setMessage(
+                            "Detail Boost es incompatible con FSR (FSR ya aplica su propio " +
+                                "realce y sumarlos genera ruido).\n\n¿Apagar FSR y activar Detail Boost?",
+                        )
+                        .setPositiveButton("Apagar FSR y seguir") { _, _ ->
+                            prefs.edit()
+                                .putInt(KEY_UPSCALER_MODE, MODE_OFF)
+                                .putBoolean(KEY_DETAIL_BOOST_EN, true)
+                                .apply()
+                            player?.let { onEffectsChanged(it) }
+                            toast(activity, "FSR apagado, Detail Boost activado")
+                        }
+                        .setNegativeButton("Cancelar", null)
+                        .show()
+                } else {
+                    showSingleFeatureDialog(
+                        activity = activity,
+                        title = "Detail Boost",
+                        getEnabled = { prefs.getBoolean(KEY_DETAIL_BOOST_EN, false) },
+                        getValue = { prefs.getInt(KEY_DETAIL_BOOST_STRENGTH, 70) / 100f },
                     description = "Realza bordes y micro-detalles (texturas, pelo, vegetación) con " +
-                        "máscara de enfoque, sin ruido ni halos artificiales.$detailNote",
-                    onLiveChange = { v -> onStrengthChanged("detailboost", v) },
+                        "enfoque direccional y respuesta adaptativa: más donde falta, " +
+                        "preciso en bordes, sin ruido ni halos.\n" +
+                        "No se puede usar junto con FSR.",
+                        onLiveChange = { v -> onStrengthChanged("detailboost", v) },
+                        onSave = { en, v ->
+                            prefs.edit()
+                                .putBoolean(KEY_DETAIL_BOOST_EN, en)
+                                .putInt(KEY_DETAIL_BOOST_STRENGTH, (v * 100).toInt())
+                                .apply()
+                            player?.let { onEffectsChanged(it) }
+                        },
+                    )
+                }
+            },
+            // 4. Combo CineHDR (HDR + Cine coordinados, con sus intensidades)
+            FeatureEntry("🎬☀️ 4. CineHDR • ${onOff(hdrEn && cineEn)}") {
+                showCineHdrDialog(
+                    activity = activity,
+                    prefs = prefs,
+                    player = player,
+                    onEffectsChanged = onEffectsChanged,
+                    onLiveHdrChange = { v -> onStrengthChanged("hdr", v) },
+                    onLiveCineChange = { v -> onStrengthChanged("cine", v) },
+                )
+            },
+            // 5. Colores (remate, sin conflictos)
+            FeatureEntry("🎨 5. Colors Boost • ${onOff(colorsEn)}") {
+                showSingleFeatureDialog(
+                    activity = activity,
+                    title = "Colors Boost",
+                    getEnabled = { prefs.getBoolean(KEY_COLORS_EN, false) },
+                    getValue = { prefs.getInt(KEY_COLORS_STRENGTH, 60) / 100f },
+                    description = "Colores más vívidos: saturación + vibrance que empuja " +
+                        "los apagados y protege la piel para no dejar caras naranjas.\n" +
+                        "Remate de color: va después de HDR/Cine.",
+                    onLiveChange = { v -> onStrengthChanged("colors", v) },
                     onSave = { en, v ->
                         prefs.edit()
-                            .putBoolean(KEY_DETAIL_BOOST_EN, en)
-                            .putInt(KEY_DETAIL_BOOST_STRENGTH, (v * 100).toInt())
+                            .putBoolean(KEY_COLORS_EN, en)
+                            .putInt(KEY_COLORS_STRENGTH, (v * 100).toInt())
                             .apply()
                         player?.let { onEffectsChanged(it) }
                     },
                 )
             },
-            FeatureEntry("💡 Light Boost") {
-                showLightBoostDialog(
-                    activity = activity,
-                    prefs = prefs,
-                    player = player,
-                    onEffectsChanged = onEffectsChanged,
-                    onLiveStrengthChange = { v -> onStrengthChanged("lightboost", v) },
-                    onLiveWarmthChange = { v -> onWarmthChanged(v) },
-                )
-            },
-            FeatureEntry("🎨 Color Boost") {
-                showColorBoostDialog(
-                    activity = activity,
-                    prefs = prefs,
-                    player = player,
-                    onEffectsChanged = onEffectsChanged,
-                    onLiveSaturationChange = { v -> onStrengthChanged("colorboost_sat", v) },
-                    onLiveVibranceChange = { v -> onStrengthChanged("colorboost_vib", v) },
-                    onLiveHueChange = { v -> onStrengthChanged("colorboost_hue", v) },
-                    onLiveColorfulnessChange = { v -> onStrengthChanged("colorboost_col", v) },
-                )
-            },
-
-            FeatureEntry("⚡ MotionX2 Boost") {
+            // 6. Movimiento (independiente, sin conflictos)
+            FeatureEntry("⚡ 6. MotionX2 Boost • ${onOff(prefs.getBoolean(KEY_MOTIONX2_EN, false))}") {
                 showMotionX2Dialog(
                     activity = activity,
                     prefs = prefs,
@@ -145,25 +224,19 @@ object ExoPlayerSettingsHelper {
                     onEffectsChanged = onEffectsChanged,
                     onLiveModeChange = { v -> onStrengthChanged("motionx2_mode", v) },
                     onLiveStrengthChange = { v -> onStrengthChanged("motionx2", v) },
-                    onLiveBlendChange = { v -> onStrengthChanged("motionx2_blend", v) },
                 )
             },
-
-            FeatureEntry("🖥 Demo mode") {
-                showSingleFeatureDialog(
+            // 7. Demo (solo visualización, no toca el pipeline)
+            FeatureEntry("🖥 7. Demo split-screen • ${onOff(prefs.getBoolean(KEY_DEMO_EN, false))}") {
+                showToggleDialog(
                     activity = activity,
                     title = "Demo mode",
-                    getEnabled = { prefs.getBoolean(KEY_DEMO_EN, false) },
-                    getValue = {
-                        if (prefs.getBoolean(KEY_DETAIL_BOOST_EN, false)) {
-                            prefs.getInt(KEY_DETAIL_BOOST_STRENGTH, 70) / 100f
-                        } else {
-                            0.6f
-                        }
-                    },
                     description = "Comparación split-screen: izquierda video original, derecha con " +
-                        "mejoras, separadas por una línea blanca vertical.",
-                    onSave = { en, _ ->
+                        "mejoras, separadas por una línea blanca vertical.\n" +
+                        "Ambas mitades siempre muestran el mismo instante.",
+
+                    getEnabled = { prefs.getBoolean(KEY_DEMO_EN, false) },
+                    onSave = { en ->
                         prefs.edit().putBoolean(KEY_DEMO_EN, en).apply()
                         player?.let { onEffectsChanged(it) }
                     },
@@ -173,7 +246,7 @@ object ExoPlayerSettingsHelper {
 
         val options = entries.map { it.label }.toTypedArray()
         AlertDialog.Builder(activity)
-            .setTitle("Opciones avanzadas")
+            .setTitle("Opciones avanzadas (en orden del pipeline)")
             .setItems(options) { _, which -> entries[which].action?.invoke() }
             .setNegativeButton("Cerrar", null)
             .show()
@@ -185,7 +258,6 @@ object ExoPlayerSettingsHelper {
         getEnabled: () -> Boolean,
         getValue: () -> Float,
         description: String? = null,
-        valueFormatter: (Float) -> String = { "${(it * 100).toInt()}%" },
         onLiveChange: (Float) -> Unit = { _ -> },
         onSave: (Boolean, Float) -> Unit,
     ) {
@@ -197,9 +269,8 @@ object ExoPlayerSettingsHelper {
                 text = if (isChecked) "Activado" else "Desactivado"
             }
         }
-        val valueLabel = TextView(activity).apply {
-            text = "Intensidad: ${valueFormatter(value)}"
-        }
+        fun pct(v: Float) = "Intensidad: ${(v * 100).toInt()}%"
+        val valueLabel = TextView(activity).apply { text = pct(value) }
         val seek = SeekBar(activity).apply {
             max = 100
             progress = (value * 100).toInt()
@@ -207,8 +278,8 @@ object ExoPlayerSettingsHelper {
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 value = progress / 100f
-                valueLabel.text = "Intensidad: ${valueFormatter(value)}"
-                onLiveChange(value)  // LIVE UPDATE
+                valueLabel.text = pct(value)
+                onLiveChange(value)
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -239,17 +310,96 @@ object ExoPlayerSettingsHelper {
             .show()
     }
 
-    private fun showLightBoostDialog(
+    private fun showFsrDialog(
         activity: Activity,
         prefs: SharedPreferences,
         player: ExoPlayer?,
         onEffectsChanged: (ExoPlayer) -> Unit,
-        onLiveStrengthChange: (Float) -> Unit,
-        onLiveWarmthChange: (Float) -> Unit,
+        onLiveQualityChange: (Float) -> Unit,
+        onLiveSharpnessChange: (Float) -> Unit,
     ) {
-        var strength = prefs.getInt(KEY_LIGHT_BOOST_STRENGTH, 50) / 100f
-        var warmth = (prefs.getInt(KEY_LIGHT_BOOST_WARMTH, 50) / 50f) - 1f
-        val enabled = prefs.getBoolean(KEY_LIGHT_BOOST_EN, false)
+        val qualities = arrayOf(
+            "Rendimiento (rápido)",
+            "Equilibrado",
+            "Calidad (lento)",
+        )
+        var qualityIndex = prefs.getInt(KEY_FSR_QUALITY, 1).coerceIn(0, qualities.size - 1)
+        var sharpness = prefs.getInt(KEY_FSR_SHARPNESS, 60) / 100f
+        val fsrActive = prefs.getInt(KEY_UPSCALER_MODE, MODE_OFF) == MODE_FSR
+
+        val qualityButton = Button(activity).apply {
+            text = "Calidad: ${qualities[qualityIndex]}"
+            setOnClickListener {
+                AlertDialog.Builder(activity)
+                    .setTitle("Calidad FSR")
+                    .setSingleChoiceItems(qualities, qualityIndex) { dialog, which ->
+                        qualityIndex = which
+                        text = "Calidad: ${qualities[qualityIndex]}"
+                        onLiveQualityChange(qualityIndex.toFloat())
+                        dialog.dismiss()
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+        }
+
+        val sharpLabel = TextView(activity).apply { text = "Nitidez: ${(sharpness * 100).toInt()}%" }
+
+        val sharpSeek = SeekBar(activity).apply { max = 100; progress = (sharpness * 100).toInt() }
+
+        sharpSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                sharpness = progress / 100f
+                sharpLabel.text = "Nitidez: ${(sharpness * 100).toInt()}%"
+                onLiveSharpnessChange(sharpness)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        val layout = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+            addView(TextView(activity).apply {
+                text = if (fsrActive) {
+                    "Núcleo EASU + RCAS del FSR 1.0 original. Rendimiento = rápido para gama baja; Calidad = máximo detalle."
+                } else {
+                    "Requiere Tipo de escalador = FSR para verse. Rendimiento = rápido para gama baja; Calidad = máximo detalle."
+                }
+                textSize = 13f
+                setPadding(0, 0, 0, 8)
+            })
+            addView(qualityButton)
+            addView(sharpLabel)
+            addView(sharpSeek)
+        }
+
+        AlertDialog.Builder(activity)
+            .setTitle("FSR")
+            .setView(layout)
+            .setPositiveButton("Aplicar") { _, _ ->
+                prefs.edit()
+                    .putInt(KEY_FSR_QUALITY, qualityIndex)
+                    .putInt(KEY_FSR_SHARPNESS, (sharpness * 100).toInt())
+                    .apply()
+                player?.let { onEffectsChanged(it) }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun showCineHdrDialog(
+        activity: Activity,
+        prefs: SharedPreferences,
+        player: ExoPlayer?,
+        onEffectsChanged: (ExoPlayer) -> Unit,
+        onLiveHdrChange: (Float) -> Unit,
+        onLiveCineChange: (Float) -> Unit,
+    ) {
+        var hdr = prefs.getInt(KEY_HDR_STRENGTH, 60) / 100f
+        var cine = prefs.getInt(KEY_CINE_STRENGTH, 60) / 100f
+        val enabled = prefs.getBoolean(KEY_HDR_EN, false) &&
+            prefs.getBoolean(KEY_CINE_EN, false)
 
         val switch = Switch(activity).apply {
             text = if (enabled) "Activado" else "Desactivado"
@@ -259,57 +409,125 @@ object ExoPlayerSettingsHelper {
             }
         }
 
-        val strengthLabel = TextView(activity).apply { text = "Intensidad: ${(strength * 100).toInt()}%" }
-        val warmthLabel = TextView(activity).apply { text = "Temperatura: ${(warmth * 100).toInt()}%" }
+        fun pct(name: String, v: Float) = "$name: ${(v * 100).toInt()}%"
+        val hdrLabel = TextView(activity).apply { text = pct("HDR", hdr) }
+        val cineLabel = TextView(activity).apply { text = pct("Cine", cine) }
 
-        val strengthSeek = SeekBar(activity).apply { max = 100; progress = (strength * 100).toInt() }
-        val warmthSeek = SeekBar(activity).apply { max = 100; progress = ((warmth + 1f) * 50).toInt() }
-
-        strengthSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                strength = progress / 100f
-                strengthLabel.text = "Intensidad: ${(strength * 100).toInt()}%"
-                onLiveStrengthChange(strength)  // LIVE UPDATE
+        fun seek(initial: Float, onChange: (Float) -> Unit): SeekBar {
+            return SeekBar(activity).apply {
+                max = 100
+                progress = (initial * 100).toInt()
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        onChange(progress / 100f)
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                })
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-        warmthSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                warmth = (progress / 50f) - 1f
-                warmthLabel.text = "Temperatura: ${(warmth * 100).toInt()}%"
-                onLiveWarmthChange(warmth)  // LIVE UPDATE
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
+        }
+        val hdrSeek = seek(hdr) {
+            hdr = it
+            hdrLabel.text = pct("HDR", it)
+            onLiveHdrChange(it)
+        }
+        val cineSeek = seek(cine) {
+            cine = it
+            cineLabel.text = pct("Cine", it)
+            onLiveCineChange(it)
+        }
 
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
             addView(switch)
             addView(TextView(activity).apply {
-                text = "Iluminación inteligente: levanta sombras, preserva brillos. Temperatura: cálido/frío."
+                text = "HDR expande el rango y Cine remata con volumen, tonos cálidos/fríos " +
+                    "y viñeta suavizando su curva para no pelearse."
                 textSize = 13f
                 setPadding(0, 16, 0, 8)
             })
-            addView(strengthLabel)
-            addView(strengthSeek)
-            addView(warmthLabel)
-            addView(warmthSeek)
+            addView(hdrLabel)
+            addView(hdrSeek)
+            addView(cineLabel)
+            addView(cineSeek)
         }
 
         AlertDialog.Builder(activity)
-            .setTitle("Light Boost")
+            .setTitle("CineHDR")
             .setView(layout)
             .setPositiveButton("Aplicar") { _, _ ->
                 prefs.edit()
-                    .putBoolean(KEY_LIGHT_BOOST_EN, switch.isChecked)
-                    .putInt(KEY_LIGHT_BOOST_STRENGTH, (strength * 100).toInt())
-                    .putInt(KEY_LIGHT_BOOST_WARMTH, ((warmth + 1f) * 50).toInt())
+                    .putBoolean(KEY_HDR_EN, switch.isChecked)
+                    .putBoolean(KEY_CINE_EN, switch.isChecked)
+                    .putInt(KEY_HDR_STRENGTH, (hdr * 100).toInt())
+                    .putInt(KEY_CINE_STRENGTH, (cine * 100).toInt())
                     .apply()
                 player?.let { onEffectsChanged(it) }
             }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun showDogDialog(
+        activity: Activity,
+        prefs: SharedPreferences,
+        player: ExoPlayer?,
+        onEffectsChanged: (ExoPlayer) -> Unit,
+        onLiveChange: (Float) -> Unit,
+    ) {
+        // DOG vive dentro de UPSCALER_MODE, no tiene flag propio.
+        // El switch significa: MODE_DOG activo o no.
+        showSingleFeatureDialog(
+            activity = activity,
+            title = "DOG Sharpen",
+            getEnabled = { prefs.getInt(KEY_UPSCALER_MODE, MODE_OFF) == MODE_DOG },
+            getValue = { prefs.getInt(KEY_DOG_STRENGTH, 50) / 100f },
+            description = "Nitidez por diferencia de gaussianas. Exclusivo con los " +
+                "demás escaladores (Bilineal, Bicúbico, FSR). Compatible con Detail Boost.",
+            onLiveChange = onLiveChange,
+            onSave = { en, v ->
+                val editor = prefs.edit()
+                    .putInt(KEY_DOG_STRENGTH, (v * 100).toInt())
+                editor.putInt(KEY_UPSCALER_MODE, if (en) MODE_DOG else MODE_OFF)
+                editor.apply()
+                player?.let { onEffectsChanged(it) }
+            },
+        )
+    }
+
+    private fun showToggleDialog(
+        activity: Activity,
+        title: String,
+        description: String?,
+        getEnabled: () -> Boolean,
+        onSave: (Boolean) -> Unit,
+    ) {
+        val switch = Switch(activity).apply {
+            text = if (getEnabled()) "Activado" else "Desactivado"
+            isChecked = getEnabled()
+            setOnCheckedChangeListener { _: CompoundButton, isChecked ->
+                text = if (isChecked) "Activado" else "Desactivado"
+            }
+        }
+        val layout = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+            addView(switch)
+            if (description != null) {
+                addView(
+                    TextView(activity).apply {
+                        text = description
+                        textSize = 13f
+                        setPadding(0, 16, 0, 8)
+                    },
+                )
+            }
+        }
+        AlertDialog.Builder(activity)
+            .setTitle(title)
+            .setView(layout)
+            .setPositiveButton("Aplicar") { _, _ -> onSave(switch.isChecked) }
             .setNegativeButton("Cancelar", null)
             .show()
     }
@@ -321,12 +539,26 @@ object ExoPlayerSettingsHelper {
         onEffectsChanged: (ExoPlayer) -> Unit,
         onLiveModeChange: (Float) -> Unit,
         onLiveStrengthChange: (Float) -> Unit,
-        onLiveBlendChange: (Float) -> Unit,
     ) {
-        val modes = arrayOf("Blend Simple", "Adaptativo (Edge-Aware)", "Vectores de Movimiento", "Duplicar + Blend")
-        var modeIndex = prefs.getInt(KEY_MOTIONX2_MODE, 1)
+        val modes = arrayOf(
+            "⏻ Apagado (no genera nada)",
+            "HYBRID (Doubling + Micro-Blend)",
+            "DOUBLING (Frame x2)",
+            "BLEND (Suavizado)",
+        )
+        val modeDescriptions = arrayOf(
+            "Apaga el efecto por completo: no mezcla ni genera nada, el video pasa intacto.",
+            "Recomendado. Combina cuadro nítido + un poco de mezcla suave. Mejor balance.",
+            "Más ligero, menos suave. Muestra cada cuadro tal cual, sin mezcla ni fantasma.",
+            "Mezcla suave entre el cuadro anterior y el actual. Suave, pero puede verse fantasma.",
+        )
+        // Índice 0 = apagado; 1..3 = ordinal del enum MotionX2Mode + 1.
+        var modeIndex = if (prefs.getBoolean(KEY_MOTIONX2_EN, false)) {
+            prefs.getInt(KEY_MOTIONX2_MODE, 0).coerceIn(0, modes.size - 2) + 1
+        } else {
+            0
+        }
         var strength = prefs.getInt(KEY_MOTIONX2_STRENGTH, 50) / 100f
-        var blend = prefs.getInt(KEY_MOTIONX2_BLEND, 50) / 100f
         val enabled = prefs.getBoolean(KEY_MOTIONX2_EN, false)
 
         val switch = Switch(activity).apply {
@@ -337,23 +569,34 @@ object ExoPlayerSettingsHelper {
             }
         }
 
-        val modeLabel = TextView(activity).apply { text = "Modo: ${modes[modeIndex]}" }
-        val strengthLabel = TextView(activity).apply { text = "Intensidad: ${(strength * 100).toInt()}%" }
-        val blendLabel = TextView(activity).apply { text = "Blend Factor: ${(blend * 100).toInt()}%" }
-
-        val modeSeek = SeekBar(activity).apply { max = modes.size - 1; progress = modeIndex }
-        val strengthSeek = SeekBar(activity).apply { max = 100; progress = (strength * 100).toInt() }
-        val blendSeek = SeekBar(activity).apply { max = 100; progress = (blend * 100).toInt() }
-
-        modeSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                modeIndex = progress
-                modeLabel.text = "Modo: ${modes[modeIndex]}"
-                onLiveModeChange(modeIndex.toFloat())
+        val modeDesc = TextView(activity).apply {
+            text = modeDescriptions[modeIndex]
+            textSize = 13f
+            setPadding(0, 16, 0, 8)
+        }
+        val modeButton = Button(activity).apply {
+            text = "Modo: ${modes[modeIndex]}"
+            setOnClickListener {
+                AlertDialog.Builder(activity)
+                    .setTitle("Modo MotionX2")
+                    .setSingleChoiceItems(modes, modeIndex) { dialog, which ->
+                        modeIndex = which
+                        text = "Modo: ${modes[modeIndex]}"
+                        modeDesc.text = modeDescriptions[modeIndex]
+                        // Elegir un modo prende; elegir Apagado apaga.
+                        switch.isChecked = which != 0
+                        if (which != 0) onLiveModeChange((which - 1).toFloat())
+                        dialog.dismiss()
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
+        }
+
+        val strengthLabel = TextView(activity).apply { text = "Intensidad: ${(strength * 100).toInt()}%" }
+
+        val strengthSeek = SeekBar(activity).apply { max = 100; progress = (strength * 100).toInt() }
+
         strengthSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 strength = progress / 100f
@@ -363,42 +606,27 @@ object ExoPlayerSettingsHelper {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
-        blendSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                blend = progress / 100f
-                blendLabel.text = "Blend Factor: ${(blend * 100).toInt()}%"
-                onLiveBlendChange(blend)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
 
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
             addView(switch)
-            addView(TextView(activity).apply {
-                text = "Interpola frames para 2x FPS. Modos: Blend=simple, Adaptativo=evita ghosting, Vectores=compensa movimiento, Duplicar=frames dobles con blend."
-                textSize = 13f
-                setPadding(0, 16, 0, 8)
-            })
-            addView(modeLabel)
-            addView(modeSeek)
+            addView(modeDesc)
+            addView(modeButton)
             addView(strengthLabel)
             addView(strengthSeek)
-            addView(blendLabel)
-            addView(blendSeek)
         }
 
         AlertDialog.Builder(activity)
             .setTitle("MotionX2 Boost")
             .setView(layout)
             .setPositiveButton("Aplicar") { _, _ ->
+                // Apagado manda: no genera ni mezcla nada.
+                val on = switch.isChecked && modeIndex != 0
                 prefs.edit()
-                    .putBoolean(KEY_MOTIONX2_EN, switch.isChecked)
-                    .putInt(KEY_MOTIONX2_MODE, modeIndex)
+                    .putBoolean(KEY_MOTIONX2_EN, on)
+                    .putInt(KEY_MOTIONX2_MODE, (modeIndex - 1).coerceIn(0, modes.size - 2))
                     .putInt(KEY_MOTIONX2_STRENGTH, (strength * 100).toInt())
-                    .putInt(KEY_MOTIONX2_BLEND, (blend * 100).toInt())
                     .apply()
                 player?.let { onEffectsChanged(it) }
             }
@@ -406,110 +634,59 @@ object ExoPlayerSettingsHelper {
             .show()
     }
 
-    private fun showColorBoostDialog(
-        activity: Activity,
-        prefs: SharedPreferences,
-        player: ExoPlayer?,
-        onEffectsChanged: (ExoPlayer) -> Unit,
-        onLiveSaturationChange: (Float) -> Unit,
-        onLiveVibranceChange: (Float) -> Unit,
-        onLiveHueChange: (Float) -> Unit,
-        onLiveColorfulnessChange: (Float) -> Unit,
-    ) {
-        var saturation = prefs.getInt(KEY_COLORBOOST_SATURATION, 30) / 100f
-        var vibrance = prefs.getInt(KEY_COLORBOOST_VIBRANCE, 20) / 100f
-        var hueShift = prefs.getInt(KEY_COLORBOOST_HUE, 0) / 100f
-        var colorfulness = prefs.getInt(KEY_COLORBOOST_COLORFULNESS, 15) / 100f
-        val enabled = prefs.getBoolean(KEY_COLORBOOST_EN, false)
-
+    fun showFxDialog(activity: Activity, fx: AudioEffectsManager) {
         val switch = Switch(activity).apply {
-            text = if (enabled) "Activado" else "Desactivado"
-            isChecked = enabled
+            text = if (fx.isFxEnabled) "FxSound activado" else "FxSound desactivado"
+            isChecked = fx.isFxEnabled
             setOnCheckedChangeListener { _: CompoundButton, isChecked ->
-                text = if (isChecked) "Activado" else "Desactivado"
+                fx.toggleFx()
+                text = if (isChecked) "FxSound activado" else "FxSound desactivado"
             }
         }
 
-        val satLabel = TextView(activity).apply { text = "Saturación: ${(saturation * 100).toInt()}%" }
-        val vibLabel = TextView(activity).apply { text = "Vibrancia: ${(vibrance * 100).toInt()}%" }
-        val hueLabel = TextView(activity).apply { text = "Tono: ${(hueShift * 100).toInt()}%" }
-        val colLabel = TextView(activity).apply { text = "Colorido: ${(colorfulness * 100).toInt()}%" }
+        val presetButton = Button(activity).apply {
+            text = "Preset: ${fx.currentPresetName}"
+            setOnClickListener {
+                val items = AudioEffectsManager.PRESETS.map { it.name }.toTypedArray()
+                AlertDialog.Builder(activity)
+                    .setTitle("Preset de audio")
+                    .setSingleChoiceItems(items, fx.presetIndex) { dialog, which ->
+                        fx.setPreset(which)
+                        text = "Preset: ${fx.currentPresetName}"
+                        dialog.dismiss()
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+        }
 
-        val satSeek = SeekBar(activity).apply { max = 100; progress = (saturation * 100).toInt() }
-        val vibSeek = SeekBar(activity).apply { max = 100; progress = (vibrance * 100).toInt() }
-        val hueSeek = SeekBar(activity).apply { max = 100; progress = ((hueShift + 0.5f) * 100).toInt() }
-        val colSeek = SeekBar(activity).apply { max = 100; progress = (colorfulness * 100).toInt() }
-
-        satSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                saturation = progress / 100f
-                satLabel.text = "Saturación: ${(saturation * 100).toInt()}%"
-                onLiveSaturationChange(saturation)
+        val boostButton = Button(activity).apply {
+            text = "Volumen: ${fx.volumeBoostLabel}"
+            setOnClickListener {
+                fx.cycleVolumeBoost()
+                text = "Volumen: ${fx.volumeBoostLabel}"
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-        vibSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                vibrance = progress / 100f
-                vibLabel.text = "Vibrancia: ${(vibrance * 100).toInt()}%"
-                onLiveVibranceChange(vibrance)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-        hueSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                hueShift = (progress / 100f) - 0.5f
-                hueLabel.text = "Tono: ${(hueShift * 100).toInt()}%"
-                onLiveHueChange(hueShift)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-        colSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                colorfulness = progress / 100f
-                colLabel.text = "Colorido: ${(colorfulness * 100).toInt()}%"
-                onLiveColorfulnessChange(colorfulness)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
+        }
 
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
             addView(switch)
-            addView(TextView(activity).apply {
-                text = "Mejora colores: Saturación=global, Vibrancia=inteligente (protege piel), Colorido=perceptual, Tono=shift sutil."
-                textSize = 13f
-                setPadding(0, 16, 0, 8)
-            })
-            addView(satLabel)
-            addView(satSeek)
-            addView(vibLabel)
-            addView(vibSeek)
-            addView(hueLabel)
-            addView(hueSeek)
-            addView(colLabel)
-            addView(colSeek)
+            addView(
+                TextView(activity).apply {
+                    text = "Equalizer + BassBoost + LoudnessEnhancer del sistema.\nLos cambios se aplican en vivo y se guardan."
+                    textSize = 13f
+                    setPadding(0, 16, 0, 8)
+                },
+            )
+            addView(presetButton)
+            addView(boostButton)
         }
 
         AlertDialog.Builder(activity)
-            .setTitle("Color Boost")
+            .setTitle("FxSound")
             .setView(layout)
-            .setPositiveButton("Aplicar") { _, _ ->
-                prefs.edit()
-                    .putBoolean(KEY_COLORBOOST_EN, switch.isChecked)
-                    .putInt(KEY_COLORBOOST_SATURATION, (saturation * 100).toInt())
-                    .putInt(KEY_COLORBOOST_VIBRANCE, (vibrance * 100).toInt())
-                    .putInt(KEY_COLORBOOST_HUE, ((hueShift + 0.5f) * 100).toInt())
-                    .putInt(KEY_COLORBOOST_COLORFULNESS, (colorfulness * 100).toInt())
-                    .apply()
-                player?.let { onEffectsChanged(it) }
-            }
-            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Listo", null)
             .show()
     }
 }

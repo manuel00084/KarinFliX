@@ -123,10 +123,6 @@ dependencies {
     implementation 'androidx.media3:media3-datasource:1.9.3'
     implementation 'androidx.media3:media3-database:1.9.3'
 
-    // Chromecast support (Media3 Cast)
-    implementation 'androidx.media3:media3-cast:1.9.3'
-    implementation 'com.google.android.gms:play-services-cast-framework:21.5.0'
-
     // Unit tests
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'
