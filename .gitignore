@@ -33,3 +33,34 @@ __pycache__/
 check*.txt
 ui*.txt
 *.keystore
+
+# Python
+.env
+*.egg-info/
+dist/
+.venv/
+venv/
+.venv*/
+pip-log.txt
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.bandit
+.safety/
+
+# GitHub Actions
+!.github/
+!.github/**/*
+
+# docs
+docs/*.pdf
+docs/*.txt
+
+# Screenshots (keep only specific ones)
+# screen*.png
+# s2.png
+# test_fix.png
+# screen_main.png
+# screen_wizard.png
+# screen_check*.png

@@ -1,0 +1,36 @@
+[project]
+name = "karin-link"
+version = "1.4.0"
+description = "KARINFLiX device discovery and sync backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "zeroconf>=0.131.0",
+    "qrcode[pil]>=7.4",
+    "Pillow>=10.0.0",
+    "websockets>=12.0",
+    "pydantic>=2.5.0",
+    "aiosqlite>=0.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.25.0",
+    "bandit>=1.7.0",
+    "pip-audit>=2.6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.bandit]
+targets = ["."]
+exclude = ["tests", "venv", ".venv"]

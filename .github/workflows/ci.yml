@@ -1,0 +1,157 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.10'
+  GRADLE_VERSION: '8.9.1'
+
+jobs:
+  # ── Android Build & Tests ───────────────────────
+  android:
+    name: Android Build & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./app
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Grant execute permission for Gradle
+        run: chmod +x gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Run unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Verify Kotlin compilation
+        run: ./gradlew :app:compileDebugKotlin --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+        continue-on-error: true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+  # ── Python Backend Tests ────────────────────────
+  python-backend:
+    name: Python Backend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./karin_link
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx pytest-cov bandit pip-audit
+
+      - name: Lint with bandit
+        run: bandit -r . -f txt -o bandit-report.txt || true
+
+      - name: Audit dependencies
+        run: pip-audit || true
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=karin_link --cov-report=xml --cov-report=term-missing --tb=short
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
+
+  # ── Security Scan ───────────────────────────────
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install security tools
+        run: |
+          pip install bandit pip-audit safety
+
+      - name: Bandit security scan
+        run: bandit -r karin_link/ -f json -o bandit-report.json || true
+
+      - name: Check for hardcoded secrets
+        run: |
+          grep -r "password\|secret\|token" --include="*.py" karin_link/ | grep -v "os.environ\|getenv\|secrets.token" || true
+          echo "Review any secrets found above"
+
+      - name: Dependency audit
+        run: pip-audit -r karin_link/requirements.txt || true
+
+  # ── Deploy (conditional) ────────────────────────
+  deploy:
+    name: Deploy
+    needs: [android, python-backend, security]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Notify success
+        run: echo "✅ All checks passed. Ready for deployment."

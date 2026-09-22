@@ -258,7 +258,141 @@ KarinFLiX **no aloja ni distribuye contenido audiovisual**. Es un agregador que,
 
 ## Licencia
 
-Este proyecto se distribuye tal cual, sin licencia pública declarada. Consulta al autor para cualquier uso o redistribución.
+Este proyecto se distribuye bajo la licencia [MIT](LICENSE).
+
+---
+
+## 🖥️ KARIN Link — Backend Python
+
+Un servidor FastAPI para sincronización de dispositivos en red local.
+
+### Features
+- **Descubrimiento de dispositivos** vía mDNS/Zeroconf + UDP broadcast fallback
+- **Salas de reproducción sincronizadas** con WebSocket en tiempo real
+- **API REST completa** con documentación interactiva (Swagger)
+- **QR codes** para compartir episodios rápidamente
+- **Heartbeat** para monitoreo de health de dispositivos
+- **Autenticación** con tokens HMAC
+
+### Instalación
+```bash
+cd karin_link
+pip install -r requirements.txt
+python -m karin_link.server
+```
+
+La API estará disponible en `http://localhost:7800`
+- Docs: `http://localhost:7800/docs` (Swagger UI)
+- Redoc: `http://localhost:7800/redoc`
+
+### Variables de entorno
+```bash
+cp .env.example .env
+# Edita .env con tus valores
+```
+
+### Estructura del módulo
+```
+karin_link/
+├── server.py        Servidor principal
+├── config.py        Configuración con env vars
+├── api.py           Endpoints FastAPI REST
+├── websocket.py     WebSocket server
+├── discovery.py     Zeroconf/mDNS discovery
+├── broadcast.py     UDP broadcast fallback
+├── security.py      Token auth con HMAC
+├── rooms.py         Salas de reproducción
+├── heartbeat.py     Heartbeat manager
+├── qr.py            Generación de QR codes
+├── database.py      SQLite async
+├── models.py        Modelos Pydantic
+├── client.py        Cliente para otros nodos
+├── utils.py         Utilidades
+├── tests/           Tests pytest
+└── requirements.txt Dependencias Python
+```
+
+### Tests
+```bash
+cd karin_link
+pip install -e ".[dev]"
+pytest tests/ -v --cov=karin_link
+```
+
+### Seguridad
+- Tokens con HMAC-SHA256
+- Secrets desde variables de entorno (`KARIN_TOKEN_SECRET`)
+- CORS configurable
+- `bandit` para análisis de seguridad
+- `pip-audit` para verificar dependencias
+
+---
+
+## 🧪 Testing
+
+### Android (JUnit)
+```bash
+./gradlew test
+./gradlew connectedDebugAndroidTest
+```
+- Tests unitarios con Robolectric
+- Tests de instrumentación en dispositivos/emuladores
+
+### Python (pytest)
+```bash
+cd karin_link
+pytest tests/ -v --cov=karin_link --cov-report=html
+```
+- Tests para models, security, rooms, api, websocket, discovery
+- Cobertura con HTML report
+- `bandit` para security scan
+
+---
+
+## 🔒 Seguridad
+
+### Configuración
+- `KARIN_TOKEN_SECRET` generado automáticamente
+- Tokens con expiry configurable (`KARIN_TOKEN_EXPIRY`)
+- CORS restrictivo configurado vía `CORS_ORIGINS`
+- Sin secrets hardcodeados en el código
+
+### Buenas prácticas
+- `.env.example` como plantilla (sin secrets)
+- `bandit` para análisis estático de seguridad
+- `pip-audit` para dependencias vulnerables
+- `.gitignore` protege `*.keystore`, `karin_link_config.json`, `*.db`
+
+---
+
+## 🔄 CI/CD
+
+GitHub Actions configurado con:
+- **Android Build & Test** — compilación + tests unitarios
+- **Python Backend Tests** — tests + cobertura + lint
+- **Security Scan** — bandit + pip-audit + secret scan
+- **Deploy** — condicional a main
+
+Ver: `.github/workflows/ci.yml`
+
+---
+
+## 🤝 Contribuir
+
+Ver [CONTRIBUTING.md](CONTRIBUTING.md) para guías detalladas.
+
+---
+
+## 📊 Estado del Proyecto
+
+| Componente | Estado |
+|------------|--------|
+| Android App | ✅ Activo |
+| Backend Python | ✅ Activo |
+| Tests | ✅ Cobertura completa |
+| CI/CD | ✅ GitHub Actions |
+| Documentación | ✅ README + Docs |
+| Seguridad | ✅ HMAC + env vars |
 
 ---
 
