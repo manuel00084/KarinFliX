@@ -5,8 +5,6 @@ import android.provider.Settings
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.net.Inet4Address
-import java.net.NetworkInterface
 import java.util.UUID
 
 class KarinLinkManager(private val context: Context) {
@@ -98,7 +96,6 @@ class KarinLinkManager(private val context: Context) {
     }
 
     val discoveryManager = DiscoveryManager(context)
-    val roomManager = RoomManager()
     val linkClient = LinkClient()
 
     private val _isEnabled = MutableStateFlow(false)
@@ -107,11 +104,10 @@ class KarinLinkManager(private val context: Context) {
     private val _status = MutableStateFlow("Desconectado")
     val status: StateFlow<String> = _status
 
-    /** Called on the receiving device when a peer wants us to play an episode. */
+    /** Called on the receiving device when a peer sends us an episode to play. */
     var onPlaybackRequest: ((episodeTitle: String, episodeUrl: String, embedUrl: String, siteName: String) -> Unit)? = null
 
     private var serverRegistered = false
-    private val localIp: String by lazy { discoverLocalIp() }
     private var pendingShareJson: org.json.JSONObject? = null
 
     fun start() {
@@ -119,7 +115,7 @@ class KarinLinkManager(private val context: Context) {
         _isEnabled.value = true
         _status.value = "Buscando dispositivos..."
 
-        // Host server: allows this device to accept peers (rooms + sync).
+        // Host server: allows this device to accept peers (mirror episodes and files).
         val port = LinkServer.start(0)
         if (port > 0) {
             Log.i(TAG, "LinkServer bound on $port")
@@ -132,7 +128,6 @@ class KarinLinkManager(private val context: Context) {
             override fun onPeerConnected(deviceId: String, deviceName: String) {
                 Log.i(TAG, "Peer connected: $deviceName")
                 _status.value = "Conectado a $deviceName"
-                shareHistory()
                 pendingShareJson?.let {
                     broadcast("sync", it)
                 }
@@ -144,7 +139,6 @@ class KarinLinkManager(private val context: Context) {
             }
 
             override fun onSyncCommand(deviceId: String, command: String, data: org.json.JSONObject) {
-                applySync(data)
                 val embedUrl = data.optString("embedUrl")
                 if (embedUrl.isNotBlank()) {
                     onPlaybackRequest?.invoke(
@@ -167,11 +161,6 @@ class KarinLinkManager(private val context: Context) {
             override fun onSeekCommand(deviceId: String, positionMs: Long) {
                 Log.i(TAG, "Seek command from $deviceId @ ${positionMs}ms")
             }
-
-            override fun onHistoryCommand(deviceId: String, historyJson: String) {
-                Log.i(TAG, "History received from $deviceId")
-                mergeHistory(historyJson)
-            }
         })
 
         // Advertise on the LAN so other KarinFLiX devices can discover us.
@@ -180,17 +169,16 @@ class KarinLinkManager(private val context: Context) {
         Log.i(TAG, "KARIN Link started - Device: $deviceName ($deviceId)")
     }
 
-    private val serverListener: (roomId: String?, from: String?, type: String, data: org.json.JSONObject) -> Unit = { roomId, from, type, data ->
+    private val serverListener: (from: String?, type: String, data: org.json.JSONObject) -> Unit = { from, type, data ->
         when (type) {
             "hello" -> {
-                // A new peer joined our room: push the pending share so they can play it.
+                // A new peer connected to us: push the pending share so they can play it.
                 val ep = pendingShareJson
-                if (ep != null && roomId != null) {
-                    LinkServer.broadcast(roomId, "sync", ep, skip = null)
+                if (ep != null) {
+                    LinkServer.broadcast("sync", ep)
                 }
             }
             "sync" -> {
-                applySync(data)
                 // Auto-play when a peer shares an episode to this device.
                 if (from != deviceId) {
                     val embedUrl = data.optString("embedUrl")
@@ -204,56 +192,29 @@ class KarinLinkManager(private val context: Context) {
                     }
                 }
             }
-            "history" -> mergeHistory(data.optString("historyJson", "[]"))
             "play" -> Log.i(TAG, "Peer play: ${data.optString("episodeUrl")}")
             "pause" -> Log.i(TAG, "Peer pause @ ${data.optLong("positionMs")}")
             "seek" -> Log.i(TAG, "Peer seek @ ${data.optLong("positionMs")}")
         }
     }
 
-    private fun applySync(data: org.json.JSONObject) {
-        roomManager.updateSync(RoomManager.SyncState(
-            episodeTitle = data.optString("episodeTitle", ""),
-            episodeUrl = data.optString("episodeUrl", ""),
-            siteName = data.optString("siteName", ""),
-            positionMs = data.optLong("positionMs", 0),
-            durationMs = data.optLong("durationMs", 0),
-            isPlaying = data.optBoolean("isPlaying", false)
-        ))
-    }
-
     fun stop() {
         _isEnabled.value = false
         _status.value = "Desconectado"
         LinkServer.removeListener(serverListener)
-        LinkServer.stop()
+        // El host de la app mantiene el servidor para el control remoto;
+        // solo se detiene si nadie lo usa.
+        if (!KarinLinkHost.isRunning) {
+            LinkServer.stop()
+        }
         unregisterNsd()
         discoveryManager.destroy()
         linkClient.shutdown()
-        roomManager.leaveRoom()
     }
 
     fun connectToDevice(device: DiscoveryManager.DiscoveredDevice) {
         _status.value = "Conectando a ${device.displayName}..."
         linkClient.connect(device.host, device.port, deviceId, deviceName)
-    }
-
-    fun createRoom(name: String): RoomManager.Room {
-        val room = roomManager.createRoom(name, deviceId, deviceName)
-        // Ensure the host server is up so peers can join by room.
-        val port = LinkServer.port
-        if (port > 0 && !serverRegistered) registerNsd(port)
-        return room
-    }
-
-    /** Connects to a remote room (used when joining via QR / deep link). */
-    fun joinRoom(roomId: String, host: String? = null, port: Int? = null): RoomManager.Room? {
-        val room = roomManager.joinRoom(roomId, deviceId, deviceName)
-        if (host != null && port != null && port > 0) {
-            _status.value = "Conectando a la sala $roomId..."
-            linkClient.connect(host, port, deviceId, deviceName)
-        }
-        return room
     }
 
     fun shareEpisode(
@@ -278,95 +239,9 @@ class KarinLinkManager(private val context: Context) {
         broadcast("sync", payload)
     }
 
-    fun broadcastPlay(episodeUrl: String, positionMs: Long) {
-        val payload = org.json.JSONObject().apply {
-            put("deviceId", deviceId)
-            put("episodeUrl", episodeUrl)
-            put("positionMs", positionMs)
-        }
-        broadcast("play", payload)
-    }
-
-    fun broadcastPause(positionMs: Long) {
-        val payload = org.json.JSONObject().apply {
-            put("deviceId", deviceId)
-            put("positionMs", positionMs)
-        }
-        broadcast("pause", payload)
-    }
-
-    fun broadcastSeek(positionMs: Long) {
-        val payload = org.json.JSONObject().apply {
-            put("deviceId", deviceId)
-            put("positionMs", positionMs)
-        }
-        broadcast("seek", payload)
-    }
-
-    /** Sends via the host server (room members) or the outgoing client link. */
+    /** Sends a message to the peer connected via the outgoing client link. */
     private fun broadcast(type: String, payload: org.json.JSONObject) {
-        val roomId = roomManager.currentRoom.value?.id
-        if (roomId != null && LinkServer.isRunning) {
-            LinkServer.broadcast(roomId, type, payload)
-        } else {
-            linkClient.sendJson(type, payload)
-        }
-    }
-
-    fun shareHistory() {
-        val entries = com.karin.streamtv.util.WatchHistory.getHistory()
-        val array = org.json.JSONArray()
-        entries.forEach { entry ->
-            array.put(org.json.JSONObject().apply {
-                put("animeId", entry.animeId)
-                put("episodeNumber", entry.episodeNumber)
-                put("title", entry.title)
-                put("siteName", entry.siteName)
-                put("thumbnailUrl", entry.thumbnailUrl)
-                put("episodeUrl", entry.episodeUrl)
-                put("positionMs", entry.positionMs)
-                put("durationMs", entry.durationMs)
-                put("timestamp", entry.timestamp)
-            })
-        }
-        val roomId = roomManager.currentRoom.value?.id
-        if (roomId != null && LinkServer.isRunning) {
-            LinkServer.broadcast(roomId, "history", org.json.JSONObject().apply {
-                put("historyJson", array.toString())
-            })
-        } else {
-            linkClient.sendHistory(array.toString())
-        }
-    }
-
-    private fun mergeHistory(historyJson: String) {
-        if (historyJson.isBlank()) return
-        val entries = com.karin.streamtv.util.WatchHistory.getHistory()
-        val existingIds = entries.map { "${it.animeId}_${it.episodeNumber}" }.toSet()
-        try {
-            val array = org.json.JSONArray(historyJson)
-            for (i in 0 until array.length()) {
-                val obj = array.optJSONObject(i) ?: continue
-                val animeId = obj.optString("animeId", "")
-                val epNum = obj.optInt("episodeNumber", 0)
-                val key = "${animeId}_${epNum}"
-                if (key !in existingIds) {
-                    com.karin.streamtv.util.WatchHistory.addEntry(
-                        com.karin.streamtv.util.WatchHistory.HistoryEntry(
-                            animeId = animeId,
-                            episodeNumber = epNum,
-                            title = obj.optString("title", ""),
-                            siteName = obj.optString("siteName", ""),
-                            thumbnailUrl = obj.optString("thumbnailUrl", ""),
-                            episodeUrl = obj.optString("episodeUrl", ""),
-                            positionMs = obj.optLong("positionMs", 0),
-                            durationMs = obj.optLong("durationMs", 0),
-                            timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                        )
-                    )
-                }
-            }
-        } catch (_: Exception) {}
+        linkClient.sendJson(type, payload)
     }
 
     private fun registerNsd(port: Int) {
@@ -381,29 +256,5 @@ class KarinLinkManager(private val context: Context) {
     private fun unregisterNsd() {
         discoveryManager.unregisterService()
         serverRegistered = false
-    }
-
-    fun localIpAddress(): String = localIp
-
-    fun getJoinUrl(roomId: String): String {
-        val port = LinkServer.port
-        return if (port > 0) "karinflinx://room/$roomId?host=$localIp&port=$port"
-        else "karinflinx://room/$roomId"
-    }
-
-    private fun discoverLocalIp(): String {
-        return try {
-            NetworkInterface.getNetworkInterfaces()?.let { nis ->
-                val list = nis.toList()
-                val candidate = list.firstOrNull { iface ->
-                    iface.isUp && !iface.isLoopback && iface.name != "rmnet_data0"
-                }
-                val all = list.flatMap { iface -> iface.inetAddresses.toList() }
-                val addr = all.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
-                addr?.hostAddress ?: "127.0.0.1"
-            } ?: "127.0.0.1"
-        } catch (e: Exception) {
-            "127.0.0.1"
-        }
     }
 }

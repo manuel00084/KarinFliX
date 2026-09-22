@@ -15,10 +15,9 @@ import android.os.SystemClock
  * [get] para adaptar el comportamiento automáticamente:
  *
  *  - [com.karin.streamtv.player.RamAwareLoadControl]: buffer de ExoPlayer acotado al perfil.
- *  - [com.karin.streamtv.player.TrackSelectorFactory]: resolución/bitrate máx.
- *  - [com.karin.streamtv.player.Media3SixtyFpsProcessor]: escala de dibujo inicial del DRS.
- *  - Interfaz de ajustes: deshabilita / avisa sobre opciones pesadas (GL, 60p,
- *    upscaler) cuando el perfil no puede sostenerlas sin perder fluidez.
+ *  - [com.karin.streamtv.player.CodecSelectorFactory]: códec hw/sw según el perfil.
+ *  - Interfaz de ajustes: deshabilita / avisa sobre opciones pesadas (GL, efectos,
+ *    MotionX2) cuando el perfil no puede sostenerlas sin perder fluidez.
  */
 object DeviceProfile {
 

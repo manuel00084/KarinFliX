@@ -7,7 +7,7 @@
 ![Versión](https://img.shields.io/badge/versi%C3%B3n-1.3.0-blue)
 ![Min SDK](https://img.shields.io/badge/minSdk-23-green)
 
-**Reproductor de anime con multirrastreo, mejoras de imagen y sonido en tiempo real, y sincronización entre dispositivos — diseñado para Android TV y cajas de streaming modestas.**
+**Reproductor de anime con multirrastreo, mejoras de imagen y sonido en tiempo real, y envío de episodios entre dispositivos — diseñado para Android TV y cajas de streaming modestas.**
 
 </div>
 
@@ -33,9 +33,9 @@
 
 No es un reproductor pasivo: agrega varios sitios en una sola interfaz, elimina anuncios y avisos de las páginas, extrae los enlaces reales de video (sin depender de WebView), y luego **procesa la imagen y el sonido en tiempo real** dentro de la app para mejorar la experiencia:
 
-- **Imagen**: upscaling (incluye Anime4K DoG y FSR), interpolación a 60 fps, ajustes de nitidez/color.
+- **Imagen**: upscaling (incluye KarinSuperRes, Anime4K DoG y FSR), interpolación a 60 fps, ajustes de nitidez/color.
 - **Sonido**: sintetizador de subgraves, bajo virtual, ecualización por perfiles y detección automática del tipo de bocina.
-- **Red**: enlaces LAN entre dispositivos para compartir capítulos, salas de visualización y sincronizar el historial sin servidor central.
+- **Red**: enlaces LAN entre dispositivos para enviar capítulos a otro equipo (mando desde el teléfono a la TV) y ver archivos de la red local, sin servidor central.
 
 La interfaz está pensada para **mando remoto / gamepad**, con una variante Leanback (Android TV) incluida.
 
@@ -47,7 +47,7 @@ La interfaz está pensada para **mando remoto / gamepad**, con una variante Lean
 - Reproducción nativa con soporte **HLS** y múltiples formatos.
 - **Selector de calidad**: 480p / 720p / 1080p… por video o global (es el tope *máximo*, se puede bajar en cualquier momento).
 - **Selector de códec**: decodificador hardware del equipo o el software de Google (fallback).
-- **Escala / upscaling**: Apagado, Bilineal, Bicúbico, **Anime4K DoG** y **FSR**.
+- **Escala / upscaling**: Apagado, **KarinSuperRes** (default: nítido, sin halos ni ruido, DRS-aware, variante por gama), **FSR** (calidad/bajo consumo) y **Anime4K DoG**.
 - **Interpolación de movimiento a 60 fps**: `MotionX2`, `Frame x2`, `Suavizado`, `Doubling + Micro-Blend`.
 - **Escalado dinámico de resolución (DRS)**: baja la resolución de *dibujado* automáticamente cuando el equipo no da abasto, sin tocar la decodificación.
 - Reproducción de **videos locales** (explorador de archivos e intención `video/*`).
@@ -56,7 +56,7 @@ La interfaz está pensada para **mando remoto / gamepad**, con una variante Lean
 - Sintetizador de **subgraves** (extiende las notas graves que la bocina no puede reproducir).
 - **Bajo virtual (VBass)** para parlantes pequeños.
 - **Detección automática del equipo**: TV, bocina / barra de sonido 5.1, auriculares.
-- **Perfiles de audio**: Auto, Anime, Cine, Bass Boost, 3D Surround, Diálogos/Noticias, Música y True MaxBass.
+- **Perfiles de audio**: Auto, Anime, Surround Envolvente, Bass Boost, Diálogos/Noticias, Música y True MaxBass.
 - Importación de **archivos IR** para simular la respuesta de otra bocina.
 
 ### Búsqueda y navegación
@@ -68,14 +68,9 @@ La interfaz está pensada para **mando remoto / gamepad**, con una variante Lean
 - Eliminación automática de **publicidad y avisos** en las páginas de las fuentes.
 
 ### KARIN Link (red local)
-- **Salas de visualización**: crea o únete a una sala por **QR** o *deep link* (`karinflinx://room/…`).
 - **Enviar un capítulo** a otro dispositivo de la red y que se reproduzca automáticamente.
-- **Sincronización del historial** entre dispositivos.
-- Descubrimiento automático de dispositivos en la LAN (NSD), sin servidor central.
-
-### Comunidad (descentralizada)
-- Comentarios y votos por serie/episodio, guardados localmente y **propagados entre dispositivos** vía KARIN Link.
-- Sin servidor: cada nodo guarda su copia y la reparte.
+- **Descubrimiento automático de dispositivos** en la LAN (NSD), sin servidor central.
+- **Acceso a archivos remotos** entre dispositivos (SMB / nube) con token.
 
 ### Robustez
 - Manejo de sitios protegidos por **Cloudflare** con resolución vía WebView (acotada para no agotar la memoria).
@@ -96,7 +91,6 @@ La interfaz está pensada para **mando remoto / gamepad**, con una variante Lean
 | HTML | jsoup 1.17.2 |
 | Asincronía | Kotlin Coroutines 1.7.3 (+ kotlinx-serialization) |
 | UI | AppCompat, Material, RecyclerView, **Leanback / tvprovider** |
-| QR | ZXing core 3.5.3 |
 | Pruebas | JUnit 4.13.2, Robolectric 4.11.1 |
 | Build | Gradle (AGP), Java 11, viewBinding + buildConfig |
 
@@ -115,12 +109,11 @@ com.karin.streamtv
 │                  MundoDonghua, DoramaYt, RetroTV…), CalendarParser, ServerExtractor
 │                  y resolución de servidores (ServerDirectResolver, ServerResolutionDetector).
 ├── extractor/     Extracción de URLs reales de video (MoonGetter).
-├── player/        Reproducción: ExoPlayerActivity, CodecSelectorFactory, TrackSelectorFactory,
-│                  Media3SixtyFpsProcessor (escala + 60 fps + DRS), VideoEnhanceConfig (DSP),
-│                  VideoDataSource y MegaDecryptingDataSource.
+├── player/        Reproducción: ExoPlayerActivity, CodecSelectorFactory, KarinAudioProcessor (DSP),
+│                  efectos GL (Depixel, Detail Boost/RCAS, Karin Light Boost, Colors Boost,
+│                  MotionX2 Boost) y los diálogos de ajustes/stats del reproductor.
 ├── karinlink/     Red local: LinkServer/LinkClient, DiscoveryManager (NSD),
-│                  RoomManager (salas), KarinLinkActivity (QR / deep link).
-├── community/     Almacén descentralizado de comentarios y votos (CommunityStore).
+│                  y KarinLinkActivity (enviar episodios entre dispositivos).
 ├── ui/            Actividades: Main, SiteBrowser, SeriesDetail, Settings, Calendar,
 │                  Tutorial, Onboarding, FileExplorer… + variante TV (ui/tv).
 ├── util/          Infraestructura: caché de imágenes, interceptor Cloudflare,
@@ -135,12 +128,12 @@ Flujo principal de un capítulo:
 Navegación → ScraperRegistry (jsoup) → lista de episodios
    → ServerExtractor (MoonGetter/Rhino) → URL de video real
    → ExoPlayerActivity (Media3)
-       ├─ TrackSelectorFactory  → calidad (tope máximo)
-       ├─ CodecSelectorFactory  → códec hw/sw
-       └─ Media3SixtyFpsProcessor
-             ├─ Escala (Bilineal/Bicúbico/Anime4K DoG/FSR)
-             ├─ Interpolación a 60 fps + DRS
-             └─ DSP de audio (subgraves, VBass, perfiles, IR)
+       ├─ CodecSelectorFactory   → códec hw/sw
+       ├─ DepixelBoostEffect     → reducción de artefactos + debanding (Weber-Fechner)
+       ├─ DetailBoostEffect      → nitidez RCAS (AMD FidelityFX)
+       ├─ KarinLightBoostEffect  → luz/contraste/HDR + Colors Boost fusionado (half-res)
+       ├─ MotionX2BoostEffect    → fluidez (mezcla con el cuadro previo)
+       └─ KarinAudioProcessor    → DSP de audio (graves, claridad, potencia, EQ)
 ```
 
 ---

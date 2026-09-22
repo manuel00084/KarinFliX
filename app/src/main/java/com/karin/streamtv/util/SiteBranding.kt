@@ -24,7 +24,7 @@ object SiteBranding {
         "MundoDonghua" to "https://mundodonghua.com/images/favicon.png",
         "RetroTVE" to "https://retrotve.com/wp-content/uploads/2024/11/cropped-android-chrome-512x512-1-192x192.png",
         "LaCartoons" to "https://www.lacartoons.com/wp-content/uploads/2024/01/cropped-lacartoons-favicon-32x32.png",
-        "DoramasYT" to "https://www.doramasyt.com/wp-content/uploads/2024/01/cropped-doramasyt-favicon-32x32.png",
+        "DoramasYT" to "https://www.doramasyt.com/img/logo6.png?v=1718135438",
         "FrikiSeries" to "https://www.frikiserie.com/assets/icon/favicon.png",
     )
 

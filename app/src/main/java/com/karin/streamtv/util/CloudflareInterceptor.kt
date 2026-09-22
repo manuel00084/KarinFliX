@@ -21,7 +21,7 @@ object CloudflareInterceptor {
     private const val TAG = "CFInterceptor"
     var maxWaitSeconds: Long = 20L
 
-    // Cap global de WebViews simultáneos (patrón JobManager de Kodi): un WebView
+    // Cap global de WebViews simultáneos (un permiso por tarea pesada): un WebView
     // offscreen de 720x1280 por bypass es caro en RAM/compositor en TV/box baratas.
     // Varios bypasses a la vez (p.ej. 8 requests del engine) hundían el renderer.
     private val webViewPermits = Semaphore(2, true)
@@ -200,7 +200,13 @@ object CloudflareInterceptor {
                         }, 20000)
                     }
 
-                    parent.addView(webViewRef!!, android.view.ViewGroup.LayoutParams(720, 1280))
+                    val webView = webViewRef
+                    if (webView == null) {
+                        Log.w(TAG, "WebView liberado antes de adjuntar; aborto challenge")
+                        if (latch.count > 0) latch.countDown()
+                        return@Runnable
+                    }
+                    parent.addView(webView, android.view.ViewGroup.LayoutParams(720, 1280))
 
                     if (wm != null && hostActivity != null) {
                         try {

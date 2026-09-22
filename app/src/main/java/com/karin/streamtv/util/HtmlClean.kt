@@ -1,7 +1,7 @@
 package com.karin.streamtv.util
 
 /**
- * HTML entity decoder + URL resolver (equivalente a HTMLUtil / Url::Resolve de Kodi).
+ * HTML entity decoder + URL resolver (decodifica entidades y normaliza URLs a absolutas).
  * Los títulos sacados de atributos HTML (alt/title) llegan con &amp;,&quot;,&#039;,
  * y los thumbs/links vía data-src o JSON suelen ser relativos; aquí se limpian.
  */

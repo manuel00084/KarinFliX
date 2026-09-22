@@ -6,8 +6,10 @@
 }
 -keep class **.R
 
-# Keep all app classes (prevents R8 from stripping runtime-used utilities)
--keep class com.karin.streamtv.** { *; }
+# NativeDsp: JNI_OnLoad la busca por nombre en karindsp_jni.c (RegisterNatives)
+# y asocia los metodos nativos por nombre+signatura. Sin esta regla R8
+# renombraria la clase o los metodos y loadLibrary/setIr fallaria.
+-keep class com.karin.streamtv.player.dsp.NativeDsp { *; }
 
 # ExoPlayer / Media3
 -keep class androidx.media3.** { *; }

@@ -51,8 +51,6 @@ class SeriesDetailActivity : AppCompatActivity() {
     private var seriesUrl: String = ""
     private var seriesTitle: String = ""
     private var pendingQueue: List<PlaylistItem>? = null
-    private var selectedCount = 0
-    private lateinit var btnPlaylist: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,16 +93,8 @@ class SeriesDetailActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
-        findViewById<TextView>(R.id.btn_settings).setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
-        }
-        findViewById<TextView>(R.id.btn_settings).onActionKey {
-            startActivity(Intent(this, SettingsActivity::class.java))
-        }
-
-        btnPlaylist = findViewById(R.id.btn_playlist)
-        btnPlaylist.setOnClickListener { onPlaylistButtonClick() }
-        btnPlaylist.onActionKey { onPlaylistButtonClick() }
+        // Secciones del sitio: la funcion ya existe abajo; llamada restaurada.
+        setupSectionButtons()
 
         val isTv = DeviceUtils.isTvDevice(this)
         rvEpisodes.layoutManager = GridLayoutManager(this, if (isTv) 4 else 3)
@@ -119,20 +109,24 @@ class SeriesDetailActivity : AppCompatActivity() {
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
                     val firstVisible = (rvEpisodes.layoutManager as GridLayoutManager).findFirstVisibleItemPosition()
                     if (firstVisible == 0) {
-                        findViewById<TextView>(R.id.btn_settings).requestFocus()
+                        findViewById<TextView>(R.id.btn_directory).requestFocus()
                         return@setOnKeyListener true
                     }
                 }
                 false
             }
 
-            // Navegación DPAD entre barra superior y grid + horizontal en barra
+            // Navegación DPAD entre barra superior y grid + horizontal en barra.
+            // Solo botones visibles (las secciones dependen del sitio).
             val topBarButtons = listOf(
+                findViewById(R.id.iv_header_logo),
                 findViewById<TextView>(R.id.btn_home),
                 findViewById<TextView>(R.id.btn_directory),
-                findViewById<TextView>(R.id.btn_settings),
-                btnPlaylist
-            )
+                findViewById<TextView>(R.id.btn_movies),
+                findViewById<TextView>(R.id.btn_series),
+                findViewById<TextView>(R.id.btn_anime),
+                findViewById<TextView>(R.id.btn_dorama)
+            ).filter { it.visibility == android.view.View.VISIBLE }
             topBarButtons.forEachIndexed { index, btn ->
                 btn.setOnKeyListener { _, keyCode, event ->
                     if (event.action == KeyEvent.ACTION_DOWN) {
@@ -157,6 +151,37 @@ class SeriesDetailActivity : AppCompatActivity() {
         }
 
         loadSeries()
+    }
+
+    // Muestra solo las secciones con URL directa conocida (sin menú aquí).
+    // Abre el navegador directo en esa sección.
+    private fun setupSectionButtons() {
+        setupSectionButton(R.id.btn_movies, com.karin.streamtv.model.MenuSection.MOVIES)
+        setupSectionButton(R.id.btn_series, com.karin.streamtv.model.MenuSection.SERIES)
+        setupSectionButton(R.id.btn_anime, com.karin.streamtv.model.MenuSection.ANIME)
+        setupSectionButton(R.id.btn_dorama, com.karin.streamtv.model.MenuSection.DORAMA)
+    }
+
+    private fun setupSectionButton(id: Int, section: com.karin.streamtv.model.MenuSection) {
+        val btn = findViewById<TextView>(id)
+        val ok = com.karin.streamtv.util.SiteSections.directUrl(siteName, section) != null
+        btn.visibility = if (ok) android.view.View.VISIBLE else android.view.View.GONE
+        if (!ok) return
+        btn.setOnClickListener { openSiteSection(section) }
+        btn.onActionKey { openSiteSection(section) }
+    }
+
+    private fun openSiteSection(section: com.karin.streamtv.model.MenuSection) {
+        val home = try {
+            val uri = java.net.URI(seriesUrl)
+            "${uri.scheme}://${uri.host}"
+        } catch (_: Exception) { "" }
+        val intent = Intent(this, SiteBrowserActivity::class.java).apply {
+            putExtra("site_name", siteName)
+            putExtra("site_url", home.ifBlank { seriesUrl })
+            putExtra("open_section", section.name)
+        }
+        startActivity(intent)
     }
 
     private fun loadSeries() {
@@ -225,11 +250,6 @@ class SeriesDetailActivity : AppCompatActivity() {
             rvEpisodes.visibility = android.view.View.VISIBLE
             rvEpisodes.adapter = EpisodeAdapter(page.episodes, seriesUrl) { episode ->
                 openEpisode(episode)
-            }.apply {
-                onSelectionCountChanged = { count ->
-                    selectedCount = count
-                    updatePlaylistButton()
-                }
             }
             if (DeviceUtils.isTvDevice(this)) rvEpisodes.post { rvEpisodes.requestFocus() }
         } else {
@@ -422,49 +442,6 @@ class SeriesDetailActivity : AppCompatActivity() {
         startActivity(intent)
     }
 
-    private fun onPlaylistButtonClick() {
-        val adapter = rvEpisodes.adapter as? EpisodeAdapter ?: return
-        if (!adapter.isSelectionMode()) {
-            adapter.setSelectionMode(true)
-            updatePlaylistButton()
-            Toast.makeText(this, "Selecciona los episodios y pulsa ▶ para reproducir", Toast.LENGTH_SHORT).show()
-        } else if (adapter.selectedCount() > 0) {
-            startPlaylist()
-        } else {
-            adapter.setSelectionMode(false)
-            updatePlaylistButton()
-        }
-    }
-
-    private fun updatePlaylistButton() {
-        val adapter = rvEpisodes.adapter as? EpisodeAdapter ?: return
-        btnPlaylist.text = when {
-            !adapter.isSelectionMode() -> "📋"
-            selectedCount > 0 -> "▶ $selectedCount"
-            else -> "📋 ✕"
-        }
-    }
-
-    private fun startPlaylist() {
-        val adapter = rvEpisodes.adapter as? EpisodeAdapter ?: return
-        val selected = adapter.getSelectedEpisodes()
-        if (selected.isEmpty()) return
-        adapter.setSelectionMode(false)
-        updatePlaylistButton()
-        showLoading("Preparando lista de reproducción...")
-        lifecycleScope.launch {
-            val queue = withContext(Dispatchers.IO) { buildQueue(selected) }
-            loadingOverlay.visibility = android.view.View.GONE
-            if (queue.isEmpty()) {
-                Toast.makeText(this@SeriesDetailActivity, "No se pudieron resolver los episodios", Toast.LENGTH_LONG).show()
-                return@launch
-            }
-            pendingQueue = queue
-            val first = queue.first()
-            openEpisode(Episode(title = first.title, url = first.url))
-        }
-    }
-
     private suspend fun buildQueue(episodes: List<Episode>): List<PlaylistItem> {
         val scraper = ScraperRegistry.getScraper(siteName)
         return coroutineScope {
@@ -523,6 +500,7 @@ class SeriesDetailActivity : AppCompatActivity() {
             val tvStars = row.findViewById<android.widget.TextView>(R.id.tv_server_stars)
             val tvRes = row.findViewById<android.widget.TextView>(R.id.tv_res_badge)
             val btnExt = row.findViewById<android.widget.TextView>(R.id.btn_play_external)
+            val btnTv = row.findViewById<android.widget.TextView>(R.id.btn_send_tv)
 
             val stars = "\u2605".repeat(server.speedRating.coerceIn(1, 5))
             val fastTag = if (server.speedRating >= 4) " \u26A1" else ""
@@ -572,6 +550,20 @@ class SeriesDetailActivity : AppCompatActivity() {
 
             if (DeviceUtils.isTvDevice(this@SeriesDetailActivity)) {
                 btnExt.isFocusable = false
+                btnTv.isFocusable = false
+            }
+
+            btnTv.setOnClickListener {
+                val isTabServer = server.serverUrl.contains("?server=")
+                val embed = if (isTabServer) server.serverUrl.substringBefore("?server=") else server.serverUrl
+                val intent = Intent(this@SeriesDetailActivity, com.karin.streamtv.karinlink.KarinLinkSendActivity::class.java).apply {
+                    putExtra(com.karin.streamtv.karinlink.KarinLinkSendActivity.EXTRA_TITLE, seriesTitle)
+                    putExtra(com.karin.streamtv.karinlink.KarinLinkSendActivity.EXTRA_EPISODE_TITLE, title)
+                    putExtra(com.karin.streamtv.karinlink.KarinLinkSendActivity.EXTRA_EPISODE_URL, currentEpisodeUrl)
+                    putExtra(com.karin.streamtv.karinlink.KarinLinkSendActivity.EXTRA_SITE_NAME, siteName)
+                    putExtra(com.karin.streamtv.karinlink.KarinLinkSendActivity.EXTRA_EMBED_URL, embed)
+                }
+                startActivity(intent)
             }
 
             return row

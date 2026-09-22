@@ -1,4 +1,4 @@
-package com.karin.streamtv.player
+﻿package com.karin.streamtv.player
 
 import android.content.Context
 import android.opengl.GLES20
@@ -11,15 +11,15 @@ import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 
 /**
- * Colors Boost: colores más vívidos con barra de intensidad.
+ * Colors Boost: colores mÃ¡s vÃ­vidos con barra de intensidad.
  *
- * Pipeline por píxel (adaptativo por contenido, sin historial):
- * 1) Mide lo apagado del píxel, cuida sombras/blancos y detecta piel.
- * 2) Saturación adaptativa: escenas apagadas reciben más, vívidas casi
- *    nada, piel al mínimo.
+ * Pipeline por pÃ­xel (adaptativo por contenido, sin historial):
+ * 1) Mide lo apagado del pÃ­xel, cuida sombras/blancos y detecta piel.
+ * 2) SaturaciÃ³n adaptativa: escenas apagadas reciben mÃ¡s, vÃ­vidas casi
+ *    nada, piel al mÃ­nimo.
  * 3) Vibrance de remate con la misma respuesta adaptativa.
  *
- * Remate de color al final de la cadena (después de HDR/Cine), antes de
+ * Remate de color al final de la cadena (despuÃ©s de HDR/Cine), antes de
  * MotionX2. Barato: sin taps extra (1 fetch) ni loops. GLES2 compatible.
  */
 class ColorsBoostEffect(
@@ -66,6 +66,14 @@ class ColorsBoostShaderProgram(
         glProgram.setIntUniform("uDemoSplit", if (demoSplit) 1 else 0)
     }
 
+    override fun release() {
+        try {
+            glProgram.delete()
+        } catch (_: Exception) {
+        }
+        super.release()
+    }
+
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         return Size(inputWidth, inputHeight)
     }
@@ -85,59 +93,8 @@ class ColorsBoostShaderProgram(
     fun updateStrength(newStrength: Float) { strength = newStrength.coerceIn(0f, 1f) }
 
     companion object {
-        private const val VERTEX_SHADER = """
-            attribute vec4 aFramePosition;
-            uniform mat4 uTransformationMatrix;
-            uniform mat4 uTexTransformationMatrix;
-            varying vec2 vTexCoord;
-            void main() {
-                gl_Position = uTransformationMatrix * aFramePosition;
-                vec4 tp = vec4(aFramePosition.x * 0.5 + 0.5, aFramePosition.y * 0.5 + 0.5, 0.0, 1.0);
-                vTexCoord = (uTexTransformationMatrix * tp).xy;
-            }
-        """
+        private val VERTEX_SHADER = ShaderBlobs.colorsVertex
 
-        private const val FRAGMENT_SHADER = """
-            #ifdef GL_ES
-            precision highp float;
-            #endif
-            varying vec2 vTexCoord;
-            uniform sampler2D uTexSampler;
-            uniform float uStrength; // 0..1
-            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta
-
-            float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
-
-            void main() {
-                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
-                if (uStrength <= 0.0) {
-                    gl_FragColor = vec4(c, 1.0);
-                    return;
-                }
-                float l0 = luma(c);
-                float mx0 = max(c.r, max(c.g, c.b));
-                float mn0 = min(c.r, min(c.g, c.b));
-                // Mascara de piel sobre el original (deteccion estable).
-                float skin = smoothstep(0.02, 0.1, c.r - c.g) * smoothstep(0.01, 0.08, c.r - c.b);
-                skin *= smoothstep(0.25, 0.45, c.r) * (1.0 - smoothstep(0.7, 0.85, c.r));
-                skin = clamp(skin, 0.0, 1.0);
-                // Adaptativo: lo apagado pide mas, lo vivido casi nada.
-                float satDeficit = 1.0 - clamp((mx0 - mn0) * 2.0, 0.0, 1.0);
-                // ...cuidando sombras (ruido) y blancos (clipping).
-                float toneW = smoothstep(0.02, 0.18, l0) * (1.0 - smoothstep(0.75, 0.98, l0));
-                float drive = clamp(satDeficit * (0.35 + 0.65 * toneW), 0.0, 1.0);
-                drive *= 1.0 - skin * 0.85;
-                // 1) Saturacion adaptativa.
-                vec3 outc = mix(vec3(l0), c, 1.0 + uStrength * (0.25 + 1.0 * drive));
-                // 2) Vibrance de remate, tambien adaptativa.
-                float mx = max(outc.r, max(outc.g, outc.b));
-                float mn = min(outc.r, min(outc.g, outc.b));
-                float vib = 0.35 * uStrength * drive * (1.0 - clamp((mx - mn) * 1.5, 0.0, 1.0));
-                outc = mix(vec3(luma(outc)), outc, 1.0 + vib);
-                vec3 demoRgb = clamp(outc, 0.0, 1.0);
-                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }
-                gl_FragColor = vec4(demoRgb, 1.0);
-            }
-        """
+        private val FRAGMENT_SHADER = ShaderBlobs.colorsFragment
     }
 }

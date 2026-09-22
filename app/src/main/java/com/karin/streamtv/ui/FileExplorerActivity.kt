@@ -59,7 +59,7 @@ class FileExplorerActivity : AppCompatActivity() {
     private lateinit var btnFolders: ImageView
     private lateinit var btnSort: ImageView
     private lateinit var btnView: ImageView
-    private lateinit var btnTc: ImageView
+    private lateinit var btnPanes: ImageView
     private lateinit var btnExit: ImageView
     private lateinit var etSearch: EditText
     private lateinit var progressBar: ProgressBar
@@ -111,7 +111,7 @@ class FileExplorerActivity : AppCompatActivity() {
         btnFolders = findViewById(R.id.btn_folders)
         btnSort = findViewById(R.id.btn_sort)
         btnView = findViewById(R.id.btn_view)
-        btnTc = findViewById(R.id.btn_tc)
+        btnPanes = findViewById(R.id.btn_panes)
         btnExit = findViewById(R.id.btn_exit)
         etSearch = findViewById(R.id.et_search)
         progressBar = findViewById(R.id.progress_bar)
@@ -150,8 +150,8 @@ class FileExplorerActivity : AppCompatActivity() {
         btnView.setOnClickListener { toggleViewMode() }
         btnView.onActionKey { toggleViewMode() }
 
-        btnTc.setOnClickListener { openExploreKf() }
-        btnTc.onActionKey { openExploreKf() }
+        btnPanes.setOnClickListener { openExploreKf() }
+        btnPanes.onActionKey { openExploreKf() }
 
         btnAddNetwork.setOnClickListener { showAddNetworkWizard() }
         btnAddNetwork.onActionKey { showAddNetworkWizard() }
@@ -234,7 +234,7 @@ class FileExplorerActivity : AppCompatActivity() {
     private fun setupTvNavigation() {
         if (!isTvDevice) return
 
-        val topBarButtons = listOf<android.view.View>(btnBack, btnSearch, btnFolders, btnSort, btnView, btnTc, btnExit)
+        val topBarButtons = listOf<android.view.View>(btnBack, btnSearch, btnFolders, btnSort, btnView, btnPanes, btnExit)
         topBarButtons.forEachIndexed { index, btn ->
             btn.setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN) {
@@ -858,7 +858,12 @@ class FileExplorerActivity : AppCompatActivity() {
             "Explorar archivos en Google Drive"
         )
 
-        val listItems = items.indices.map { i ->
+        // "Red de Windows en el explorador" (Ajustes > KARIN Link) controla si se
+        // ofrece conexión SMB en este asistente.
+        val smbVisible = com.karin.streamtv.util.AppPreferences.isSmbShowOnHome()
+        val origIndices = if (smbVisible) items.indices.toList() else items.indices.filter { it >= 3 }
+
+        val listItems = origIndices.map { i ->
             val row = android.widget.LinearLayout(ctx).apply {
                 orientation = android.widget.LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
@@ -922,10 +927,10 @@ class FileExplorerActivity : AppCompatActivity() {
             .setNegativeButton("Cancelar", null)
             .create()
 
-        listItems.forEachIndexed { i, row ->
+        listItems.forEachIndexed { pos, row ->
             row.setOnClickListener {
                 dialog.dismiss()
-                when (i) {
+                when (origIndices[pos]) {
                     0, 1, 2 -> showSmbConnectDialog()
                     3 -> showCloudManageDialogFor(CloudProvider.DROPBOX)
                     4 -> showCloudManageDialogFor(CloudProvider.GOOGLE_DRIVE)

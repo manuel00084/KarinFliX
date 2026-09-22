@@ -3,6 +3,7 @@ package com.karin.streamtv.ui
 import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
@@ -114,9 +115,9 @@ class VideoAdapter(
                         retriever.setDataSource(item.relativePath)
                     else -> retriever.setDataSource(item.uri)
                 }
-                var frame = retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                if (frame == null) frame = retriever.getFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST)
-                if (frame == null) frame = retriever.getFrameAtTime(0)
+
+                val durationUs = getDurationUs(retriever, item)
+                val frame = extractBestFrame(retriever, durationUs)
                 if (frame != null) return scaleBitmap(frame, 320)
             } catch (e: Exception) {
                 android.util.Log.e("KarinThumb", "extract failed: ${e.message}")
@@ -127,6 +128,104 @@ class VideoAdapter(
             return try {
                 MediaStore.Video.Thumbnails.getThumbnail(cr, item.id, MediaStore.Video.Thumbnails.MINI_KIND, null)
             } catch (_: Exception) { null }
+        }
+
+        private fun getDurationUs(retriever: MediaMetadataRetriever, item: VideoItem): Long {
+            try {
+                val dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                if (dur != null) return dur.toLong() * 1000
+            } catch (_: Exception) {}
+            if (item.durationMs > 0) return item.durationMs * 1000
+            return 0L
+        }
+
+        private fun extractBestFrame(retriever: MediaMetadataRetriever, durationUs: Long): Bitmap? {
+            val positions = buildTimePositions(durationUs)
+            for (posUs in positions) {
+                try {
+                    val frame = retriever.getFrameAtTime(posUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    if (frame != null && !isBlackFrame(frame)) {
+                        return frame
+                    }
+                    frame?.recycle()
+                } catch (_: Exception) {}
+            }
+            for (posUs in positions) {
+                try {
+                    val frame = retriever.getFrameAtTime(posUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                    if (frame != null && !isBlackFrame(frame)) {
+                        return frame
+                    }
+                    frame?.recycle()
+                } catch (_: Exception) {}
+            }
+            try {
+                val frame = retriever.getFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST)
+                if (frame != null && !isBlackFrame(frame)) return frame
+                frame?.recycle()
+            } catch (_: Exception) {}
+            try {
+                val frame = retriever.getFrameAtTime(0)
+                if (frame != null && !isBlackFrame(frame)) return frame
+                frame?.recycle()
+            } catch (_: Exception) {}
+            return null
+        }
+
+        private fun buildTimePositions(durationUs: Long): List<Long> {
+            val positions = mutableListOf<Long>()
+            if (durationUs > 0) {
+                val sec5 = 5_000_000L
+                val sec10 = 10_000_000L
+                val sec30 = 30_000_000L
+                val quarter = durationUs / 4
+                val third = durationUs / 3
+                val half = durationUs / 2
+
+                positions.add(sec5)
+                positions.add(sec10)
+                if (durationUs > sec30) {
+                    positions.add(sec30)
+                    positions.add(quarter)
+                    positions.add(third)
+                    positions.add(half)
+                    positions.add(durationUs - sec10)
+                    positions.add(durationUs - sec5)
+                }
+            } else {
+                positions.add(1_000_000L)
+                positions.add(2_000_000L)
+                positions.add(5_000_000L)
+                positions.add(10_000_000L)
+            }
+            return positions
+        }
+
+        private fun isBlackFrame(bitmap: Bitmap, threshold: Int = 25): Boolean {
+            if (bitmap.width < 4 || bitmap.height < 4) return true
+            val sampleSize = 8
+            val w = bitmap.width / sampleSize
+            val h = bitmap.height / sampleSize
+            if (w < 1 || h < 1) return true
+
+            var totalBrightness = 0L
+            var pixelCount = 0
+            val pixels = IntArray(w * h)
+            try {
+                bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+                for (pixel in pixels) {
+                    val r = Color.red(pixel)
+                    val g = Color.green(pixel)
+                    val b = Color.blue(pixel)
+                    totalBrightness += (r + g + b) / 3
+                    pixelCount++
+                }
+            } catch (_: Exception) {
+                return false
+            }
+            if (pixelCount == 0) return true
+            val avgBrightness = totalBrightness / pixelCount
+            return avgBrightness < threshold
         }
 
         private fun scaleBitmap(src: Bitmap, maxDim: Int): Bitmap {

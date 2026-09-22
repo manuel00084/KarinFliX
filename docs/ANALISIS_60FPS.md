@@ -1,5 +1,11 @@
 # KarinFLiX — Análisis del pipeline 24fps → 60fps (interpolación de movimiento en GPU)
 
+> ⚠️ **Documento histórico (2026-07-31).** El pipeline 60fps descrito aquí fue
+> retirado. La interpolación de movimiento actual es `MotionX2BoostEffect`
+> (mezcla con el cuadro previo) y el resto de la cadena son efectos GL de
+> Media3: `DepixelBoostEffect`, `DetailBoostEffect` (RCAS), `KarinLightBoostEffect`
+> (half-res + Colors Boost fusionado) y `ColorsBoostEffect`.
+
 > Documento autocontenido para análisis por otra IA. Fecha: 2026-07-31.
 
 ---
@@ -405,7 +411,11 @@ adb shell am start ... --es video_url URL --ei debug_mode 5
 
 ## 11. Archivos de referencia
 
-| Archivo | Contenido |
+> Tabla histórica: todos los archivos listados fueron retirados en favor del
+> pipeline de efectos Media3 (ver nota al inicio). Se conserva como referencia
+> del análisis.
+
+| Archivo (retirado) | Contenido (histórico) |
 |---|---|
 | `app/src/main/java/com/karin/streamtv/player/Media3SixtyFpsProcessor.kt` | Pipeline completo: renderer, 4 shaders (copy/motion/static/fragment), sincronización, métricas |
 | `app/src/main/java/com/karin/streamtv/player/ExoPlayerActivity.kt` | Activity de reproducción, extras de intent, conexión del pipeline |

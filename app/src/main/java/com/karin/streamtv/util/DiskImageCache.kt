@@ -21,7 +21,7 @@ object DiskImageCache {
 
     private var cacheDir: File? = null
 
-    // LRU en memoria (patrón TextureCache de Kodi): evita re-decodificar desde
+    // LRU en memoria (caché de texturas al estilo de los media centers): evita re-decodificar desde
     // disco en cada bind y baja la presión de memoria en grid/recyclers.
     private val memoryCache = object : LruCache<String, Bitmap>(memCacheSizeBytes()) {
         override fun sizeOf(key: String, value: Bitmap): Int =

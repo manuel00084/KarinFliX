@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit
  * Cada WebView (visible u offscreen) dispara un proceso renderer de Chromium aparte,
  * que en equipos con 1GB de RAM cuesta ~40-100MB. Cuando el bypass de Cloudflare y el
  * extractor de video corren a la vez pueden coexistir varios renderers. Este semáforo
- * los acota a [MAX_WEBVIEWS] simultáneos (patrón JobManager de Kodi).
+ * los acota a [MAX_WEBVIEWS] simultáneos (un permiso por tarea pesada).
  */
 object WebViewPermits {
 

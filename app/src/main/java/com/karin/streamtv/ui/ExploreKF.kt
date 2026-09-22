@@ -1,6 +1,7 @@
 package com.karin.streamtv.ui
 
 import android.app.AlertDialog
+import android.app.ProgressDialog
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -13,6 +14,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -26,6 +28,7 @@ import com.karin.streamtv.karinlink.SmbRef
 import com.karin.streamtv.util.FileOps
 import kotlinx.coroutines.*
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ExploreKF : AppCompatActivity() {
 
@@ -53,9 +56,13 @@ class ExploreKF : AppCompatActivity() {
     private var clipEntries: List<FileEntry> = emptyList()
     private var clipOp: ClipOp = ClipOp.COPY
 
+    // Copy state
+    private var copyCancelFlag = AtomicBoolean(false)
+    private var progressDialog: ProgressDialog? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_total_commander)
+        setContentView(R.layout.activity_dual_pane)
 
         val startPath = intent.getStringExtra("start_path")
         val initialDir = if (!startPath.isNullOrBlank()) File(startPath) else null
@@ -79,7 +86,13 @@ class ExploreKF : AppCompatActivity() {
 
         findViewById<View>(R.id.btn_exit).setOnClickListener { finish() }
         findViewById<View>(R.id.btn_home).setOnClickListener { showHome() }
-        findViewById<View>(R.id.btn_connect).setOnClickListener { showSmbConnectDialog() }
+        findViewById<View>(R.id.btn_connect).setOnClickListener {
+            if (com.karin.streamtv.util.AppPreferences.isSmbShowOnHome()) {
+                showSmbConnectDialog()
+            } else {
+                Toast.makeText(this, "Red de Windows desactivada: actívala en Configuración de KARIN Link", Toast.LENGTH_LONG).show()
+            }
+        }
         findViewById<View>(R.id.btn_copy).setOnClickListener { doCopy() }
         findViewById<View>(R.id.btn_paste).setOnClickListener { doPaste() }
         findViewById<View>(R.id.btn_delete).setOnClickListener { doDelete() }
@@ -138,7 +151,7 @@ class ExploreKF : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            android.util.Log.d("TC", "detectStorageVolumes: ${e.message}")
+            android.util.Log.d("ExploreKF", "detectStorageVolumes: ${e.message}")
         }
 
         if (result.isEmpty()) {
@@ -319,11 +332,32 @@ class ExploreKF : AppCompatActivity() {
             Toast.makeText(this, "Selecciona archivos (OK para entrar, click largo para seleccionar)", Toast.LENGTH_SHORT).show()
             return
         }
-        clipEntries = sel
-        clipOp = ClipOp.COPY
-        activePane.adapter.clearSelection()
-        updateStatus()
-        Toast.makeText(this, "${clipEntries.size} elemento(s) copiado(s)", Toast.LENGTH_SHORT).show()
+
+        // Calcular tamaño total
+        val files = sel.map { it.file }
+        val (totalFiles, totalBytes) = FileOps.countTotalFiles(files)
+
+        // Mostrar diálogo de confirmación con información de tamaño
+        val sizeStr = formatSize(totalBytes)
+        val msg = buildString {
+            append("¿Copiar ${sel.size} elemento(s)?")
+            if (totalFiles > sel.size) {
+                append("\n\nContiene $totalFiles archivos ($sizeStr)")
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Copiar")
+            .setMessage(msg)
+            .setPositiveButton("Copiar") { _, _ ->
+                clipEntries = sel
+                clipOp = ClipOp.COPY
+                activePane.adapter.clearSelection()
+                updateStatus()
+                Toast.makeText(this, "${sel.size} elemento(s) en el portapapeles. Navega al destino y pulsa Pegar.", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun doPaste() {
@@ -331,21 +365,114 @@ class ExploreKF : AppCompatActivity() {
             Toast.makeText(this, "Nada que pegar", Toast.LENGTH_SHORT).show()
             return
         }
+
         val dest = activePane
+        val destPath = when (dest.type) {
+            PaneType.LOCAL -> dest.localPath
+            PaneType.SMB -> null
+        }
+
+        // Verificar conflictos de nombres
+        val conflicts = mutableListOf<String>()
+        for (entry in clipEntries) {
+            when (dest.type) {
+                PaneType.LOCAL -> {
+                    val target = File(dest.localPath, entry.name)
+                    if (target.exists()) conflicts.add(entry.name)
+                }
+                PaneType.SMB -> {
+                    // Para SMB no podemos verificar fácilmente, asumimos que puede haber conflictos
+                }
+            }
+        }
+
+        // Mostrar diálogo de confirmación
+        val sizeStr = formatSize(clipEntries.sumOf { it.sizeBytes })
+        val msg = buildString {
+            append("¿Pegar ${clipEntries.size} elemento(s) en:")
+            append("\n${dest.currentPathLabel()}")
+            if (clipEntries.isNotEmpty()) {
+                append("\n\nTamaño total: $sizeStr")
+            }
+            if (conflicts.isNotEmpty()) {
+                append("\n\n⚠️ Archivos que ya existen:")
+                conflicts.take(5).forEach { append("\n• $it") }
+                if (conflicts.size > 5) append("\n... y ${conflicts.size - 5} más")
+            }
+        }
+
+        val items = if (conflicts.isNotEmpty()) {
+            arrayOf("Pegar (sobrescribir)", "Pegar (omitir existentes)", "Cancelar")
+        } else {
+            arrayOf("Pegar", "Cancelar")
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Pegar")
+            .setMessage(msg)
+            .setItems(items) { _, which ->
+                when {
+                    items[which].startsWith("Pegar (sobrescribir)") || items[which] == "Pegar" -> {
+                        startPasteOperation(dest, overwrite = true)
+                    }
+                    items[which].startsWith("Pegar (omitir)") -> {
+                        startPasteOperation(dest, overwrite = false)
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun startPasteOperation(dest: Pane, overwrite: Boolean) {
         val list = clipEntries
         val op = clipOp
-        val sb = StringBuilder()
-        scope.launch {
-            for (e in list) {
-                val ok = copyEntry(e, dest)
-                if (!ok) sb.append("${e.name}; ")
+
+        copyCancelFlag.set(false)
+
+        // Mostrar diálogo de progreso
+        progressDialog = ProgressDialog(this).apply {
+            setTitle("Copiando archivos...")
+            setMessage("Preparando...")
+            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
+            isIndeterminate = false
+            max = 100
+            setCancelable(true)
+            setOnCancelListener { copyCancelFlag.set(true) }
+            setButton(ProgressDialog.BUTTON_NEGATIVE, "Cancelar") { dialog, _ ->
+                copyCancelFlag.set(true)
+                dialog.dismiss()
             }
+            show()
+        }
+
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                performCopy(list, dest, overwrite)
+            }
+
             withContext(Dispatchers.Main) {
-                if (sb.isEmpty()) {
-                    Toast.makeText(this@ExploreKF, "Pegado completado", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this@ExploreKF, "Fallaron: $sb", Toast.LENGTH_LONG).show()
+                progressDialog?.dismiss()
+                progressDialog = null
+
+                when {
+                    result.success -> {
+                        val msg = buildString {
+                            append("Completado: ")
+                            append("${result.filesCopied} archivos")
+                            if (result.foldersCopied > 0) append(", ${result.foldersCopied} carpetas")
+                            append(" (${formatSize(result.bytesCopied)})")
+                        }
+                        Toast.makeText(this@ExploreKF, msg, Toast.LENGTH_SHORT).show()
+                    }
+                    result.errors.isNotEmpty() -> {
+                        Toast.makeText(this@ExploreKF, "Algunos archivos fallaron:\n${result.errors.take(3).joinToString("\n")}", Toast.LENGTH_LONG).show()
+                    }
+                    else -> {
+                        Toast.makeText(this@ExploreKF, "Operación cancelada", Toast.LENGTH_SHORT).show()
+                    }
                 }
+
                 if (op == ClipOp.MOVE) clipEntries = emptyList()
                 dest.load()
                 updateStatus()
@@ -353,34 +480,113 @@ class ExploreKF : AppCompatActivity() {
         }
     }
 
-    private suspend fun copyEntry(e: FileEntry, dest: Pane): Boolean {
+    private suspend fun performCopy(
+        entries: List<FileEntry>,
+        dest: Pane,
+        overwrite: Boolean
+    ): FileOps.CopyResult {
+        return withContext(Dispatchers.IO) {
+            val errors = mutableListOf<String>()
+            var totalFilesCopied = 0
+            var totalFoldersCopied = 0
+            var totalBytesCopied = 0L
+
+            // Calcular totales
+            val (totalFiles, totalBytes) = FileOps.countTotalFiles(entries.map { it.file })
+
+            for (entry in entries) {
+                if (copyCancelFlag.get()) break
+
+                val result = copyEntryWithProgress(entry, dest, overwrite) { current, processed, _, bytes, _ ->
+                    // Actualizar progreso en el diálogo
+                    withContext(Dispatchers.Main) {
+                        progressDialog?.apply {
+                            this.setMessage("Copiando: $current")
+                            this.progress = if (totalFiles > 0) (processed * 100 / totalFiles).toInt() else 0
+                            this.max = totalFiles
+                            this.setProgressNumberFormat("$processed / $totalFiles")
+                            this.setProgressPercentFormat(java.text.DecimalFormat("0%"))
+                        }
+                    }
+                }
+
+                totalFilesCopied += result.filesCopied
+                totalFoldersCopied += result.foldersCopied
+                totalBytesCopied += result.bytesCopied
+                errors.addAll(result.errors)
+            }
+
+            FileOps.CopyResult(
+                success = errors.isEmpty() && !copyCancelFlag.get(),
+                filesCopied = totalFilesCopied,
+                foldersCopied = totalFoldersCopied,
+                bytesCopied = totalBytesCopied,
+                errors = errors
+            )
+        }
+    }
+
+    private suspend fun copyEntryWithProgress(
+        e: FileEntry,
+        dest: Pane,
+        overwrite: Boolean,
+        progressCallback: suspend (String, Int, Int, Long, Long) -> Unit
+    ): FileOps.CopyResult {
         return withContext(Dispatchers.IO) {
             try {
                 when {
                     !e.isNetwork && dest.type == PaneType.LOCAL -> {
                         val target = File(dest.localPath, e.name)
-                        FileOps.copy(e.file, target)
+                        FileOps.copyWithProgress(
+                            src = e.file,
+                            dstDir = dest.localPath!!,
+                            listener = object : FileOps.CopyProgressListener {
+                                override fun onProgress(currentFile: String, filesProcessed: Int, totalFiles: Int, bytesProcessed: Long, totalBytes: Long) {
+                                    // Notificación de progreso
+                                }
+                                override fun onComplete(result: FileOps.CopyResult) {}
+                            },
+                            cancelFlag = copyCancelFlag,
+                            overwrite = overwrite
+                        )
                     }
                     !e.isNetwork && dest.type == PaneType.SMB -> {
-                        val ref = dest.smbCurrent ?: return@withContext false
-                        SmbClient.copyLocalToSmb(e.file, ref) is SmbClient.SmbResult.Success
+                        val ref = dest.smbCurrent ?: return@withContext FileOps.CopyResult(false, 0, 0, 0)
+                        val success = SmbClient.copyLocalToSmb(e.file, ref) is SmbClient.SmbResult.Success
+                        FileOps.CopyResult(success, if (success) 1 else 0, 0, e.sizeBytes)
                     }
                     e.smb != null && dest.type == PaneType.LOCAL -> {
                         val target = File(dest.localPath, e.name)
-                        SmbClient.copySmbToLocal(e.smb!!, target) is SmbClient.SmbResult.Success
+                        val success = SmbClient.copySmbToLocal(e.smb!!, target) is SmbClient.SmbResult.Success
+                        FileOps.CopyResult(success, if (success) 1 else 0, 0, e.sizeBytes)
                     }
                     e.smb != null && dest.type == PaneType.SMB -> {
                         val cache = File(cacheDir, "tc_tmp_" + System.currentTimeMillis())
                         val r1 = SmbClient.copySmbToLocal(e.smb!!, cache)
-                        if (r1 !is SmbClient.SmbResult.Success) return@withContext false
-                        val ref = dest.smbCurrent ?: return@withContext false
-                        SmbClient.copyLocalToSmb(cache, ref) is SmbClient.SmbResult.Success
+                        if (r1 !is SmbClient.SmbResult.Success) {
+                            return@withContext FileOps.CopyResult(false, 0, 0, 0, listOf("Error descargando de SMB"))
+                        }
+                        val ref = dest.smbCurrent ?: return@withContext FileOps.CopyResult(false, 0, 0, 0)
+                        val success = SmbClient.copyLocalToSmb(cache, ref) is SmbClient.SmbResult.Success
+                        cache.delete()
+                        FileOps.CopyResult(success, if (success) 1 else 0, 0, e.sizeBytes)
                     }
-                    else -> false
+                    else -> FileOps.CopyResult(false, 0, 0, 0, listOf("Tipo de copia no soportado"))
                 }
             } catch (ex: Exception) {
-                false
+                FileOps.CopyResult(false, 0, 0, 0, listOf("Error: ${ex.message}"))
             }
+        }
+    }
+
+    private fun formatSize(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
+        val mb = bytes / 1048576.0
+        val gb = mb / 1024.0
+        return when {
+            gb >= 1 -> String.format(java.util.Locale.US, "%.1f GB", gb)
+            mb >= 1 -> String.format(java.util.Locale.US, "%.1f MB", mb)
+            else -> String.format(java.util.Locale.US, "%.0f KB", bytes / 1024.0)
         }
     }
 
@@ -537,7 +743,7 @@ class ExploreKF : AppCompatActivity() {
         var smbCurrent: SmbRef? = null
         var searchQuery: String? = null
         var searchRecursive: Boolean = false
-        val adapter = TcFileAdapter(
+        val adapter = DualPaneFileAdapter(
             onItemClick = { entry -> onEntryClick(this, entry) },
             onItemLongClick = { updateStatus() }
         )
@@ -687,6 +893,9 @@ class ExploreKF : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        progressDialog?.dismiss()
+        progressDialog = null
+        copyCancelFlag.set(true)
         scope.cancel()
         super.onDestroy()
     }

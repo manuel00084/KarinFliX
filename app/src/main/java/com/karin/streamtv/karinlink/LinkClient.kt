@@ -28,7 +28,6 @@ class LinkClient {
         fun onPlayCommand(deviceId: String, episodeUrl: String, positionMs: Long)
         fun onPauseCommand(deviceId: String, positionMs: Long)
         fun onSeekCommand(deviceId: String, positionMs: Long)
-        fun onHistoryCommand(deviceId: String, historyJson: String)
     }
 
     private var handler: MessageHandler? = null
@@ -37,12 +36,11 @@ class LinkClient {
         this.handler = handler
     }
 
-    fun connect(host: String, port: Int, deviceId: String, deviceName: String, roomId: String? = null) {
+    fun connect(host: String, port: Int, deviceId: String, deviceName: String) {
         val request = Request.Builder()
             .url("ws://$host:$port/ws")
             .header("X-Device-Id", deviceId)
             .header("X-Device-Name", deviceName)
-            .header("X-Room-Id", roomId ?: "")
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -52,7 +50,6 @@ class LinkClient {
                     put("deviceId", deviceId)
                     put("deviceName", deviceName)
                     put("appVersion", "1.0")
-                    if (roomId != null) put("roomId", roomId)
                 })
             }
 
@@ -90,7 +87,6 @@ class LinkClient {
             "pause" -> handler?.onPauseCommand(deviceId, data.optLong("positionMs"))
             "seek" -> handler?.onSeekCommand(deviceId, data.optLong("positionMs"))
             "sync" -> handler?.onSyncCommand(deviceId, "sync", data)
-            "history" -> handler?.onHistoryCommand(deviceId, data.optString("historyJson", "[]"))
             "leave" -> handler?.onPeerDisconnected(deviceId)
         }
     }
@@ -103,31 +99,62 @@ class LinkClient {
         webSocket?.send(message.toString())
     }
 
-    fun broadcastPlay(episodeUrl: String, positionMs: Long, deviceId: String) {
-        sendJson("play", JSONObject().apply {
+    fun sendEpisode(episodeTitle: String, episodeUrl: String, siteName: String, deviceId: String, embedUrl: String = "") {
+        sendJson("sync", JSONObject().apply {
             put("deviceId", deviceId)
+            put("episodeTitle", episodeTitle)
             put("episodeUrl", episodeUrl)
-            put("positionMs", positionMs)
+            put("embedUrl", embedUrl)
+            put("siteName", siteName)
+            put("positionMs", 0L)
+            put("durationMs", 0L)
+            put("isPlaying", false)
         })
     }
 
-    fun broadcastPause(positionMs: Long, deviceId: String) {
-        sendJson("pause", JSONObject().apply {
-            put("deviceId", deviceId)
-            put("positionMs", positionMs)
+    // ── Control remoto ───────────────────────────────────────
+
+    fun sendRemoteKey(keyCode: Int) {
+        sendJson(RemoteProtocol.KEY, JSONObject().apply {
+            put("keyCode", keyCode)
+            put("action", "click")
         })
     }
 
-    fun broadcastSeek(positionMs: Long, deviceId: String) {
-        sendJson("seek", JSONObject().apply {
-            put("deviceId", deviceId)
-            put("positionMs", positionMs)
+    fun sendRemoteText(text: String, submit: Boolean = false) {
+        sendJson(RemoteProtocol.TEXT, JSONObject().apply {
+            put("text", text)
+            put("submit", submit)
         })
     }
 
-    fun sendHistory(historyJson: String) {
-        sendJson("history", JSONObject().apply {
-            put("historyJson", historyJson)
+    fun sendMouseMove(x: Float, y: Float) {
+        sendJson(RemoteProtocol.MOUSE_MOVE, JSONObject().apply {
+            put("x", x.toDouble())
+            put("y", y.toDouble())
+        })
+    }
+
+    fun sendMouseTap(x: Float, y: Float) {
+        sendJson(RemoteProtocol.MOUSE_TAP, JSONObject().apply {
+            put("x", x.toDouble())
+            put("y", y.toDouble())
+        })
+    }
+
+    fun sendMouseScroll(dx: Float, dy: Float, x: Float, y: Float) {
+        sendJson(RemoteProtocol.MOUSE_SCROLL, JSONObject().apply {
+            put("dx", dx.toDouble())
+            put("dy", dy.toDouble())
+            put("x", x.toDouble())
+            put("y", y.toDouble())
+        })
+    }
+
+    fun sendMedia(cmd: String, value: Long = 0L) {
+        sendJson(RemoteProtocol.MEDIA, JSONObject().apply {
+            put("cmd", cmd)
+            put("value", value)
         })
     }
 

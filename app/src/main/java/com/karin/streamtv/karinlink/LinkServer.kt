@@ -9,7 +9,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.security.MessageDigest
 import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
@@ -17,14 +16,10 @@ import kotlin.concurrent.thread
  * Minimal RFC 6455 WebSocket + HTTP server. KarinFLiX devices open a
  * [LinkServer] so other KarinFLiX instances (discovered via the NSD
  * service registered on the same port) can connect over `ws://host:port/ws`
- * and exchange sync/play/pause/seek/history messages. Text frames received
- * from any peer are rebroadcast to the other connected clients so playback
- * state stays in sync across the room.
+ * and send episodes to play ("sync" messages).
  *
  * Plain HTTP endpoints:
- *  - GET /ws        -> WebSocket upgrade (peer sync)
- *  - GET /room/<id> -> join-room info (200 with room members)
- *  - POST /room/<id>-> join the room with {"deviceId","deviceName"} payload
+ *  - GET /ws -> WebSocket upgrade (peer exchange)
  */
 object LinkServer {
 
@@ -36,14 +31,11 @@ object LinkServer {
         val output: OutputStream get() = socket.getOutputStream()
         var deviceId: String? = null
         var deviceName: String? = null
-        var roomId: String? = null
         var closed = false
     }
 
     private val peers = CopyOnWriteArrayList<Peer>()
-    private val rooms = ConcurrentHashMap<String, MutableList<Peer>>()
-    private val roomByPeer = ConcurrentHashMap<Peer, String>()
-    private val listeners = CopyOnWriteArrayList<(roomId: String?, from: String?, type: String, data: org.json.JSONObject) -> Unit>()
+    private val listeners = CopyOnWriteArrayList<(from: String?, type: String, data: org.json.JSONObject) -> Unit>()
 
     private var serverSocket: ServerSocket? = null
     private var running = false
@@ -53,11 +45,11 @@ object LinkServer {
     val isRunning: Boolean get() = running
     val connectedPeers: Int get() = peers.size
 
-    fun addListener(listener: (roomId: String?, from: String?, type: String, data: org.json.JSONObject) -> Unit) {
+    fun addListener(listener: (from: String?, type: String, data: org.json.JSONObject) -> Unit) {
         listeners.add(listener)
     }
 
-    fun removeListener(listener: (roomId: String?, from: String?, type: String, data: org.json.JSONObject) -> Unit) {
+    fun removeListener(listener: (from: String?, type: String, data: org.json.JSONObject) -> Unit) {
         listeners.remove(listener)
     }
 
@@ -98,44 +90,33 @@ object LinkServer {
         serverSocket = null
         peers.forEach { runCatching { it.socket.close() } }
         peers.clear()
-        rooms.clear()
-        roomByPeer.clear()
         listeners.clear()
         Log.i(TAG, "Server stopped")
     }
 
-    /** Assigns a connecting peer to [roomId] and updates its handshake info. */
-    internal fun assignPeer(peer: Peer, roomId: String, deviceId: String?, deviceName: String?) {
+    /** Registers a connecting peer and updates its handshake info. */
+    internal fun assignPeer(peer: Peer, deviceId: String?, deviceName: String?) {
         if (!peers.contains(peer)) peers.add(peer)
         peer.deviceId = deviceId
         peer.deviceName = deviceName
-        val old = roomByPeer.put(peer, roomId)
-        if (old != null && old != roomId) rooms[old]?.remove(peer)
-        rooms.getOrPut(roomId) { CopyOnWriteArrayList() }.apply { if (!contains(peer)) add(peer) }
-        peer.roomId = roomId
-        Log.i(TAG, "Peer ${deviceName ?: "unknown"} joined room $roomId (${roomSize(roomId)} members)")
+        Log.i(TAG, "Peer ${deviceName ?: "unknown"} connected")
     }
 
     internal fun removePeer(peer: Peer) {
         if (peer.closed) return
         peer.closed = true
         peers.remove(peer)
-        roomByPeer.remove(peer)?.let { rooms[it]?.remove(peer) }
         runCatching { peer.socket.close() }
         Log.i(TAG, "Peer left")
     }
 
-    fun roomSize(roomId: String): Int = roomByPeer.values.count { it == roomId }
-    fun roomPeers(roomId: String): List<String> = rooms[roomId]?.mapNotNull { it.deviceName ?: it.deviceId } ?: emptyList()
-
-    /** Sends a raw JSON message to every peer assigned to [roomId] except [skip]. */
-    internal fun broadcast(roomId: String?, type: String, data: org.json.JSONObject, skip: Peer? = null) {
+    /** Sends a raw JSON message to every connected peer except [skip]. */
+    internal fun broadcast(type: String, data: org.json.JSONObject, skip: Peer? = null) {
         val msg = org.json.JSONObject().apply {
             put("type", type)
             put("data", data)
         }.toString()
-        val targets = if (roomId != null) rooms[roomId]?.toList() ?: emptyList() else peers.toList()
-        targets.forEach { p ->
+        peers.toList().forEach { p ->
             if (p !== skip && !p.closed) {
                 try { sendFrame(p, 0x1, msg) } catch (e: Exception) { removePeer(p) }
             }
@@ -187,31 +168,10 @@ object LinkServer {
                 "GET" -> {
                     if (path == "/ws") {
                         upgradeWebSocket(peer, headers)
-                    } else if (path.startsWith("/room/")) {
-                        val roomId = path.removePrefix("/room/")
-                        val members = roomPeers(roomId)
-                        httpReply(peer, "200 OK", org.json.JSONObject().apply {
-                            put("room", roomId)
-                            put("members", org.json.JSONArray(members))
-                            put("size", members.size)
-                        }.toString(), "application/json")
-                    } else {
-                        httpReply(peer, "200 OK", "{\"status\":\"ok\"}", "application/json")
+                        return
                     }
+                    httpReply(peer, "200 OK", "{\"status\":\"ok\"}", "application/json")
                     closePeer(peer)
-                }
-                "POST" -> {
-                    val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
-                    val body = ByteArray(contentLength)
-                    if (contentLength > 0) readExactly(peer.input, body)
-                    val roomId = path.removePrefix("/room/").takeIf { it.isNotBlank() }
-                    if (roomId != null) {
-                        val json = try { org.json.JSONObject(String(body, Charsets.UTF_8)) } catch (_: Exception) { org.json.JSONObject() }
-                        assignPeer(peer, roomId, json.optString("deviceId").ifBlank { null }, json.optString("deviceName").ifBlank { null })
-                        httpReply(peer, "200 OK", "{\"joined\":true,\"room\":\"$roomId\"}", "application/json")
-                    } else {
-                        httpReply(peer, "404 Not Found", "{\"error\":\"room required\"}", "application/json")
-                    }
                 }
                 else -> httpReply(peer, "405 Method Not Allowed", "", "text/plain")
             }
@@ -245,12 +205,6 @@ object LinkServer {
         peer.deviceId = headers["x-device-id"]
         peer.deviceName = headers["x-device-name"]
 
-        // A room may be declared in the handshake header so we can route
-        // broadcasts even before the peer's first "hello" frame arrives.
-        val handshakeRoom = headers["x-room-id"]?.takeIf { it.isNotBlank() }
-        if (handshakeRoom != null) assignPeer(peer, handshakeRoom, peer.deviceId, peer.deviceName)
-
-        // WebSocket connects don't carry a room until the peer says "hello".
         readFramesLoop(peer)
     }
 
@@ -319,15 +273,9 @@ object LinkServer {
         if (type == "hello") {
             peer.deviceId = data.optString("deviceId").ifBlank { peer.deviceId }
             peer.deviceName = data.optString("deviceName").ifBlank { peer.deviceName }
-            val helloRoom = data.optString("roomId")
-            if (peer.roomId == null && helloRoom.isNotBlank()) {
-                assignPeer(peer, helloRoom, peer.deviceId, peer.deviceName)
-            }
         }
 
-        val roomId = peer.roomId
-        if (roomId != null) broadcast(roomId, type, data, skip = peer)
-        listeners.forEach { runCatching { it(roomId, peer.deviceId, type, data) } }
+        listeners.forEach { runCatching { it(peer.deviceId, type, data) } }
         return opcode
     }
 
@@ -377,17 +325,6 @@ object LinkServer {
             val n = try { input.read(buf, off, buf.size - off) } catch (_: Exception) { -1 }
             if (n < 0) throw EOFException()
             off += n
-        }
-    }
-
-    private fun skip(input: InputStream, n: Long) {
-        var remaining = n
-        val tmp = ByteArray(512)
-        while (remaining > 0) {
-            val toRead = minOf(remaining, tmp.size.toLong()).toInt()
-            val read = try { input.read(tmp, 0, toRead) } catch (_: Exception) { -1 }
-            if (read < 0) throw EOFException()
-            remaining -= read
         }
     }
 }

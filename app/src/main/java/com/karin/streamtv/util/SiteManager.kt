@@ -20,6 +20,8 @@ class SiteManager(context: Context) {
         SiteConfig(name = "LaCartoons", url = "https://www.lacartoons.com", icon = "LC"),
         SiteConfig(name = "DoramasYT", url = "https://www.doramasyt.com", icon = "DY"),
         SiteConfig(name = "FrikiSeries", url = "https://www.frikiserie.com", icon = "FS"),
+        SiteConfig(name = "PeliPops", url = "https://pelispop.mov", icon = "PP"),
+        SiteConfig(name = "CineCalidad", url = "https://cine-calidad.mx", icon = "CC"),
     )
 
     init {
@@ -118,17 +120,25 @@ class SiteManager(context: Context) {
         try {
             val array = JSONArray(json)
             for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                sites.add(
-                    SiteConfig(
-                        id = obj.optString("id", java.util.UUID.randomUUID().toString()),
-                        name = obj.getString("name"),
-                        url = obj.getString("url"),
-                        icon = obj.optString("icon", "?"),
-                        isActive = obj.optBoolean("isActive", true),
-                        lastVisited = obj.optLong("lastVisited", 0L)
+                try {
+                    val obj = array.getJSONObject(i)
+                    val name = obj.optString("name", "")
+                    val url = obj.optString("url", "")
+                    // Entrada corrupta/incompleta: se salta sin abortar el resto.
+                    if (name.isBlank() || url.isBlank()) continue
+                    sites.add(
+                        SiteConfig(
+                            id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                            name = name,
+                            url = url,
+                            icon = obj.optString("icon", "?"),
+                            isActive = obj.optBoolean("isActive", true),
+                            lastVisited = obj.optLong("lastVisited", 0L)
+                        )
                     )
-                )
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()

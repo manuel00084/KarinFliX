@@ -43,7 +43,6 @@ import kotlinx.coroutines.withContext
 class SiteBrowserActivity : AppCompatActivity() {
 
     private lateinit var rvEpisodes: RecyclerView
-    private lateinit var tvTitle: TextView
     private lateinit var etSearch: EditText
     private lateinit var btnSearch: TextView
     private lateinit var btnVoice: TextView
@@ -52,8 +51,18 @@ class SiteBrowserActivity : AppCompatActivity() {
     private lateinit var tvLoadingText: TextView
     private lateinit var btnCancelLoading: TextView
     private lateinit var btnHome: TextView
-    private lateinit var btnDirectory: TextView
+    private lateinit var btnMovies: TextView
+    private lateinit var btnSeries: TextView
+    private lateinit var btnDorama: TextView
     private lateinit var btnSettings: TextView
+    // true = el botón actúa como el antiguo Directorio/Catálogo (sitios
+    // sin sección de películas, ej. JKAnime/LatAnime).
+    private var moviesButtonOpensCatalog = false
+    // Sección actual (MOVIES/SERIES/ANIME/DORAMA) o null en portada,
+    // directorio y búsqueda. Define qué filtros ofrece la barra.
+    private var currentSection: com.karin.streamtv.model.MenuSection? = null
+    // Sección pedida por intent (p. ej. desde el detalle de serie).
+    private var pendingSection: com.karin.streamtv.model.MenuSection? = null
     private lateinit var btnNextPage: TextView
     private lateinit var btnPrevPage: TextView
     private lateinit var filterBar: View
@@ -87,6 +96,7 @@ class SiteBrowserActivity : AppCompatActivity() {
     private var nextPageUrl: String? = null
     private var prevPageUrl: String? = null
     private var isLoadingPage: Boolean = false
+    private var gridIsCatalog: Boolean = false
     private var currentPageNum: Int = 1
     private val handler = Handler(Looper.getMainLooper())
 
@@ -99,7 +109,6 @@ class SiteBrowserActivity : AppCompatActivity() {
         siteUrl = intent.getStringExtra("site_url") ?: ""
 
         rvEpisodes = findViewById(R.id.rv_episodes)
-        tvTitle = findViewById(R.id.tv_site_title)
         etSearch = findViewById(R.id.et_search)
         btnSearch = findViewById(R.id.btn_search)
         btnVoice = findViewById(R.id.btn_voice)
@@ -113,9 +122,24 @@ class SiteBrowserActivity : AppCompatActivity() {
         btnHome.setOnClickListener { loadHomepage() }
         btnHome.onActionKey { loadHomepage() }
 
-        btnDirectory = findViewById(R.id.btn_directory)
-        btnDirectory.setOnClickListener { toggleMenu() }
-        btnDirectory.onActionKey { toggleMenu() }
+        findViewById<android.view.View>(R.id.iv_header_logo).setOnClickListener {
+            goToMainPage()
+        }
+        findViewById<android.view.View>(R.id.iv_header_logo).onActionKey {
+            goToMainPage()
+        }
+
+        btnMovies = findViewById(R.id.btn_movies)
+        btnMovies.setOnClickListener { onMoviesButton() }
+        btnMovies.onActionKey { onMoviesButton() }
+
+        btnSeries = findViewById(R.id.btn_series)
+        btnSeries.setOnClickListener { openSection(com.karin.streamtv.model.MenuSection.SERIES, "Series") }
+        btnSeries.onActionKey { openSection(com.karin.streamtv.model.MenuSection.SERIES, "Series") }
+
+        btnDorama = findViewById(R.id.btn_dorama)
+        btnDorama.setOnClickListener { openSection(com.karin.streamtv.model.MenuSection.DORAMA, "Doramas") }
+        btnDorama.onActionKey { openSection(com.karin.streamtv.model.MenuSection.DORAMA, "Doramas") }
 
         btnSettings = findViewById(R.id.btn_settings)
         btnSettings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
@@ -136,8 +160,6 @@ filterBar = findViewById(R.id.filter_bar)
         tvPageNumber = findViewById(R.id.tv_page_number)
 
         initDynamicFilterBar()
-
-        tvTitle.text = siteName
 
         val isTv = DeviceUtils.isTvDevice(this)
         rvEpisodes.layoutManager = GridLayoutManager(this, 3)
@@ -168,7 +190,7 @@ filterBar = findViewById(R.id.filter_bar)
                 false
             }
             // Navegación DPAD entre barra superior y grid + horizontal en barra
-            val topBarButtons = listOf(btnHome, btnDirectory, btnSettings)
+            val topBarButtons: List<View> = listOf(findViewById(R.id.iv_header_logo), btnHome, btnMovies, btnSeries, btnDorama, btnSettings)
             topBarButtons.forEachIndexed { index, btn ->
                 btn.setOnKeyListener { _, keyCode, event ->
                     if (event.action == KeyEvent.ACTION_DOWN) {
@@ -178,11 +200,19 @@ filterBar = findViewById(R.id.filter_bar)
                                 true
                             }
                             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                if (index > 0) topBarButtons[index - 1].requestFocus()
+                                if (index > 0) {
+                                    var prev = index - 1
+                                    while (prev > 0 && topBarButtons[prev].visibility != View.VISIBLE) prev--
+                                    topBarButtons[prev].requestFocus()
+                                }
                                 true
                             }
                             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                if (index < topBarButtons.lastIndex) topBarButtons[index + 1].requestFocus()
+                                if (index < topBarButtons.lastIndex) {
+                                    var next = index + 1
+                                    while (next < topBarButtons.lastIndex && topBarButtons[next].visibility != View.VISIBLE) next++
+                                    topBarButtons[next].requestFocus()
+                                }
                                 true
                             }
                             else -> false
@@ -228,6 +258,9 @@ filterBar = findViewById(R.id.filter_bar)
         val autoPlayUrl = intent.getStringExtra("autoplay_url")
         val autoPlayTitle = intent.getStringExtra("autoplay_title")
         val seriesUrl = intent.getStringExtra("series_url")
+        pendingSection = intent.getStringExtra("open_section")?.let { raw ->
+            try { com.karin.streamtv.model.MenuSection.valueOf(raw) } catch (_: Exception) { null }
+        }
         when {
             !seriesUrl.isNullOrBlank() -> loadSeriesPage(seriesUrl)
             !autoPlayUrl.isNullOrBlank() -> {
@@ -304,14 +337,51 @@ filterBar = findViewById(R.id.filter_bar)
                     return@launch
                 }
 
+                gridIsCatalog = false
                 setEpisodesAdapter(episodes) { episode ->
-                    openEpisode(episode)
+                    openEpisodeOrDetail(episode)
                 }
                 // TV: solicitar foco en grid tras cargar datos
                 if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) {
                     rvEpisodes.post { rvEpisodes.requestFocus() }
                 }
                 tvEmpty.visibility = android.view.View.GONE
+                // Botones de sección solo con icono (sin letrero): solo los que
+                // el sitio ofrece (URL directa conocida o entrada de menú).
+                // Películas, si no existe, actúa como el antiguo
+                // Directorio/Catálogo (JKAnime, LatAnime...).
+                val hasMoviesSection = supportsSection(com.karin.streamtv.model.MenuSection.MOVIES)
+                if (hasMoviesSection) {
+                    moviesButtonOpensCatalog = false
+                    btnMovies.text = "🎬 Películas"
+                } else {
+                    moviesButtonOpensCatalog = true
+                    btnMovies.text = "📚 Catálogo"
+                }
+                val hasSeriesSection = supportsSection(com.karin.streamtv.model.MenuSection.SERIES)
+                btnSeries.visibility = if (hasSeriesSection) View.VISIBLE else View.GONE
+                btnSeries.text = "📺 Series"
+                val hasDoramaSection = supportsSection(com.karin.streamtv.model.MenuSection.DORAMA)
+                btnDorama.visibility = if (hasDoramaSection) View.VISIBLE else View.GONE
+                btnDorama.text = "🏮 Doramas"
+                // En portada no hay sección: filtros por defecto del sitio.
+                // PeliPops muestra Género + Año aquí (en secciones no hay barra).
+                currentSection = null
+                filterBar.visibility =
+                    if (siteName.equals("PeliPops", ignoreCase = true)) View.VISIBLE else View.GONE
+                refreshFilterBar()
+                // Apertura directa de sección pedida por intent (detalle).
+                pendingSection?.let { section ->
+                    pendingSection = null
+                    val label = when (section) {
+                        com.karin.streamtv.model.MenuSection.MOVIES -> "Películas"
+                        com.karin.streamtv.model.MenuSection.SERIES -> "Series"
+                        com.karin.streamtv.model.MenuSection.ANIME -> "Anime"
+                        com.karin.streamtv.model.MenuSection.DORAMA -> "Doramas"
+                        else -> section.name
+                    }
+                    openSection(section, label)
+                }
             } catch (e: Exception) {
                 Log.e("SiteBrowser", "loadHomepage error: ${e.message}", e)
                 loadingOverlay.visibility = android.view.View.GONE
@@ -349,7 +419,6 @@ filterBar = findViewById(R.id.filter_bar)
                 loadingOverlay.visibility = android.view.View.GONE
 
                 currentPageUrl = seriesUrl
-                tvTitle.text = "$siteName - Capítulos"
 
                 if (episodes.isEmpty()) {
                     tvEmpty.visibility = android.view.View.VISIBLE
@@ -358,6 +427,7 @@ filterBar = findViewById(R.id.filter_bar)
                 }
 
                 currentEpisodes = ArrayList(episodes)
+                gridIsCatalog = false
                 setEpisodesAdapter(episodes) { episode ->
                     openEpisode(episode)
                 }
@@ -408,7 +478,6 @@ filterBar = findViewById(R.id.filter_bar)
         showingSearchResults = true
         filterBar.visibility = View.GONE
         paginationBar.visibility = View.GONE
-        tvTitle.text = "$siteName - Buscar: $query"
         showLoading("Buscando...")
         tvEmpty.visibility = android.view.View.GONE
 
@@ -427,8 +496,9 @@ filterBar = findViewById(R.id.filter_bar)
                     return@launch
                 }
 
-setEpisodesAdapter(episodes) { episode ->
-                    openEpisode(episode)
+gridIsCatalog = false
+                setEpisodesAdapter(episodes) { episode ->
+                    openEpisodeOrDetail(episode)
                 }
                 if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
             } catch (e: Exception) {
@@ -469,13 +539,13 @@ setEpisodesAdapter(episodes) { episode ->
                 currentPageUrl = url
                 currentEpisodes = ArrayList(newEpisodes)
                 setEpisodesAdapter(currentEpisodes) { episode ->
-                    openEpisode(episode)
+                    openGridItem(episode)
                 }
                 if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
                 rvEpisodes.scrollToPosition(0)
 
                 currentPageNum++
-                tvTitle.text = "$siteName - Directorio"
+                // Se conserva el título de la sección (no se pisa con Directorio).
 
                 if (doc != null) {
                     nextPageUrl = DynamicParser.findNextPageUrl(doc, url)
@@ -520,13 +590,13 @@ setEpisodesAdapter(episodes) { episode ->
                 currentPageUrl = url
                 currentEpisodes = ArrayList(newEpisodes)
                 setEpisodesAdapter(currentEpisodes) { episode ->
-                    openEpisode(episode)
+                    openGridItem(episode)
                 }
                 if (DeviceUtils.isTvDevice(this@SiteBrowserActivity)) rvEpisodes.post { rvEpisodes.requestFocus() }
                 rvEpisodes.scrollToPosition(0)
 
                 currentPageNum = (currentPageNum - 1).coerceAtLeast(1)
-                tvTitle.text = "$siteName - Directorio"
+                // Se conserva el título de la sección (no se pisa con Directorio).
 
                 if (doc != null) {
                     nextPageUrl = DynamicParser.findNextPageUrl(doc, url)
@@ -555,8 +625,97 @@ setEpisodesAdapter(episodes) { episode ->
         }
     }
 
-    private fun toggleMenu() {
-        loadDirectoryContent()
+    // Abre una sección del sitio (Películas/Series/Anime/Doramas) con la misma
+    // ruta del directorio: cuadrícula -> detalle.
+    // Fichas de serie van al detalle; capítulos al reproductor.
+    // (Regla del navegador para no tocar scrapers ajenos.)
+    private fun openEpisodeOrDetail(episode: Episode) {
+        if (isSeriesDetailUrl(episode.url)) {
+            val intent = Intent(this@SiteBrowserActivity, SeriesDetailActivity::class.java).apply {
+                putExtra("series_url", episode.url)
+                putExtra("series_title", episode.title)
+                putExtra("site_name", siteName)
+            }
+            startActivity(intent)
+        } else {
+            openEpisode(episode)
+        }
+    }
+
+    // ¿La URL es ficha de serie (detalle con capítulos) y no capítulo reproducible?
+    private fun isSeriesDetailUrl(url: String): Boolean {
+        if (siteName.equals("JKAnime", ignoreCase = true)) return isJkSeriesUrl(url)
+        // LaCartoons: /serie/{id}; el capítulo es /serie/capitulo/{id}?t={temporada}.
+        if (siteName.equals("LaCartoons", ignoreCase = true)) {
+            val path = try { java.net.URI(url).path?.trim('/') } catch (_: Exception) { null }
+                ?: return false
+            return Regex("""^serie/\d+$""").matches(path)
+        }
+        return false
+    }
+
+    // Elemento del grid según el modo actual: en el catálogo/directorio las
+    // tarjetas son series (abren el detalle con capítulos); en el resto son
+    // episodios reproducibles.
+    private fun openGridItem(episode: Episode) {
+        if (gridIsCatalog) {
+            val intent = Intent(this@SiteBrowserActivity, SeriesDetailActivity::class.java).apply {
+                putExtra("series_url", episode.url)
+                putExtra("series_title", episode.title)
+                putExtra("site_name", siteName)
+            }
+            startActivity(intent)
+        } else {
+            openEpisodeOrDetail(episode)
+        }
+    }
+
+    // Ficha JKAnime: un solo segmento (/slug/). Con número (/slug/123) es capítulo.
+    private fun isJkSeriesUrl(url: String): Boolean {
+        val path = try { java.net.URI(url).path?.trim('/') } catch (_: Exception) { null }
+            ?: return false
+        return path.isNotBlank() && !path.contains("/")
+    }
+
+    private fun openSection(section: com.karin.streamtv.model.MenuSection, title: String) {
+        // 1) URL directa conocida (no depende del menú cargado).
+        // 2) Sección del menú del sitio. 3) aviso.
+        val direct = com.karin.streamtv.util.SiteSections.directUrl(siteName, section)
+        val url = if (!direct.isNullOrBlank()) direct
+            else menuItems.firstOrNull { it.section == section }?.url
+        if (url.isNullOrBlank()) {
+            Toast.makeText(this, "Sección no encontrada en $siteName", Toast.LENGTH_SHORT).show()
+            return
+        }
+        currentSection = section
+        refreshFilterBar()
+        loadDirectoryContent(url)
+    }
+
+    // ¿El sitio ofrece esta sección? Url directa conocida que no sea la
+    // propia portada, o una entrada en el menú del sitio. Misma regla para
+    // Películas, Series, Anime y Doramas.
+    private fun supportsSection(section: com.karin.streamtv.model.MenuSection): Boolean {
+        return com.karin.streamtv.util.SiteSections.supported(
+            siteName,
+            section,
+            siteUrl,
+            menuItems.any { it.section == section }
+        )
+    }
+
+    // Catálogo/directorio clásico: entrada DIRECTORY del menú o URL conocida
+    // por sitio (defaultDirUrl). Es la vía de exploración de los sitios de
+    // anime/donghua/doramas, que no tienen sección de películas.
+    private fun openDirectory() {
+        currentSection = null
+        refreshFilterBar()
+        loadDirectoryContent(null)
+    }
+
+    private fun onMoviesButton() {
+        if (moviesButtonOpensCatalog) openDirectory()
+        else openSection(com.karin.streamtv.model.MenuSection.MOVIES, "Películas")
     }
 
     private fun updatePaginationBar() {
@@ -600,9 +759,49 @@ setEpisodesAdapter(episodes) { episode ->
         btnFilterClear.onActionKey { clearFilters() }
     }
 
+    // Géneros reales de PeliPops (/generos/<slug>), con su nombre visible.
+    private val pelipopsMovieGenres = listOf(
+        "Acción" to "accion",
+        "Animación" to "animacion",
+        "Aventura" to "aventura",
+        "Bélica" to "belica",
+        "Ciencia Ficción" to "ciencia-ficcion",
+        "Comedia" to "comedia",
+        "Crimen" to "crimen",
+        "Documental" to "documental",
+        "Doramas" to "dorama",
+        "Drama" to "drama",
+        "Familia" to "familia",
+        "Fantasía" to "fantasia",
+        "Guerra" to "guerra",
+        "Historia" to "historia",
+        "Misterio" to "misterio",
+        "Romance" to "romance",
+        "Suspense" to "suspense",
+        "Terror" to "terror",
+        "Western" to "western"
+    )
+
+    private fun isPelipopsHome(): Boolean =
+        siteName.equals("PeliPops", ignoreCase = true) && currentSection == null
+
     private fun buildFilterDims(): List<FilterDim> {
-        return if (siteName.equals("JKAnime", ignoreCase = true)) {
-            listOf(
+        // LaCartoons: una sola dimensión real, las categorías del sitio (/?Categoria_id=<id>).
+        if (siteName.equals("LaCartoons", ignoreCase = true)) {
+            return listOf(
+                FilterDim("Categoria_id", "Categoría", lcCategorySlugs.map { it.first }, slugMap = lcCategorySlugs.toMap())
+            )
+        }
+        // PeliPops: Género + Año solo en la portada; en secciones
+        // (Películas, Series, Anime, Doramas) no hay barra de filtros.
+        if (siteName.equals("PeliPops", ignoreCase = true)) {
+            if (!isPelipopsHome()) return emptyList()
+            return listOf(
+                FilterDim("genero", "Género", pelipopsMovieGenres.map { it.first }, slugMap = pelipopsMovieGenres.toMap()),
+                FilterDim("fecha", "Año", (2026 downTo 2007).map { it.toString() })
+            )
+        }
+        return if (siteName.equals("JKAnime", ignoreCase = true)) {            listOf(
                 FilterDim("filtro", "Ordenar", jkOrderSlugs.map { it.first }, slugMap = jkOrderSlugs.toMap()),
                 FilterDim("fecha", "Año", (2026 downTo 1981).map { it.toString() }),
                 FilterDim("genero", "Género", jkGenreSlugs.map { it.first }, slugMap = jkGenreSlugs.toMap()),
@@ -631,6 +830,47 @@ setEpisodesAdapter(episodes) { episode ->
 
     private fun renderFilterChips() {
         filterChipsContainer.removeAllViews()
+        // LaCartoons: las categorías van directas en la barra (sin desplegable).
+        if (siteName.equals("LaCartoons", ignoreCase = true)) {
+            val dim = activeDims.firstOrNull { it.key == "Categoria_id" }
+            if (dim != null) {
+                val current = selectedFilters[dim.key]
+                for (option in dim.options) {
+                    val isSel = current == option
+                    val chip = TextView(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            dp(34)
+                        ).apply { marginEnd = dp(4) }
+                        text = if (isSel) "✓ $option" else option
+                        setPadding(dp(10), 0, dp(10), 0)
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        setTextColor(if (isSel) ContextCompat.getColor(this@SiteBrowserActivity, R.color.accent) else ContextCompat.getColor(this@SiteBrowserActivity, R.color.text_primary))
+                        textSize = 13f
+                        setBackgroundResource(R.drawable.bg_spinner)
+                        isFocusable = true
+                        setOnClickListener {
+                            if (selectedFilters[dim.key] == option) selectedFilters.remove(dim.key)
+                            else selectedFilters[dim.key] = option
+                            renderFilterChips()
+                            applyFilters()
+                        }
+                        setOnKeyListener { _, keyCode, event ->
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                when (keyCode) {
+                                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { performClick(); true }
+                                    KeyEvent.KEYCODE_DPAD_DOWN -> { rvEpisodes.requestFocus(); true }
+                                    else -> false
+                                }
+                            } else false
+                        }
+                    }
+                    filterChipsContainer.addView(chip)
+                }
+                btnFilterClear.visibility = if (selectedFilters.isNotEmpty()) View.VISIBLE else View.GONE
+                return
+            }
+        }
         for (dim in activeDims) {
             val selected = selectedFilters[dim.key]
             val chip = TextView(this).apply {
@@ -661,6 +901,14 @@ setEpisodesAdapter(episodes) { episode ->
         btnFilterClear.visibility = if (selectedFilters.isNotEmpty()) View.VISIBLE else View.GONE
     }
 
+    // Reconstruye la barra según la sección actual y limpia selecciones
+    // que ya no aplican (ej. filtros de otra sección).
+    private fun refreshFilterBar() {
+        selectedFilters.clear()
+        activeDims = buildFilterDims()
+        renderFilterChips()
+    }
+
     private fun showFilterPicker(dim: FilterDim) {
         val options = dim.options
         val current = selectedFilters[dim.key]
@@ -669,6 +917,10 @@ setEpisodesAdapter(episodes) { episode ->
             .setTitle(dim.label)
             .setSingleChoiceItems(options.toTypedArray(), checked) { d, which ->
                 selectedFilters[dim.key] = options[which]
+                // PeliPops/portada: género y año se excluyen (el sitio no
+                // tiene URL que los combine: /generos/<slug> o /year/<aaaa>).
+                if (isPelipopsHome() && dim.key == "genero") selectedFilters.remove("fecha")
+                if (isPelipopsHome() && dim.key == "fecha") selectedFilters.remove("genero")
                 renderFilterChips()
                 d.dismiss()
                 applyFilters()
@@ -692,8 +944,34 @@ setEpisodesAdapter(episodes) { episode ->
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
     // endregion
 
+    // Filtros de la portada de PeliPops: género y año son excluyentes porque
+    // el sitio no tiene URL que los combine. Carga la página correspondiente
+    // con la misma tubería del directorio (cuadrícula + paginación) y oculta
+    // la barra: las secciones no llevan filtros.
+    private fun applyPelipopsHomeFilters() {
+        val genreLabel = selectedFilters["genero"]
+        val genreSlug = genreLabel?.let { pelipopsMovieGenres.toMap()[it] }.orEmpty()
+        val year = selectedFilters["fecha"].orEmpty()
+        val home = com.karin.streamtv.util.SiteSections.directUrl(siteName, com.karin.streamtv.model.MenuSection.MOVIES)
+            ?.let { it.substringBefore("/peliculas") }
+            .orEmpty().ifBlank { siteUrl }.trimEnd('/')
+        val (url, title) = when {
+            genreSlug.isNotBlank() -> "$home/generos/$genreSlug" to "$siteName · $genreLabel"
+            year.isNotBlank() -> "$home/year/$year" to "$siteName · $year"
+            else -> "$home/peliculas" to "$siteName - Películas"
+        }
+        loadDirectoryContent(url)
+        filterBar.visibility = View.GONE
+    }
+
     /** Aplica los filtros dinámicos actuales y ejecuta la búsqueda en el directorio. */
     private fun applyFilters() {
+        // PeliPops/portada: el sitio filtra por páginas (/generos/<slug>,
+        // /year/<aaaa>), no por query params.
+        if (isPelipopsHome()) {
+            applyPelipopsHomeFilters()
+            return
+        }
         val params = activeDims.mapNotNull { dim ->
             val label = selectedFilters[dim.key] ?: return@mapNotNull null
             val value = dim.slugMap[label] ?: dim.valueFromLabel(label)
@@ -731,8 +1009,7 @@ setEpisodesAdapter(episodes) { episode ->
 
                 currentEpisodes = ArrayList(seriesList)
                 currentPageUrl = url
-                tvTitle.text = "$siteName - Filtros"
-                tvTitle.visibility = View.VISIBLE
+                gridIsCatalog = true
 
                 setEpisodesAdapter(seriesList) { episode ->
                     val intent = Intent(this@SiteBrowserActivity, SeriesDetailActivity::class.java).apply {
@@ -808,10 +1085,19 @@ setEpisodesAdapter(episodes) { episode ->
         "Donghua" to "donghua", "Latino" to "latino"
     )
 
-    private fun loadDirectoryContent() {
+    // Categorías reales de LaCartoons (/?Categoria_id=<id>).
+    private val lcCategorySlugs = listOf(
+        "Nickelodeon" to "1", "Cartoon Network" to "2", "Fox Kids" to "3",
+        "Hanna Barbera" to "4", "Disney" to "5", "Warner Channel" to "6",
+        "Marvel" to "7", "Otros" to "8"
+    )
+
+    private fun loadDirectoryContent(dirUrl: String? = null) {
         showLoading("Cargando directorio...")
         hideSearchBar()
-        filterBar.visibility = View.VISIBLE
+        // PeliPops: las secciones no llevan barra de filtros (solo la portada).
+        filterBar.visibility =
+            if (siteName.equals("PeliPops", ignoreCase = true)) View.GONE else View.VISIBLE
         showingSearchResults = false
         currentPageNum = 1
         tvEmpty.visibility = android.view.View.GONE
@@ -819,7 +1105,7 @@ setEpisodesAdapter(episodes) { episode ->
         prevPageUrl = null
         updatePaginationBar()
 
-        val dirUrl = if (siteName.equals("MundoDonghua", ignoreCase = true)) {
+        val url = dirUrl ?: if (siteName.equals("MundoDonghua", ignoreCase = true)) {
             defaultDirUrl()
         } else {
             menuItems.firstOrNull { it.section == com.karin.streamtv.model.MenuSection.DIRECTORY }?.url
@@ -829,7 +1115,7 @@ setEpisodesAdapter(episodes) { episode ->
         lifecycleScope.launch {
             try {
                 val (seriesList, doc) = withContext(Dispatchers.IO) {
-                    val doc = ScrapingEngine.fetch(dirUrl, siteName, "${siteName}::directorio")
+                    val doc = ScrapingEngine.fetch(url, siteName, "${siteName}::dir::${url.hashCode()}")
                     val eps = if (doc != null) {
                         DynamicParser.parseDynamic(doc, siteName, 1)
                     } else emptyList()
@@ -845,9 +1131,8 @@ setEpisodesAdapter(episodes) { episode ->
                 }
 
                 currentEpisodes = ArrayList(seriesList)
-                currentPageUrl = dirUrl
-                tvTitle.text = "$siteName - Directorio"
-                tvTitle.visibility = android.view.View.VISIBLE
+                currentPageUrl = url
+                gridIsCatalog = true
 
                 setEpisodesAdapter(seriesList) { episode ->
                     val intent = Intent(this@SiteBrowserActivity, SeriesDetailActivity::class.java).apply {
@@ -861,8 +1146,10 @@ setEpisodesAdapter(episodes) { episode ->
                 rvEpisodes.scrollToPosition(0)
 
                 if (doc != null) {
-                    nextPageUrl = DynamicParser.findNextPageUrl(doc, dirUrl)
-                    prevPageUrl = null
+                    nextPageUrl = DynamicParser.findNextPageUrl(doc, url)
+                    // En la primera página el buscador devuelve null y el
+                    // botón Atrás queda oculto; en las siguientes aparece.
+                    prevPageUrl = DynamicParser.findPrevPageUrl(doc, url)
                     currentPageNum = 1
                     updatePaginationBar()
                 }
@@ -879,7 +1166,7 @@ setEpisodesAdapter(episodes) { episode ->
         "latanime" -> "https://latanime.org/animes"
         "jkanime" -> "https://jkanime.net/directorio"
         "mundodonghua" -> "https://www.mundodonghua.com/lista-donghuas"
-        "lacartoons" -> "https://lacartoons.com/lista/"
+        "lacartoons" -> "https://www.lacartoons.com/"
         "doramasyt" -> "https://www.doramasyt.com"
         else -> "$siteUrl/animes"
     }
@@ -893,6 +1180,13 @@ setEpisodesAdapter(episodes) { episode ->
             btnVoice.visibility = android.view.View.VISIBLE
             etSearch.requestFocus()
         }
+    }
+
+    private fun goToMainPage() {
+        val intent = Intent(this, MainActivity::class.java)
+        intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TOP
+        startActivity(intent)
+        finish()
     }
 
     private var currentEpisodeUrl: String = ""

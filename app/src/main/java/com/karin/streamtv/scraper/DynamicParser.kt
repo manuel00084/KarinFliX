@@ -17,6 +17,7 @@ object DynamicParser {
     // Common card container patterns seen across WordPress/streaming sites.
     // Ordered by specificity — first match that yields enough valid cards wins.
     private val cardSelectors = listOf(
+        "div.anime__item:has(a[href])",       // JKAnime búsqueda/directorio (portada vía CSS, sin <img>)
         "div.series",                          // latanime /animes
         "div[class*='post-card']",             // WordPress card theme
         "div[class*='card']:has(img)",         // Bootstrap/various cards
@@ -106,6 +107,10 @@ object DynamicParser {
 
     private fun isValidCard(card: Element): Boolean {
         if (card.select("a[href]").isEmpty()) return false
+        // Portada vía CSS (JKAnime .set-bg/data-setbg, sin <img>): válida.
+        if (card.select("img").isEmpty()) {
+            return card.selectFirst("[data-setbg], [style*=background-image], .set-bg") != null
+        }
         // Skip tiny images (icons, avatars)
         val imgs = card.select("img")
         if (imgs.isEmpty()) return false
@@ -380,6 +385,26 @@ object DynamicParser {
             Log.i(TAG, "Embedded JSON parsing: ${jsonEpisodes.size} episodes ($siteName)")
             return jsonEpisodes
         }
+        // ToroFilm (PeliPops y clones): tarjetas con enlace overlay vacío
+        // (a.lnk-blk sin <img> dentro) que el buscador genérico no ve porque
+        // ningún <a> contiene la imagen. Home, secciones y búsqueda comparten
+        // el mismo markup.
+        if (doc.selectFirst("article.post a.lnk-blk[href]") != null) {
+            val toro = parseTorofilmCards(doc, siteName)
+            if (toro.isNotEmpty()) {
+                Log.i(TAG, "ToroFilm parsing: ${toro.size} episodes ($siteName)")
+                return toro
+            }
+        }
+        // LaCartoons: tarjetas `div.conjuntos-series > a` (/serie/N); el
+        // genérico no ve el título en p.nombre-serie.
+        if (siteName.equals("LaCartoons", ignoreCase = true)) {
+            val lc = LaCartoonsScraper.parseDirectory(doc)
+            if (lc.isNotEmpty()) {
+                Log.i(TAG, "LaCartoons parsing: ${lc.size} series")
+                return lc
+            }
+        }
         val cards = findCards(doc, minCards)
         val episodes = cards.mapNotNull { card ->
             try {
@@ -425,6 +450,40 @@ object DynamicParser {
         return episodes
     }
 
+    /**
+     * Tarjetas ToroFilm: título en .entry-title, URL en el overlay a.lnk-blk,
+     * miniatura en .post-thumbnail img y T/E en .vote ("T1 E1") o en la URL
+     * (/temporada/S/capitulo/E).
+     */
+    private fun parseTorofilmCards(doc: Document, siteName: String): List<Episode> {
+        return doc.select("article.post").mapNotNull { card ->
+            try {
+                val url = card.selectFirst("a.lnk-blk[href]")
+                    ?.attr("abs:href")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val titleEl = card.selectFirst(".entry-title") ?: return@mapNotNull null
+                val clean = HtmlClean.clean(titleEl.text().trim())
+                if (clean.isBlank()) return@mapNotNull null
+                val img = card.selectFirst(".post-thumbnail img")
+                val thumb = img?.let {
+                    HtmlClean.resolveUrl(doc.baseUri(), it.attr("abs:src").ifBlank { it.attr("data-src") })
+                }.orEmpty()
+                val vote = card.selectFirst(".vote")?.text().orEmpty()
+                var epNum = Regex("""T\s*\d+\s*E\s*(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(vote)?.groupValues?.get(1)
+                    ?: Regex("""/capitulo/(\d+)""").find(url)?.groupValues?.get(1).orEmpty()
+                var title = clean
+                Regex("""/temporada/(\d+)/capitulo/(\d+)""").find(url)?.let { m ->
+                    epNum = m.groupValues[2]
+                    if (!Regex("""T\d+\s*E\d+""", RegexOption.IGNORE_CASE).containsMatchIn(title)) {
+                        title = "$title T${m.groupValues[1]} E${m.groupValues[2]}"
+                    }
+                }
+                val date = card.selectFirst(".year")?.text()?.trim().orEmpty()
+                Episode(title, url, thumb, date, siteName, epNum)
+            } catch (_: Exception) { null }
+        }
+    }
+
     /** Extracts the balanced JSON object assigned to `var <name> = { ... }`. */
     private fun extractJsonObjectVar(html: String, varName: String): String? {
         val marker = "var $varName = {"
@@ -467,12 +526,12 @@ object DynamicParser {
 
         val currentUri = try { java.net.URI(currentUrl) } catch (_: Exception) { return null }
         val currentQuery = currentUri.rawQuery ?: ""
-        val currentPage = Regex("""(?:^|&)p=(\d+)""").find(currentQuery)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        val currentPage = Regex("""(?:^|&)(?:p|page)=(\d+)""").find(currentQuery)?.groupValues?.get(1)?.toIntOrNull() ?: 1
         val nextNum = currentPage + 1
 
         val nextLinkByPage = doc.select("a[href]").firstOrNull { a ->
             val href = a.attr("abs:href")
-            val pageMatch = Regex("""[?&]p=(\d+)""").find(href)
+            val pageMatch = Regex("""[?&](?:p|page)=(\d+)""").find(href)
             val page = pageMatch?.groupValues?.get(1)?.toIntOrNull()
             page == nextNum && href != currentUrl
         }
@@ -510,13 +569,13 @@ object DynamicParser {
 
         val currentUri = try { java.net.URI(currentUrl) } catch (_: Exception) { return null }
         val currentQuery = currentUri.rawQuery ?: ""
-        val currentPage = Regex("""(?:^|&)p=(\d+)""").find(currentQuery)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        val currentPage = Regex("""(?:^|&)(?:p|page)=(\d+)""").find(currentQuery)?.groupValues?.get(1)?.toIntOrNull() ?: 1
         if (currentPage <= 1) return null
         val prevNum = currentPage - 1
 
         val prevLinkByPage = doc.select("a[href]").firstOrNull { a ->
             val href = a.attr("abs:href")
-            val pageMatch = Regex("""[?&]p=(\d+)""").find(href)
+            val pageMatch = Regex("""[?&](?:p|page)=(\d+)""").find(href)
             val page = pageMatch?.groupValues?.get(1)?.toIntOrNull()
             page == prevNum && href != currentUrl
         }
@@ -575,6 +634,19 @@ object DynamicParser {
                     coverUrl = findSeriesCover(doc),
                     description = findDescription(doc),
                     episodes = jkEpisodes
+                )
+            }
+        }
+        // LaCartoons: la ficha lista los capítulos en servidor
+        // (`ul.listas-de-episondion a[href="/serie/capitulo/M?t=S"]`).
+        if (siteName.equals("LaCartoons", ignoreCase = true)) {
+            val lcEpisodes = LaCartoonsScraper.fetchSeriesEpisodes(doc, baseUrl, siteName)
+            if (lcEpisodes.isNotEmpty()) {
+                return SeriesPage(
+                    title = LaCartoonsScraper.fetchSeriesTitle(doc).ifBlank { findSeriesTitle(doc) },
+                    coverUrl = findSeriesCover(doc),
+                    description = LaCartoonsScraper.fetchSeriesDescription(doc).ifBlank { findDescription(doc) },
+                    episodes = lcEpisodes
                 )
             }
         }

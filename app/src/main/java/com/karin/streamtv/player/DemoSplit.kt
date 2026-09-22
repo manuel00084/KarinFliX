@@ -1,4 +1,4 @@
-package com.karin.streamtv.player
+﻿package com.karin.streamtv.player
 
 import android.content.Context
 import android.opengl.GLES20
@@ -14,12 +14,12 @@ import androidx.media3.effect.GlShaderProgram
  * Demo split-screen sin estado entre cuadros (a prueba de desfase).
  *
  * Cada efecto de la cadena conserva la mitad izquierda intacta cuando el
- * demo está prendido (uniform uDemoSplit): la izquierda siempre es el
+ * demo estÃ¡ prendido (uniform uDemoSplit): la izquierda siempre es el
  * original del MISMO instante que la derecha procesada, porque ambas
  * salen de la misma pasada de dibujado. No hay copias guardadas ni
- * historial, así que la cola interna de Media3 no puede desincronizarlas.
+ * historial, asÃ­ que la cola interna de Media3 no puede desincronizarlas.
  *
- * Este último programa solo pinta la línea blanca divisoria.
+ * Este Ãºltimo programa solo pinta la lÃ­nea blanca divisoria.
  * GLES2 compatible.
  */
 class DemoLineEffect : GlEffect {
@@ -51,6 +51,14 @@ class DemoLineProgram(
         glProgram.setFloatsUniform("uTexTransformationMatrix", GlUtil.create4x4IdentityMatrix())
     }
 
+    override fun release() {
+        try {
+            glProgram.delete()
+        } catch (_: Exception) {
+        }
+        super.release()
+    }
+
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         return Size(inputWidth, inputHeight)
     }
@@ -67,30 +75,7 @@ class DemoLineProgram(
     }
 
     companion object {
-        private const val VERTEX_SHADER = """
-            attribute vec4 aFramePosition;
-            uniform mat4 uTransformationMatrix;
-            uniform mat4 uTexTransformationMatrix;
-            varying vec2 vTexCoord;
-            void main() {
-                gl_Position = uTransformationMatrix * aFramePosition;
-                vec4 tp = vec4(aFramePosition.x * 0.5 + 0.5, aFramePosition.y * 0.5 + 0.5, 0.0, 1.0);
-                vTexCoord = (uTexTransformationMatrix * tp).xy;
-            }
-        """
-        private const val FRAGMENT_SHADER = """
-            #ifdef GL_ES
-            precision mediump float;
-            #endif
-            varying vec2 vTexCoord;
-            uniform sampler2D uTexSampler;
-            void main() {
-                vec3 rgb = texture2D(uTexSampler, vTexCoord).rgb;
-                if (abs(vTexCoord.x - 0.5) < 0.001) {
-                    rgb = vec3(1.0);
-                }
-                gl_FragColor = vec4(rgb, 1.0);
-            }
-        """
+        private val VERTEX_SHADER = ShaderBlobs.demoSplitVertex
+        private val FRAGMENT_SHADER = ShaderBlobs.demoSplitFragment
     }
 }

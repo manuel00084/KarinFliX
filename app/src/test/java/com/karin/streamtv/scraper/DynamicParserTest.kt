@@ -399,4 +399,64 @@ class DynamicParserTest {
         val nextUrl = DynamicParser.findNextPageUrl(document, "https://latanime.org/animes")
         assertNull(nextUrl)
     }
+
+    // ── Paginación ToroFilm (?page=N + Siguiente/Anterior) ──
+
+    private fun toroNav() = """
+        <nav class="navigation pagination"><span class="current">2</span>
+        <a href="/series?page=1">1</a><a href="/series?page=2">2</a>
+        <a href="/series?page=3">3</a><a href="/series?page=142">142</a>
+        <a href="/series?page=1" class="prev">Anterior</a>
+        <a href="/series?page=3" class="next">Siguiente</a></nav>""".trimIndent()
+
+    @Test
+    fun `torofilm next and prev roundtrip`() {
+        val document = Jsoup.parse(toroNav(), "https://pelispop.mov")
+        assertEquals(
+            "https://pelispop.mov/series?page=3",
+            DynamicParser.findNextPageUrl(document, "https://pelispop.mov/series?page=2")
+        )
+        assertEquals(
+            "https://pelispop.mov/series?page=1",
+            DynamicParser.findPrevPageUrl(document, "https://pelispop.mov/series?page=2")
+        )
+    }
+
+    @Test
+    fun `torofilm first page has next but no prev`() {
+        val html = """
+        <nav class="navigation pagination"><span class="current">1</span>
+        <a href="/series?page=2">2</a>
+        <a href="/series?page=2" class="next">Siguiente</a></nav>""".trimIndent()
+        val document = Jsoup.parse(html, "https://pelispop.mov")
+        assertEquals(
+            "https://pelispop.mov/series?page=2",
+            DynamicParser.findNextPageUrl(document, "https://pelispop.mov/series")
+        )
+        assertNull(DynamicParser.findPrevPageUrl(document, "https://pelispop.mov/series"))
+    }
+
+    // ── JKAnime búsqueda (div.anime__item + portada CSS, sin <img>) ──
+
+    @Test
+    fun `parseDynamic handles jkanime anime__item search cards`() {
+        val html = """
+        <div class="anime__item">
+            <a href="https://jkanime.net/boruto-naruto-next-generations/"><div class="g-0 anime__item__pic set-bg" data-setbg="https://cdn.jkdesa.com/assets/images/animes/image/boruto.jpg" style="background-image: url(&quot;https://cdn.jkdesa.com/assets/images/animes/image/boruto.jpg&quot;);"></div></a>
+            <div class="anime__item__text"><ul><li>Concluido</li><li class="anime">Serie</li></ul>
+            <h5><a href="https://jkanime.net/boruto-naruto-next-generations/">Boruto: Naruto Next Generations</a></h5></div>
+        </div>
+        <div class="anime__item">
+            <a href="https://jkanime.net/naruto-shippuden/"><div class="g-0 anime__item__pic set-bg" data-setbg="https://cdn.jkdesa.com/assets/images/animes/image/naruto.jpg" style="background-image: url(&quot;https://cdn.jkdesa.com/assets/images/animes/image/naruto.jpg&quot;);"></div></a>
+            <div class="anime__item__text"><ul><li>Concluido</li><li class="anime">Serie</li></ul>
+            <h5><a href="https://jkanime.net/naruto-shippuden/">Naruto Shippuden</a></h5></div>
+        </div>""".trimIndent()
+        val document = Jsoup.parse(html, "https://jkanime.net")
+        val items = DynamicParser.parseDynamic(document, "JKAnime", minCards = 1)
+        assertEquals(2, items.size)
+        assertEquals("Boruto: Naruto Next Generations", items[0].title)
+        assertEquals("https://jkanime.net/boruto-naruto-next-generations/", items[0].url)
+        assertEquals("https://cdn.jkdesa.com/assets/images/animes/image/boruto.jpg", items[0].thumbnailUrl)
+        assertEquals("Naruto Shippuden", items[1].title)
+    }
 }

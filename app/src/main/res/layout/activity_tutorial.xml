@@ -201,7 +201,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="• Escala (el que agranda el video): este NO cambia la resolución que se descarga, solo estira la imagen a pantalla completa y la hace más nítida. Es distinto a Calidad: aquí no cambias la resolución real.\n  ➜ Apagado: deja que el televisor lo estire (recomendado en cajas débiles).\n  ➜ Bilineal/Bicúbico: estirados suaves y ligeros.\n  ➜ Anime4K DoG: hace el anime muy nítido, pero es pesado.\n  ➜ FSR: equilibrado, bueno para equipos medios."
+                    android:text="• Escala (el que agranda el video): este NO cambia la resolución que se descarga, solo estira la imagen a pantalla completa y la hace más nítida. Es distinto a Calidad: aquí no cambias la resolución real.\n  ➜ Apagado: deja que el televisor lo estire (recomendado en cajas débiles).\n  ➜ FSR: reescala con calidad gastando poco (default, el más equilibrado).\n  ➜ Anime4K DoG: hace el anime muy nítido, pero es pesado."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -228,7 +228,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="• SONIDO MEJORADO (Perfil de audio): cambia el sonido para que se escuche como prefieres. Se aplica al parlante (TV, bocina, auriculares) y funciona automáticamente según el equipo:\n  ➜ Auto: la app detecta tu bocina/TV y lo ajusta solo (recomendado).\n  ➜ Anime, Cine, Bass Boost, 3D Surround, Diálogos/Noticias, Música y True MaxBass: elige el estilo.\n  ➜ En avanzado también puedes subir un archivo de sonido (IR) para simular otra bocina."
+                    android:text="• SONIDO MEJORADO (Volumen y sonido): realza los graves, da claridad a la voz y añade potencia al volumen con un ecualizador integrado (5 bandas en TV/bocina, 10 en audífonos). Se aplica al parlante (TV, bocina, auriculares) y se adapta automáticamente según el equipo."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"

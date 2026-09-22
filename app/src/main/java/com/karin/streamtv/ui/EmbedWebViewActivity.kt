@@ -1683,10 +1683,11 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
             return
         }
         presented = true
-        if (unique.size == 1) {
+        if (unique.size == 1 && com.karin.streamtv.util.AppPreferences.isPlayNowEnabled()) {
             Log.i(TAG, "Auto-launching single extracted link")
             mainHandler.post { openExoFromResolved(unique[0]) }
         } else {
+            // "Auto Play" desactivado o varios enlaces: pedir confirmación.
             mainHandler.post { showExtractedDialog(unique) }
         }
     }

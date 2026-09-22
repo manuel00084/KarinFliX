@@ -10,6 +10,7 @@ import androidx.fragment.app.FragmentActivity
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.karin.streamtv.R
 import androidx.appcompat.app.AlertDialog
+import com.karin.streamtv.player.dsp.SpeakerCleaner
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.AutoPlayManager
 import com.karin.streamtv.util.DeviceUtils
@@ -22,6 +23,7 @@ class SettingsActivity : FragmentActivity() {
     private lateinit var switchAutoplay: SwitchMaterial
     private lateinit var switchPlayNow: SwitchMaterial
     private lateinit var switchVideoPlayer: SwitchMaterial
+    private lateinit var switchLowEnd: SwitchMaterial
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,11 +33,13 @@ class SettingsActivity : FragmentActivity() {
         switchAutoplay = findViewById(R.id.switch_autoplay)
         switchPlayNow = findViewById(R.id.switch_playnow)
         switchVideoPlayer = findViewById(R.id.switch_video_player)
+        switchLowEnd = findViewById(R.id.switch_low_end)
 
         switchServerFallback.isChecked = AppPreferences.isServerFallbackEnabled()
         switchAutoplay.isChecked = AppPreferences.isAutoPlayEnabled()
         switchPlayNow.isChecked = AppPreferences.isPlayNowEnabled()
         switchVideoPlayer.isChecked = AppPreferences.isVideoPlayerModeEnabled()
+        switchLowEnd.isChecked = AppPreferences.isLowEndMode()
 
         val switchListener = { switch: SwitchMaterial, label: String ->
             switch.contentDescription = "$label: ${if (switch.isChecked) "activado" else "desactivado"}"
@@ -46,6 +50,7 @@ class SettingsActivity : FragmentActivity() {
         switchAutoplay.setOnCheckedChangeListener { _, _ -> switchListener(switchAutoplay, "Continuar Episodio") }
         switchPlayNow.setOnCheckedChangeListener { _, _ -> switchListener(switchPlayNow, "Auto Play") }
         switchVideoPlayer.setOnCheckedChangeListener { _, _ -> switchListener(switchVideoPlayer, "Reproductor de video del sistema") }
+        switchLowEnd.setOnCheckedChangeListener { _, _ -> switchListener(switchLowEnd, "Modo de bajo rendimiento") }
 
         val btnSave = findViewById<TextView>(R.id.btn_save)
         btnSave.setOnClickListener { saveSettings() }
@@ -56,6 +61,7 @@ class SettingsActivity : FragmentActivity() {
         btnBack.onActionKey { btnBack.performClick() }
 
         setupCodecRow()
+        setupSpeakerCleaner()
 
         if (DeviceUtils.isTvDevice(this)) {
             btnBack.post { btnBack.requestFocus() }
@@ -120,12 +126,78 @@ class SettingsActivity : FragmentActivity() {
         rowCodec.onActionKey { clickListener() }
     }
 
+    private fun setupSpeakerCleaner() {
+        val btnClean = findViewById<TextView>(R.id.btn_speaker_clean)
+        val txtStatus = findViewById<TextView>(R.id.txt_speaker_clean_status)
+
+        fun updateUi() {
+            val isActive = SpeakerCleaner.isRunning
+            btnClean.text = if (isActive) "Detener" else "Iniciar"
+            txtStatus.text = if (isActive) {
+                "Limpiando... mantén el dispositivo en superficie estable"
+            } else {
+                "Reproduce un barrido de frecuencias para expulsar polvo y suciedad del parlante"
+            }
+        }
+
+        updateUi()
+
+        btnClean.setOnClickListener {
+            if (SpeakerCleaner.isRunning) {
+                SpeakerCleaner.stop()
+                Toast.makeText(this, "Limpieza detenida", Toast.LENGTH_SHORT).show()
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Limpiar bocina")
+                    .setMessage(
+                        "Se reproducirá un barrido de frecuencias (50 Hz - 18 kHz) durante 15 segundos.\n\n" +
+                        "Coloca el dispositivo sobre una superficie estable y desactiva otros sonidos.\n\n" +
+                        "¿Iniciar limpieza?"
+                    )
+                    .setPositiveButton("Iniciar") { _, _ ->
+                        SpeakerCleaner.start(
+                            durationSeconds = 15,
+                            onProgress = { progress ->
+                                runOnUiThread {
+                                    txtStatus.text = "Limpiando... $progress%"
+                                }
+                            },
+                            onFinished = {
+                                runOnUiThread {
+                                    updateUi()
+                                    Toast.makeText(
+                                        this@SettingsActivity,
+                                        "Limpieza completada",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        )
+                        updateUi()
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+        }
+        btnClean.onActionKey { btnClean.performClick() }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (SpeakerCleaner.isRunning) {
+            SpeakerCleaner.stop()
+        }
+    }
+
     private fun saveSettings() {
         AppPreferences.setServerFallbackEnabled(switchServerFallback.isChecked)
         AppPreferences.setAutoPlayEnabled(switchAutoplay.isChecked)
         AppPreferences.setPlayNowEnabled(switchPlayNow.isChecked)
         AppPreferences.setVideoPlayerModeEnabled(switchVideoPlayer.isChecked)
+        AppPreferences.setLowEndMode(switchLowEnd.isChecked)
         AutoPlayManager.setAutoPlayEnabled(switchAutoplay.isChecked)
+        // Registra o retira a KarinFLiX del selector de reproductores de Android.
+        com.karin.streamtv.player.SystemVideoPlayerRegistrar.apply(this)
 
         val btnSave = findViewById<TextView>(R.id.btn_save)
         btnSave.announceForAccessibility("Configuración guardada")

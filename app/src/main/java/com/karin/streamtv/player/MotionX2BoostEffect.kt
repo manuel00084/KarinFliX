@@ -1,4 +1,4 @@
-package com.karin.streamtv.player
+﻿package com.karin.streamtv.player
 
 import android.content.Context
 import android.opengl.GLES20
@@ -10,23 +10,26 @@ import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 
+private const val TAG = "MotionX2BoostEffect"
+
 /**
- * MotionX2 Boost: hace que el video SE VEA más fluido (efecto telenovela).
+ * MotionX2 Boost: hace que el video SE VEA mÃ¡s fluido (efecto telenovela).
  *
  * Guarda el cuadro anterior REAL en una textura propia (FBO) para mezclar.
- * Nota honesta: el shader es 1:1 (entra 1 cuadro, sale 1), así que no emite
- * cuadros extra; DOUBLING muestra cada cuadro nítido sin mezcla y la
- * repetición visible la hace el panel solo.
+ * Nota honesta: el shader es 1:1 (entra 1 cuadro, sale 1), asÃ­ que no emite
+ * cuadros extra; DOUBLING muestra cada cuadro nÃ­tido sin mezcla y la
+ * repeticiÃ³n visible la hace el panel solo.
  *
  * Modos:
- * - HYBRID (recomendado): cuadro nítido + micro-mezcla del anterior. Mejor balance.
- * - DOUBLING: Frame x2, cada cuadro tal cual, sin mezcla. Más ligero, menos suave.
+ * - HYBRID (recomendado): cuadro nÃ­tido + micro-mezcla del anterior. Mejor balance.
+ * - DOUBLING: Frame x2, cada cuadro tal cual, sin mezcla. MÃ¡s ligero, menos suave.
  * - BLEND: mezcla suave entre anterior y actual. Suave, pero puede verse fantasma.
  */
 enum class MotionX2Mode(val label: String) {
     HYBRID("HYBRID (Doubling + Micro-Blend)"),
     DOUBLING("DOUBLING (Frame x2)"),
     BLEND("BLEND (Suavizado)"),
+    INTERP("Interpolación 60 (SPIKE)"),
 }
 
 class MotionX2BoostEffect(
@@ -36,13 +39,21 @@ class MotionX2BoostEffect(
 ) : GlEffect {
 
     private var program: MotionX2BoostShaderProgram? = null
+    private var frcProgram: MotionX2FrcShaderProgram? = null
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return MotionX2BoostShaderProgram(context, useHdr, mode, strength, demoSplit)
-            .also { program = it }
+        android.util.Log.d(TAG, "toGlShaderProgram mode=$mode useHdr=$useHdr")
+        return if (mode == MotionX2Mode.INTERP) {
+            MotionX2FrcShaderProgram(useHdr, strength, demoSplit)
+                .also { frcProgram = it }
+        } else {
+            MotionX2BoostShaderProgram(context, useHdr, mode, strength, demoSplit)
+                .also { program = it }
+        }
     }
 
-    override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean = strength <= 0f
+    override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean =
+        strength <= 0f || mode == MotionX2Mode.DOUBLING
 
     fun updateMode(newMode: MotionX2Mode) {
         mode = newMode
@@ -107,17 +118,28 @@ class MotionX2BoostShaderProgram(
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
-            ensureHistory()
-            if (presentationTimeUs < lastPtsUs) {
+            // DOUBLING no usa el cuadro previo: evita alocar/copiar el
+            // historial (1 pase fullscreen + ~8MB VRAM a 1080p) y libera
+            // lo que hubiera de un modo anterior.
+            val needHistory = mode != MotionX2Mode.DOUBLING
+            if (!needHistory) {
+                if (histTexId != 0) deleteHistory()
+                hasHistory = false
+            } else {
+                ensureHistory()
+            }
+            if (needHistory && presentationTimeUs < lastPtsUs) {
                 // Seek hacia atrás: el historial ya no vale.
                 hasHistory = false
             }
             lastPtsUs = presentationTimeUs
 
             // 1. Pasada principal (al FBO de salida de Media3).
+            // Sin historial (DOUBLING/primer cuadro) se enlaza la propia
+            // entrada como previa para no muestrear la textura 0.
             glProgram.use()
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-            glProgram.setSamplerTexIdUniform("uPrevFrame", histTexId, 1)
+            glProgram.setSamplerTexIdUniform("uPrevFrame", if (histTexId != 0) histTexId else inputTexId, 1)
             glProgram.setFloatUniform("uStrength", strength)
             glProgram.setIntUniform("uMode", mode.ordinal)
             glProgram.setIntUniform("uFirstFrame", if (hasHistory) 0 else 1)
@@ -125,6 +147,8 @@ class MotionX2BoostShaderProgram(
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
             // 2. Guardar cuadro actual como historial (copia GLES2-safe).
+            // Solo cuando el modo lo necesita (BLEND/HYBRID).
+            if (!needHistory) return
             val prevFbo = IntArray(1)
             val prevVp = IntArray(4)
             GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, prevFbo, 0)
@@ -197,57 +221,10 @@ class MotionX2BoostShaderProgram(
     fun updateStrength(newStrength: Float) { strength = newStrength.coerceIn(0f, 1f) }
 
     companion object {
-        private const val VERTEX_SHADER = """
-            attribute vec4 aFramePosition;
-            uniform mat4 uTransformationMatrix;
-            uniform mat4 uTexTransformationMatrix;
-            varying vec2 vTexCoord;
-            void main() {
-                gl_Position = uTransformationMatrix * aFramePosition;
-                vec4 tp = vec4(aFramePosition.x * 0.5 + 0.5, aFramePosition.y * 0.5 + 0.5, 0.0, 1.0);
-                vTexCoord = (uTexTransformationMatrix * tp).xy;
-            }
-        """
+        private val VERTEX_SHADER = ShaderBlobs.motionx2Vertex
 
-        private const val COPY_FRAGMENT_SHADER = """
-            #ifdef GL_ES
-            precision mediump float;
-            #endif
-            varying vec2 vTexCoord;
-            uniform sampler2D uTexSampler;
-            void main() {
-                gl_FragColor = texture2D(uTexSampler, vTexCoord);
-            }
-        """
+        private val COPY_FRAGMENT_SHADER = ShaderBlobs.motionx2CopyFragment
 
-        private const val FRAGMENT_SHADER = """
-            #ifdef GL_ES
-            precision highp float;
-            #endif
-            varying vec2 vTexCoord;
-            uniform sampler2D uTexSampler;
-            uniform sampler2D uPrevFrame;
-            uniform float uStrength;
-            uniform int uMode; // 0=HYBRID, 1=DOUBLING, 2=BLEND
-            uniform int uFirstFrame;
-            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta
-            void main() {
-                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
-                if (uMode == 1 || uFirstFrame == 1 || uStrength <= 0.0) {
-                    // DOUBLING: cada cuadro nítido tal cual (la repetición la hace el panel).
-                    gl_FragColor = vec4(c, 1.0);
-                    return;
-                }
-                vec3 p = texture2D(uPrevFrame, vTexCoord).rgb;
-                float mot = length(c - p);
-                float m = smoothstep(0.03, 0.20, mot);
-                // HYBRID = micro-mezcla (25%), BLEND = mezcla completa (50%).
-                float micro = (uMode == 0) ? 0.25 : 0.5;
-                float k = clamp(m * uStrength, 0.0, 1.0) * micro;
-                vec3 demoRgb = mix(c, p, k);
-                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }
-                gl_FragColor = vec4(demoRgb, 1.0);
-            }
-        """
+        private val FRAGMENT_SHADER = ShaderBlobs.motionx2Fragment
     }
 }

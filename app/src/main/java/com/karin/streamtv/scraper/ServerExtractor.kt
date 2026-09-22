@@ -6,6 +6,7 @@ import com.karin.streamtv.model.VideoServer
 import com.karin.streamtv.model.VideoSource
 import com.karin.streamtv.model.EpisodeNavigation
 import com.karin.streamtv.util.HtmlClean
+import com.karin.streamtv.util.AppPreferences
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
@@ -158,17 +159,24 @@ object ServerExtractor {
 
                 seenNames.add(text)
                 val tabUrl = resolveTabUrl(tab, doc, fallbackUrl)
-                servers.add(VideoSource(
-                    name = displayName,
-                    serverUrl = tabUrl ?: "$fallbackUrl?server=$displayName",
-                    speedRating = 3
-                ))
+                val serverUrl = tabUrl ?: if (AppPreferences.isServerFallbackEnabled()) {
+                    "$fallbackUrl?server=$displayName"
+                } else {
+                    null
+                }
+                if (serverUrl != null) {
+                    servers.add(VideoSource(
+                        name = displayName,
+                        serverUrl = serverUrl,
+                        speedRating = 3
+                    ))
+                }
             }
             if (servers.isNotEmpty()) break
         }
 
         val tabContainers = doc.select("ul.nav, .nav-tabs, [class*='option'], [class*='server'], [id*='option'], [id*='server']")
-        if (servers.isEmpty() && tabContainers.isNotEmpty()) {
+        if (AppPreferences.isServerFallbackEnabled() && servers.isEmpty() && tabContainers.isNotEmpty()) {
             for (container in tabContainers) {
                 val links = container.select("a, button, span")
                 for (link in links) {
@@ -209,7 +217,11 @@ object ServerExtractor {
         val href = tab.attr("href")
         if (href.startsWith("#")) {
             val id = href.removePrefix("#")
-            val anchor = doc.getElementById(id) ?: doc.selectFirst("[id='$id'], [name='$id']")
+            // Sin selectores con el id interpolado: un id con comillas
+            // rompería el parser del selector (SelectorParseException).
+            // getElementById + búsqueda literal por atributo lo evitan.
+            val anchor = doc.getElementById(id)
+                ?: doc.getElementsByAttributeValue("name", id).firstOrNull()
             if (anchor != null) {
                 val iframe = anchor.selectFirst("iframe[src]")
                 if (iframe != null) {
@@ -222,7 +234,9 @@ object ServerExtractor {
         val dataTarget = tab.attr("data-target").ifBlank { tab.attr("data-tab") }
         if (dataTarget.startsWith("#")) {
             val id = dataTarget.removePrefix("#")
-            val target = doc.getElementById(id) ?: doc.selectFirst("[id='$id']")
+            // getElementById ya cubre [id=...]; el selectFirst con el id
+            // interpolado solo aportaba riesgo de SelectorParseException.
+            val target = doc.getElementById(id)
             if (target != null) {
                 val iframe = target.selectFirst("iframe[src]")
                 if (iframe != null) {
@@ -233,7 +247,7 @@ object ServerExtractor {
         }
 
         val optionVal = tab.attr("data-option").ifBlank { tab.attr("data-opcion") }
-        if (optionVal.isNotBlank()) {
+        if (optionVal.isNotBlank() && AppPreferences.isServerFallbackEnabled()) {
             return "$fallbackUrl?option=$optionVal"
         }
 
@@ -258,52 +272,59 @@ object ServerExtractor {
         var nextTitle: String? = null
         var listUrl: String? = null
 
-        val controls = doc.selectFirst("div.controles")
-        if (controls != null) {
-            val links = controls.select("a[href]")
-            for (link in links) {
-                val href = link.attr("abs:href").ifBlank { link.attr("href") }
-                val text = link.text().trim().lowercase()
-                if (href.isBlank()) continue
+        fun clickableHref(link: Element): String? {
+            val href = link.attr("abs:href").ifBlank { link.attr("href") }
+            val style = link.attr("style") + " " + (link.parent()?.attr("style") ?: "")
+            if (href.isBlank() || href == "#" || href.startsWith("javascript:")) return null
+            if (style.contains("pointer-events: none") || link.hasClass("nextcapd")) return null
+            return href
+        }
 
+        fun scanNavigation(links: List<Element>) {
+            for (link in links) {
+                val href = clickableHref(link) ?: continue
+                val text = link.text().trim().lowercase()
                 when {
-                    text.contains("anterior") || text.contains("previous") -> {
+                    prevUrl == null && (text.contains("anterior") || text.contains("previous")) -> {
                         prevUrl = href
                         prevTitle = link.text().trim()
                     }
-                    text.contains("siguiente") || text.contains("next") -> {
+                    nextUrl == null && (text.contains("siguiente") || text.contains("next")
+                        || text.contains("próximo") || text.contains("proximo")) -> {
                         nextUrl = href
                         nextTitle = link.text().trim()
                     }
-                    text.contains("lista") || text.contains("list") -> {
+                    listUrl == null && (text.contains("ver todos") || text.contains("todos los cap")
+                        || text.contains("lista de episodios") || text.contains("lista de cap")) -> {
                         listUrl = href
                     }
                 }
             }
         }
 
+        // 1) Contenedores de navegación conocidos (LatAnime/PeliPops: div.controles; JKAnime: anime_slug/videonav)
+        scanNavigation(doc.select("div.controles a[href], div.anime_slug a[href], a:has(div.videonav)").toList())
+
+        // 2) Fallback por patrón de URL (/ver/)
         if (prevUrl == null && nextUrl == null) {
-            val allLinks = doc.select("a[href*='/ver/']")
-            val currentPath = doc.location().substringAfterLast("/ver/", "")
-            for (link in allLinks) {
-                val href = link.attr("abs:href").ifBlank { continue }
-                val linkPath = href.substringAfterLast("/ver/", "")
-                if (linkPath == currentPath || linkPath.isBlank()) continue
-                val text = link.text().trim().lowercase()
-                if (text.contains("anterior") || text.contains("previous")) {
-                    prevUrl = href
-                    prevTitle = link.text().trim()
-                } else if (text.contains("siguiente") || text.contains("next")) {
-                    nextUrl = href
-                    nextTitle = link.text().trim()
-                }
-            }
+            scanNavigation(doc.select("a[href*='/ver/']").toList())
         }
 
+        // 3) Fallback global por texto de enlace
+        if (prevUrl == null || nextUrl == null) {
+            scanNavigation(doc.select("a[href]").toList())
+        }
+
+        // 4) listUrl: patrón /anime/ o directorio del slug
         if (listUrl == null) {
-            val listLink = doc.selectFirst("a[href*='/anime/']")
+            val listLink = doc.selectFirst("a[href*='/anime/'], a[href*='/series/'], a[href*='/serie/']")
             if (listLink != null) {
                 listUrl = listLink.attr("abs:href").ifBlank { listLink.attr("href") }
+            } else {
+                val directoryLink = doc.selectFirst("div.anime_slug a[href], div.controles a[href], a:has(div.videonav)")
+                if (directoryLink != null) {
+                    listUrl = directoryLink.attr("abs:href").ifBlank { directoryLink.attr("href") }
+                }
             }
         }
 

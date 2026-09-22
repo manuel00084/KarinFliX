@@ -3,6 +3,7 @@ package com.karin.streamtv.scraper
 import android.util.Log
 import com.karin.streamtv.model.Episode
 import com.karin.streamtv.model.VideoSource
+import com.karin.streamtv.util.HtmlClean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.nodes.Document
@@ -15,7 +16,7 @@ object LaCartoonsScraper : GenericScraper() {
         "${baseUrl}/?Titulo=${java.net.URLEncoder.encode(query, "UTF-8")}"
 
     override suspend fun getLatestEpisodes(): List<Episode> {
-        val doc = fetchDocument("https://www.lacartoons.com/lista/") ?: return emptyList()
+        val doc = fetchDocument("${baseUrl}/") ?: return emptyList()
         return parseSeriesCards(doc)
     }
 
@@ -29,16 +30,63 @@ object LaCartoonsScraper : GenericScraper() {
         return parseSeriesCards(doc)
     }
 
-    private fun parseSeriesCards(doc: Document): List<Episode> {
-        val episodes = mutableListOf<Episode>()
+    /** Directorio/portada/búsqueda: tarjetas `div.conjuntos-series > a` (/serie/N). */
+    fun parseDirectory(doc: Document): List<Episode> = parseSeriesCards(doc)
+
+    /** Título de la ficha (`h2.subtitulo-serie-seccion`), sin el canal. */
+    fun fetchSeriesTitle(doc: Document): String =
+        HtmlClean.clean(doc.selectFirst("h2.subtitulo-serie-seccion")?.ownText().orEmpty())
+
+    /** Reseña de la ficha (p "Reseña:" > span). */
+    fun fetchSeriesDescription(doc: Document): String {
+        val info = doc.select(".informacion-serie-seccion p")
+        val resena = info.firstOrNull { HtmlClean.clean(it.ownText()).startsWith("Rese", ignoreCase = true) }
+        val span = resena?.selectFirst("span")?.text().orEmpty().trim()
+        return if (span.length > 10) span else ""
+    }
+
+    /**
+     * Ficha de serie (/serie/N): episodios renderizados en servidor como
+     * `ul.listas-de-episodion a[href="/serie/capitulo/M?t=S"]`.
+     */
+    fun fetchSeriesEpisodes(doc: Document, seriesUrl: String, siteName: String = name): List<Episode> {
+        val poster = doc.selectFirst(".imagen-serie img")?.attr("abs:src").orEmpty()
+        val out = mutableListOf<Episode>()
+        doc.select("ul.listas-de-episodion a[href*=\"/serie/capitulo/\"]").forEach { a ->
+            val url = a.attr("abs:href").ifBlank { return@forEach }
+            val raw = HtmlClean.clean(a.text())
+            if (raw.isBlank()) return@forEach
+            val num = Regex("""Capitulo\s*(\d+)""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.get(1)
+                ?: Regex("""/capitulo/(\d+)""").find(url)?.groupValues?.get(1)
+                ?: return@forEach
+            val season = try {
+                java.net.URI(url).query?.let { q ->
+                    Regex("""(?:^|&)t=(\d+)""").find(q)?.groupValues?.get(1)
+                }.orEmpty()
+            } catch (_: Exception) { "" }
+            val title = if (season.isNotBlank() && season != "1") "T$season · $raw" else raw
+            out.add(Episode(
+                title = title,
+                url = url,
+                episodeNum = num,
+                thumbnailUrl = poster,
+                siteName = siteName
+            ))
+        }
+        Log.d("LaCartoons", "Fetched ${out.size} episodes for $seriesUrl")
+        return out.distinctBy { it.url }
+    }
+
+    private fun parseSeriesCards(doc: Document): List<Episode> {        val episodes = mutableListOf<Episode>()
         doc.select("div.conjuntos-series > a").forEach { link ->
             try {
                 val url = link.attr("abs:href").ifBlank { return@forEach }
                 val title = link.selectFirst("p.nombre-serie")?.text()?.trim() ?: return@forEach
                 val poster = link.selectFirst("img")?.let { img ->
-                    listOf("data-src", "data-lazy-src", "data-original", "abs:src", "src").firstNotNullOfOrNull { attr ->
+                    val raw = listOf("data-src", "data-lazy-src", "data-original", "src").firstNotNullOfOrNull { attr ->
                         img.attr(attr).ifBlank { null }
-                    }
+                    } ?: img.attr("abs:src")
+                    HtmlClean.resolveUrl(doc.baseUri(), raw.orEmpty())
                 } ?: ""
                 val year = link.selectFirst("span.marcador-ano")?.text()?.trim() ?: ""
                 episodes.add(Episode(title, url, poster, year, name))
