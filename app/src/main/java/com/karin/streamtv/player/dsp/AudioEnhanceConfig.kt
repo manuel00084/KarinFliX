@@ -54,7 +54,7 @@ object AudioEnhanceConfig {
         val harmonicBass: Float = 0f,   // 0..1.0 (saturation graves)
         val compression: Float = 0f,    // 0..1.0 (dynamic range)
         val reverbMix: Float = 0f,      // 0..0.5
-        val masterGain: Float = 1.0f,   // 0.5..2.0
+        val masterGain: Float = 1.0f,   // 0.5..4.0 (el limiter true-peak evita recorte)
         val irType: IrPreset = IrPreset.NONE,
         val irMix: Float = 0f,          // 0..1.0 (wet del convolver)
         val useSystemSpatializer: Boolean = true, // delegar al Spatializer del sistema (API 33+)
@@ -160,7 +160,8 @@ object AudioEnhanceConfig {
                 loudnessComp = false,
                 surfaceResonance = false,
                 speechClarity = false,
-                useSystemSpatializer = false
+                useSystemSpatializer = false,
+                loudnessNorm = 0f
             )
             // ANIME — TV speakers: diálogos nítidos, OST con cuerpo, sub-bass virtual
             Preset.ANIME -> Params(
@@ -183,7 +184,15 @@ object AudioEnhanceConfig {
                 loudnessComp = true,
                 surfaceResonance = true,
                 speechClarity = true,
-                useSystemSpatializer = true
+                useSystemSpatializer = true,
+                // FX de alta resolución: OST/kicks anclados, golpe y ataques
+                // definidos, de-enmascarado de voz y despeje cuando hay FX.
+                subAnchor = 0.5f,
+                beatBoost = 0.45f,
+                transientPunch = 0.5f,
+                spectralClarity = 0.4f,
+                explosionDucking = 0.5f,
+                loudnessNorm = 0.5f     // nivelación media (susurros ↔ gritos)
             )
             // BASS_BOOST — Musical: graves ajustados, rápidos, armónicamente ricos
             Preset.BASS_BOOST -> Params(
@@ -206,7 +215,15 @@ object AudioEnhanceConfig {
                 loudnessComp = false,
                 surfaceResonance = false,
                 speechClarity = false,
-                useSystemSpatializer = false
+                useSystemSpatializer = false,
+                // El preset de graves lleva los FX de golpe más fuertes:
+                // kick/sub anclados al centro y separados del muro armónico.
+                subAnchor = 0.85f,
+                beatBoost = 0.85f,
+                transientPunch = 0.6f,
+                spectralClarity = 0.3f,
+                explosionDucking = 0.4f,
+                loudnessNorm = 0.4f     // preserva la dinámica musical
             )
             // DIALOGUE — Noticias/presentadores/podcasts/audiolibros: inteligibilidad
             Preset.DIALOGUE -> Params(
@@ -229,7 +246,15 @@ object AudioEnhanceConfig {
                 loudnessComp = true,
                 surfaceResonance = false,
                 speechClarity = true,
-                useSystemSpatializer = false
+                useSystemSpatializer = false,
+                // Habla: FX orientados a inteligibilidad — ataques de consonantes,
+                // de-enmascarado de voz y despeje de FX fuertes bajo el diálogo.
+                subAnchor = 0.2f,
+                beatBoost = 0f,
+                transientPunch = 0.4f,
+                spectralClarity = 0.6f,
+                explosionDucking = 0.7f,
+                loudnessNorm = 0.7f     // nivelación fuerte: voz siempre constante
             )
             // MUSIC — Musical: cuerpo, detalle y estéreo natural
             Preset.MUSIC -> Params(
@@ -262,7 +287,8 @@ object AudioEnhanceConfig {
                 beatBoost = 0.7f,
                 transientPunch = 0.6f,
                 spectralClarity = 0.5f,
-                explosionDucking = 0.6f
+                explosionDucking = 0.6f,
+                loudnessNorm = 0.3f     // preserva la dinámica de la masterización
             )
             // SPEAKER / TRUE MAXBASS — Bocina chica: máximo grave percibido
             Preset.SPEAKER -> Params(
@@ -289,7 +315,11 @@ object AudioEnhanceConfig {
                 // El kick y el sub percibido se anclan al centro y el golpe se
                 // separa del muro armónico: el "True MaxBass" se SIENTE.
                 subAnchor = 0.9f,
-                beatBoost = 0.8f
+                beatBoost = 0.8f,
+                transientPunch = 0.5f,
+                spectralClarity = 0.4f,
+                explosionDucking = 0.5f,
+                loudnessNorm = 0.5f
             )
             Preset.SURROUND_ENVOLVENTE -> Params(
                 Preset.SURROUND_ENVOLVENTE, true, autoDevice = false,
@@ -320,7 +350,8 @@ object AudioEnhanceConfig {
                 beatBoost = 0.6f,
                 transientPunch = 0.5f,
                 spectralClarity = 0.5f,
-                explosionDucking = 0.6f
+                explosionDucking = 0.6f,
+                loudnessNorm = 0.4f     // contenido mixto (pelis/series): nivelación media
             )
         }
     }
@@ -430,6 +461,9 @@ private const val KEY_HRTF = "dsp_hrtf"
 // Retardo de canal trasero (ms) e inversión de fase trasera
 private const val KEY_REAR_DELAY = "dsp_rear_delay"
 private const val KEY_REAR_PHASE = "dsp_rear_phase"
+// Asistencia de audición (superpuesta en params(); dialogo de asistencia)
+private const val KEY_AUD_SPEECH = "dsp_aud_speech"
+private const val KEY_AUD_LOSS = "dsp_aud_loss"
     // Capa de usuario "Ajuste rápido": deltas sobre el preset base (no se pierden
     // al cambiar de perfil).
     private const val KEY_QA_BASS = "dsp_qa_bass"
@@ -580,7 +614,7 @@ private const val KEY_REAR_PHASE = "dsp_rear_phase"
     fun setReverb(v: Float) { prefs?.edit()?.putFloat(KEY_REVERB, v.coerceIn(0f, 0.5f))?.apply() }
 
     fun getMaster(): Float = prefs?.getFloat(KEY_MASTER, 1.0f) ?: 1.0f
-    fun setMaster(v: Float) { prefs?.edit()?.putFloat(KEY_MASTER, v.coerceIn(0.5f, 2f))?.apply() }
+    fun setMaster(v: Float) { prefs?.edit()?.putFloat(KEY_MASTER, v.coerceIn(0.5f, 4f))?.apply() }
 
     fun irPreset(): IrPreset {
         val idx = prefs?.getInt(KEY_IR, 0) ?: 0
@@ -656,6 +690,13 @@ fun getRearDelayMs(): Float = prefs?.getFloat(KEY_REAR_DELAY, 20f) ?: 20f
 fun setRearDelayMs(v: Float) { prefs?.edit()?.putFloat(KEY_REAR_DELAY, v.coerceIn(0f, 30f))?.apply() }
 fun getRearPhaseInvert(): Boolean = prefs?.getBoolean(KEY_REAR_PHASE, false) ?: false
 fun setRearPhaseInvert(v: Boolean) { prefs?.edit()?.putBoolean(KEY_REAR_PHASE, v)?.apply() }
+
+/** Asistencia de audición: claridad de diálogo 0..1 (0 = apagado). */
+fun getAudSpeech(): Float = ((prefs?.getInt(KEY_AUD_SPEECH, 0) ?: 0).coerceIn(0, 100)) / 100f
+fun setAudSpeech(v: Float) { prefs?.edit()?.putInt(KEY_AUD_SPEECH, (v.coerceIn(0f, 1f) * 100).toInt())?.apply() }
+/** Asistencia de audición: realce de agudos (presbicia) 0..1 (0 = apagado). */
+fun getAudLoss(): Float = ((prefs?.getInt(KEY_AUD_LOSS, 0) ?: 0).coerceIn(0, 100)) / 100f
+fun setAudLoss(v: Float) { prefs?.edit()?.putInt(KEY_AUD_LOSS, (v.coerceIn(0f, 1f) * 100).toInt())?.apply() }
 
     fun getParametric(): List<ParamBand>? {
         val s = prefs?.getString(KEY_PARAMETRIC, null) ?: return null
@@ -742,16 +783,65 @@ fun setRearPhaseInvert(v: Boolean) { prefs?.edit()?.putBoolean(KEY_REAR_PHASE, v
         // Perfil AutoEQ medido: la curva paramétrica real reemplaza banda gráfica y
         // el preamp (headroom contra el clip) se aplica atenuando la ganancia master.
         val auto = autoEqProfile()
-        val built = if (auto != null) {
+        val built0 = if (auto != null) {
             val lin = 10f.pow(auto.preampDb / 20f)
             p0.copy(
                 parametricEq = auto.bands,
                 eq10 = null,
-                masterGain = (p0.masterGain * lin).coerceIn(0.15f, 2f)
+                masterGain = (p0.masterGain * lin).coerceIn(0.15f, 4f)
             )
         } else p0
+        // Asistencia de audición: va la ÚLTIMA para que gane sobre preset/AutoEQ.
+        val sp = getAudSpeech()
+        val lo = getAudLoss()
+        val built = if (sp > 0f || lo > 0f) hearingAssist(built0, sp, lo) else built0
         if (cacheGen.get() == g) cachedParams = built
         return built
+    }
+
+    /**
+     * Superposición de asistencia de audición sobre el preset activo:
+     * - Claridad de diálogo (speech): sube presencia, recorta graves que tapan
+     *   la voz, comprime el rango, despeja FX fuertes (ducking) y nivela R128.
+     * - Pérdida de agudos / presbicia (loss): realce de treble/presencia y
+     *   armónicos, más volumen extra (el limiter true-peak evita el recorte).
+     * Asistencia práctica; no sustituye aparato auditivo.
+     */
+    private fun hearingAssist(p: Params, speech: Float, loss: Float): Params {
+        var presence = p.presenceGain
+        var treble = p.trebleGain
+        var bass = p.bassGain
+        var comp = p.compression
+        var duck = p.explosionDucking
+        var clarity = p.speechClarity
+        var loud = p.loudnessNorm
+        var exciter = p.exciterAmount
+        var master = p.masterGain
+        if (speech > 0f) {
+            presence += 4.5f * speech
+            bass -= 1.5f * speech
+            comp = maxOf(comp, 0.5f + 0.3f * speech)
+            duck = maxOf(duck, 0.7f * speech)
+            clarity = true
+            loud = maxOf(loud, 0.55f + 0.25f * speech)
+        }
+        if (loss > 0f) {
+            treble += 3.5f * loss
+            presence += 3f * loss
+            exciter = maxOf(exciter, 0.15f + 0.2f * loss)
+            master = (master * (1f + 0.35f * loss)).coerceIn(0.15f, 4f)
+        }
+        return p.copy(
+            presenceGain = presence.coerceIn(-12f, 12f),
+            trebleGain = treble.coerceIn(-12f, 12f),
+            bassGain = bass.coerceIn(-12f, 12f),
+            compression = comp.coerceIn(0f, 1f),
+            explosionDucking = duck.coerceIn(0f, 1f),
+            speechClarity = clarity,
+            loudnessNorm = loud.coerceIn(0f, 1f),
+            exciterAmount = exciter.coerceIn(0f, 1f),
+            masterGain = master.coerceIn(0.15f, 4f),
+        )
     }
 
     fun applyParams(p: Params) {
@@ -829,7 +919,7 @@ fun setRearPhaseInvert(v: Boolean) { prefs?.edit()?.putBoolean(KEY_REAR_PHASE, v
             trebleGain = (base.trebleGain + getQuickAdjTreble()).coerceIn(-12f, 12f),
             presenceGain = (base.presenceGain + getQuickAdjPresence()).coerceIn(-12f, 12f),
             surroundWidth = (base.surroundWidth + getQuickAdjSurround()).coerceIn(0f, 1.5f),
-            masterGain = (base.masterGain + getQuickAdjMaster()).coerceIn(0.5f, 2f)
+            masterGain = (base.masterGain + getQuickAdjMaster()).coerceIn(0.5f, 4f)
         )
         setPreset(eff.preset)
         setEnabled(eff.enabled)
@@ -852,6 +942,7 @@ fun setRearPhaseInvert(v: Boolean) { prefs?.edit()?.putBoolean(KEY_REAR_PHASE, v
         setLoudnessComp(eff.loudnessComp)
         setSurfaceResonance(eff.surfaceResonance)
         setSpeechClarity(eff.speechClarity)
+        setLoudnessNorm(eff.loudnessNorm)
         setMaster(eff.masterGain)
         // eq10 / parametricEq / AutoEQ se preservan (no se tocan aquí).
     }

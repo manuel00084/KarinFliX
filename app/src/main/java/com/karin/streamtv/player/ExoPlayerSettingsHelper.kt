@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.karin.streamtv.enhancer.KarinLightBoostController
 import com.karin.streamtv.enhancer.RestoreBoostController
 import com.karin.streamtv.enhancer.parameters.KarinLightBoostParameters
+import com.karin.streamtv.util.DeviceProfile
 
 object ExoPlayerSettingsHelper {
 
@@ -94,7 +95,7 @@ object ExoPlayerSettingsHelper {
     const val KEY_3D_DEPTH = "td_depth"
     const val KEY_3D_SWAP = "td_swap"
     const val KEY_3D_INPUT_SBS = "td_input_sbs" // legacy (migrado a KEY_3D_INPUT)
-    const val KEY_3D_INPUT = "td_input" // 0=2D, 1=SBS, 2=TAB
+    const val KEY_3D_INPUT = "td_input" // 0=2D, 1=SBS (TAB legacy colapsa a SBS)
     const val KEY_3D_ANAGLYPH = "td_anaglyph" // 0=rojo-cian, 1=rojo-azul, 2=rojo-verde
     const val KEY_ASPECT_RATIO_MODE = "aspect_ratio_mode"
 
@@ -306,16 +307,10 @@ object ExoPlayerSettingsHelper {
     }
 
     /**
-     * RESTORE BOOST: intensidad maestra (vincula las 3 etapas) + ajuste fino
-     * opcional por etapa. Todo corre en el mismo pase único; el fino solo
-     * mueve los 3 uniforms. Tocar un slider fino = modo personalizado; mover
-     * el master = vuelve a vincular. Todo con preview en vivo.
-     */
-    /**
      * SELECTOR SHADER: un tipo a la vez (Off/CRT/Cine/B-N) + intensidad.
      * El tipo se aplica al confirmar (reconstruye la cadena); la intensidad
-     * previsualiza en vivo sobre el efecto actual. Lo abren la fila 6 y el
-     * botón de lentes del reproductor.
+     * previsualiza en vivo sobre el efecto actual. Lo abre la fila 5 de
+     * Opciones Avanzadas.
      */
     fun showShaderDialog(
         activity: Activity,
@@ -415,6 +410,12 @@ object ExoPlayerSettingsHelper {
             .show()
     }
 
+    /**
+     * RESTORE BOOST: intensidad maestra (vincula las 3 etapas) + ajuste fino
+     * opcional por etapa. Todo corre en el mismo pase único; el fino solo
+     * mueve los 3 uniforms. Tocar un slider fino = modo personalizado; mover
+     * el master = vuelve a vincular. Todo con preview en vivo.
+     */
     private fun showRestoreDialog(
         activity: Activity,
         prefs: SharedPreferences,
@@ -1009,10 +1010,12 @@ object ExoPlayerSettingsHelper {
     }
 
     /**
-     * TECNOLOGÍA 3D: diálogo del botón lentes (btn_shader) y de la fila 7.
-     * Modos SBS→2D, TAB→2D, Anaglifo rojo-cian y VR Cardboard, con
-     * profundidad (paralaje), ojo intercambiable y aviso de fuente SBS.
-     * La profundidad previsualiza en vivo; el modo se aplica al confirmar.
+     * TECNOLOGÍA 3D: diálogo del botón lentes (btn_3d) de la barra del
+     * reproductor. Modos visibles: Anaglifo (3 variantes de lente),
+     * VR Cardboard y Pulfrich, con profundidad (pseudo-3D / realce
+     * Pulfrich), ojo intercambiable y fuente estéreo (2D/SBS) para el
+     * anaglifo. La profundidad previsualiza en vivo si el 3D ya está
+     * activo; el modo se aplica al confirmar.
      */
     fun show3DDialog(
         activity: Activity,
@@ -1027,9 +1030,7 @@ object ExoPlayerSettingsHelper {
         var depth = (prefs.getInt(KEY_3D_DEPTH, Karin3DController.DEFAULT_DEPTH) / 100f)
             .coerceIn(0f, 1f)
         var swapEye = prefs.getBoolean(KEY_3D_SWAP, false)
-        // Sin TAB: si había uno guardado, migra a SBS al abrir.
         var inputKind = Karin3DController.inputKind(prefs)
-            .let { if (it == Karin3DController.INPUT_TAB) Karin3DController.INPUT_SBS else it }
         var anaglyph = Karin3DController.anaglyphType(prefs)
         // Modos visibles: Anaglifo, VR y Pulfrich (sin Apagado, SBS/TAB→2D
         // ni Polarizado). modeValues mapea índice visible -> MODE_*.
@@ -1038,6 +1039,9 @@ object ExoPlayerSettingsHelper {
             Karin3DController.MODE_VR_SBS,
             Karin3DController.MODE_PULFRICH,
         )
+        // Nota si había un modo legacy activo que la UI ya no ofrece: la
+        // cadena sigue con él hasta "Aplicar" (Cancel lo conserva).
+        val hadLegacyMode = enabled && mode !in modeValues
         if (!enabled) {
             // Si estaba apagado mostramos el último modo visible si existe,
             // si no Anaglifo como punto de partida.
@@ -1160,7 +1164,8 @@ object ExoPlayerSettingsHelper {
             inputBox.addView(rb)
         }
 
-        fun pct(v: Float) = "Profundidad: ${(v * 100).toInt()}% (paralaje anaglifo / realce Pulfrich)"
+        fun pct(v: Float) =
+            "Profundidad: ${(v * 100).toInt()}% (pseudo-3D desde 2D / realce Pulfrich)"
         val depthLabel = TextView(activity).apply { text = pct(depth) }
         val depthSeek = SeekBar(activity).apply {
             max = 100
@@ -1178,22 +1183,35 @@ object ExoPlayerSettingsHelper {
         })
 
         val swapBox = Switch(activity).apply {
-            text = "Swap: ojo derecho (no aplica en Pulfrich)"
+            text = "Swap: ojo derecho (no aplica en Pulfrich ni VR)"
             isChecked = swapEye
             setOnCheckedChangeListener { _, isChecked -> swapEye = isChecked }
         }
 
         // Avisos de compatibilidad con los shaders/filtros activos.
+        // compatWarnings() corta por !isActive: con el 3D apagado la lista
+        // está vacía y no debe colarse el "✓ Sin conflictos".
         val warningsNow = Karin3DController.compatWarnings(prefs)
+        val activeNow = Karin3DController.isActive(prefs)
         val warnView = TextView(activity).apply {
-            text = if (warningsNow.isEmpty()) {
-                "✓ Sin conflictos: el 3D va al final de la cadena y los filtros previos no lo rompen."
-            } else {
-                "⚠ Conflictos con filtros activos:\n· " + warningsNow.joinToString("\n· ")
+            text = when {
+                !activeNow && !enabled ->
+                    "El 3D está apagado: los avisos de compatibilidad aparecen con un modo activo."
+                !activeNow ->
+                    "Modo nuevo sin aplicar: pulsa Aplicar para revisar conflictos con los filtros."
+                warningsNow.isEmpty() ->
+                    "✓ Sin conflictos: el 3D va al final de la cadena y los filtros previos no lo rompen."
+                else -> "⚠ Conflictos con filtros activos:\n· " + warningsNow.joinToString("\n· ")
             }
             textSize = 12f
             setPadding(0, 16, 0, 8)
         }
+        val legacyView = if (hadLegacyMode) TextView(activity).apply {
+            text = "ℹ Modo anterior no disponible en la interfaz (SBS/TAB→2D): " +
+                "sigue activo hasta que pulses Aplicar (se migrará a Anaglifo)."
+            textSize = 12f
+            setPadding(0, 8, 0, 0)
+        } else null
 
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -1201,7 +1219,8 @@ object ExoPlayerSettingsHelper {
             addView(switch)
             addView(TextView(activity).apply {
                 text = "El botón de lentes del reproductor abre esto directo. " +
-                    "El 3D corre al final de la cadena (1 pase GL)."
+                    "El 3D corre al final de la cadena (1 pase GL). " +
+                    "La profundidad previsualiza en vivo solo si el 3D ya está activo."
                 textSize = 13f
                 setPadding(0, 16, 0, 8)
             })
@@ -1211,6 +1230,7 @@ object ExoPlayerSettingsHelper {
             addView(depthLabel)
             addView(depthSeek)
             addView(swapBox)
+            legacyView?.let { addView(it) }
             addView(warnView)
         }
 
@@ -1219,14 +1239,9 @@ object ExoPlayerSettingsHelper {
             .setView(ScrollView(activity).apply { addView(layout) })
             .setPositiveButton("Aplicar") { _, _ ->
                 val finalMode = modeValues[pending.coerceIn(modeValues.indices)]
-                val effInput = when (finalMode) {
-                    Karin3DController.MODE_SBS_2D -> Karin3DController.INPUT_SBS
-                    Karin3DController.MODE_TAB_2D -> Karin3DController.INPUT_TAB
-                    else -> inputKind
-                }
                 Karin3DController.save(
                     prefs, enabled && finalMode != Karin3DController.MODE_OFF,
-                    finalMode, depth, swapEye, effInput, anaglyph,
+                    finalMode, depth, swapEye, inputKind, anaglyph,
                 )
                 player?.let { onEffectsChanged(it) }
                 val post = Karin3DController.compatWarnings(prefs)
@@ -1240,37 +1255,56 @@ object ExoPlayerSettingsHelper {
             .show()
     }
 
-    // Ventana "Modo MotionX2": Apagado + modos legacy (sin 60fps reales: el flujo
-    // óptico generaba temblor/distorsión y se desactivó). Se aplica al tocar.
-    // - Intensidad: solo movía el efecto legacy; fuera del diálogo (valor
-    //   guardado intacto para la ruta normal).
-    // - Artefactos: sin ruta 60fps no actúa sobre nada; fuera del diálogo.
+    // Ventana "Modo MotionX2": Apagado + modos legacy (1:1) + 60 fps reales.
+    // La fila "60 fps reales (GRID)" es EXPERIMENTAL y solo se ofrece en gama
+    // alta (Tier HIGH): emite cuadros intermedios en un grid absoluto de 60 Hz
+    // con anti-fantasma (2 pases GL + historial propio). La antigua ruta óptica
+    // daba temblor/distorsión y se desactivó; este camino es el reemplazo.
     private fun showMotionX2Dialog(
         activity: Activity,
         prefs: SharedPreferences,
         player: ExoPlayer?,
         onEffectsChanged: (ExoPlayer) -> Unit,
     ) {
+        val highEnd = try {
+            DeviceProfile.get(activity).tier == DeviceProfile.Tier.HIGH
+        } catch (_: Throwable) {
+            false
+        }
         // Ordenados de menor a mayor consumo, cada uno con su explicación simple.
-        val titles = arrayOf(
+        val titles = mutableListOf(
             "⏻ Apagado",
             "DOUBLING (Frame x2)",
             "BLEND (Suavizado)",
             "HYBRID (Doubling + Micro-Blend)",
-            "Interpolación 60 fps (SPIKE)",
+            "Interpolación 60 (SPIKE)",
         )
-        val descs = arrayOf(
+        val descs = mutableListOf(
             "No hace nada. Video original.",
             "Repite cada cuadro. Muy liviano, sin fantasmas.",
             "Mezcla cuadros. Suave, puede dar fantasma.",
             "Cuadro nítido + mezcla leve. El balance.",
-            "Emite cuadros intermedios en grid 60Hz (blend, sin flujo). Test de cadencia.",
+            "Grid 60Hz con mezcla adaptativa. 1 pase GL.",
         )
-        // Diálogo -> ordinal MotionX2Mode legacy: 1->DOUBLING(1), 2->BLEND(2), 3->HYBRID(0), 4->INTERP(3).
-        val dialogToLegacy = intArrayOf(-1, 1, 2, 0, 3)
-        val legacyToDialog = intArrayOf(3, 1, 2, 4)
+        if (highEnd) {
+            titles.add("60 fps reales (GRID · experimental)")
+            descs.add(
+                "Emite cuadros intermedios en grid 60Hz real con anti-fantasma. " +
+                    "2 pases GL + historial. Solo para equipo potente.",
+            )
+        }
+        // Fila -> ordinal MotionX2Mode legacy.
+        val dialogToLegacy = mutableListOf(-1, 1, 2, 0, 3)
+        if (highEnd) dialogToLegacy.add(MotionX2Mode.REAL60.ordinal)
+        // Ordinal MotionX2Mode -> fila.
+        val legacyToDialog = intArrayOf(3, 1, 2, 4, 5)
+        val maxStored = if (highEnd) {
+            MotionX2Mode.REAL60.ordinal
+        } else {
+            MotionX2Mode.INTERP.ordinal
+        }
         val checkedIndex = if (prefs.getBoolean(KEY_MOTIONX2_EN, false)) {
-            legacyToDialog[prefs.getInt(KEY_MOTIONX2_MODE, 0).coerceIn(0, 3)]
+            legacyToDialog[prefs.getInt(KEY_MOTIONX2_MODE, 0).coerceIn(0, maxStored)]
         } else {
             0
         }
@@ -1282,7 +1316,7 @@ object ExoPlayerSettingsHelper {
             val on = which != 0
             prefs.edit()
                 .putBoolean(KEY_MOTIONX2_EN, on)
-                .putInt(KEY_MOTIONX2_MODE, if (on) dialogToLegacy[which.coerceIn(1, 4)] else 0)
+                .putInt(KEY_MOTIONX2_MODE, if (on) dialogToLegacy[which.coerceIn(1, dialogToLegacy.lastIndex)] else 0)
                 .apply()
             player?.let { onEffectsChanged(it) }
             dialog?.dismiss()

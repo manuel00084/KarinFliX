@@ -4,7 +4,7 @@ import android.content.SharedPreferences
 
 /**
  * Tecnología 3D de KarinFLiX: convierte y emite video estereoscópico
- * en un solo pase GL (GLES2, 1-2 fetches, apto para cajas modestas).
+ * en un solo pase GL (GLES2, 1-3 fetches, apto para cajas modestas).
  *
  * Modos:
  * - OFF: sin proceso (no-op, no ocupa pase GL).
@@ -55,7 +55,7 @@ object Karin3DController {
     fun modeName(mode: Int): String = when (mode.coerceIn(0, MODE_COUNT - 1)) {
         MODE_SBS_2D -> "SBS → 2D"
         MODE_TAB_2D -> "TAB → 2D"
-        MODE_ANAGLYPH -> "Anaglifo ${anaglyphName(-1)}".trim()
+        MODE_ANAGLYPH -> "Anaglifo"
         MODE_VR_SBS -> "VR (Cardboard)"
         MODE_PULFRICH -> "Pulfrich"
         else -> "Off"
@@ -77,15 +77,6 @@ object Karin3DController {
         INPUT_SBS -> "SBS"
         INPUT_TAB -> "TAB"
         else -> "2D"
-    }
-
-    fun modeDescription(mode: Int): String = when (mode.coerceIn(0, MODE_COUNT - 1)) {
-        MODE_SBS_2D -> "Video lado-a-lado (izq|der) a 2D. Elige qué ojo ver."
-        MODE_TAB_2D -> "Video arriba-abajo (sup/inf) a 2D. Elige qué ojo ver."
-        MODE_ANAGLYPH -> "Lentes bicolor (rojo-cian, rojo-azul, rojo-verde). Con video SBS/TAB mezcla ambos ojos; con 2D genera pseudo-3D."
-        MODE_VR_SBS -> "Duplica el 2D a lado-a-lado para visor VR/Cardboard."
-        MODE_PULFRICH -> "Requiere lente oscuro en un ojo (Fabulojos) + escenas con movimiento lateral."
-        else -> "Sin proceso 3D."
     }
 
     fun isActive(prefs: SharedPreferences): Boolean {
@@ -125,13 +116,6 @@ object Karin3DController {
     fun isSwapEye(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(ExoPlayerSettingsHelper.KEY_3D_SWAP, false)
 
-    /** true si la fuente es SBS/TAB (hay que muestrear mitades). */
-    fun isStereoInput(prefs: SharedPreferences): Boolean {
-        val m = currentMode(prefs)
-        return m == MODE_SBS_2D || m == MODE_TAB_2D ||
-            ((m == MODE_ANAGLYPH) && inputKind(prefs) != INPUT_2D)
-    }
-
     fun save(
         prefs: SharedPreferences,
         enabled: Boolean,
@@ -146,22 +130,10 @@ object Karin3DController {
             .putInt(ExoPlayerSettingsHelper.KEY_3D_MODE, mode.coerceIn(0, MODE_COUNT - 1))
             .putInt(ExoPlayerSettingsHelper.KEY_3D_DEPTH, (depth.coerceIn(0f, 1f) * 100).toInt())
             .putBoolean(ExoPlayerSettingsHelper.KEY_3D_SWAP, swapEye)
-            .putInt(ExoPlayerSettingsHelper.KEY_3D_INPUT, inputKind.coerceIn(0, 2))
-            .putBoolean(ExoPlayerSettingsHelper.KEY_3D_INPUT_SBS, inputKind == INPUT_SBS)
+            // Sin TAB en la UI: se colapsa a SBS (igual que al leer).
+            .putInt(ExoPlayerSettingsHelper.KEY_3D_INPUT, inputKind.coerceIn(0, 1))
             .putInt(ExoPlayerSettingsHelper.KEY_3D_ANAGLYPH, anaglyph.coerceIn(0, ANAG_COUNT - 1))
             .apply()
-    }
-
-    /** Compatibilidad con legacy (boolean SBS). No borra: migra al guardar. */
-    fun save(
-        prefs: SharedPreferences,
-        enabled: Boolean,
-        mode: Int,
-        depth: Float,
-        swapEye: Boolean,
-        inputSbs: Boolean,
-    ) {
-        save(prefs, enabled, mode, depth, swapEye, if (inputSbs) INPUT_SBS else INPUT_2D)
     }
 
     /** Etiqueta corta para el OSD / cadena real. */
@@ -182,7 +154,8 @@ object Karin3DController {
      * ESTUDIO de compatibilidad: ¿los shaders/filtros activos rompen el 3D?
      *
      * Orden real de la cadena (ExoPlayerActivity.addChainEffects):
-     * Restore → Light+Color → Upscaler → MotionX2 → Shader → 3D → Demo.
+     * Restore → Light+Color → Upscaler → MotionX2 → Shader → Visión → 3D
+     * → Demo.
      * El 3D va ÚLTIMO a propósito: los filtros previos tocan la imagen
      * completa (ambos ojos a la vez), así que la geometría estéreo no se
      * rompe... salvo estos casos medidos:
@@ -226,6 +199,9 @@ object Karin3DController {
 
         if (mode == MODE_ANAGLYPH && shaderType == ExoPlayerSettingsHelper.SHADER_BW) {
             out += "⛔ B/N + anaglifo incompatible: el blanco y negro destruye los canales de color que separan los ojos. Apaga el Shader B/N."
+        }
+        if (mode == MODE_ANAGLYPH && shaderType == ExoPlayerSettingsHelper.SHADER_CINE) {
+            out += "⚠ Cine + anaglifo: el grano de película añade ruido al filtrado de los lentes (leve)."
         }
         if (mode == MODE_PULFRICH && motionOn) {
             val mMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)

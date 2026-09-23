@@ -30,7 +30,18 @@ enum class MotionX2Mode(val label: String) {
     DOUBLING("DOUBLING (Frame x2)"),
     BLEND("BLEND (Suavizado)"),
     INTERP("Interpolación 60 (SPIKE)"),
+    REAL60("60 fps reales (GRID anti-ghost · experimental)");
+
+    companion object {
+        /** True si el ordinal guardado en prefs emite cuadros intermedios (~60 fps reales). */
+        fun isRealFps(ordinal: Int): Boolean =
+            ordinal == INTERP.ordinal || ordinal == REAL60.ordinal
+    }
 }
+
+/** True si el modo emite cuadros intermedios (~60 fps reales). */
+fun MotionX2Mode.isRealFps(): Boolean =
+    this == MotionX2Mode.INTERP || this == MotionX2Mode.REAL60
 
 class MotionX2BoostEffect(
     private var mode: MotionX2Mode = MotionX2Mode.HYBRID,
@@ -40,14 +51,17 @@ class MotionX2BoostEffect(
 
     private var program: MotionX2BoostShaderProgram? = null
     private var frcProgram: MotionX2FrcShaderProgram? = null
+    private var real60Program: com.karin.streamtv.player.sixty.SixtyFpsInterpShaderProgram? = null
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
         android.util.Log.d(TAG, "toGlShaderProgram mode=$mode useHdr=$useHdr")
-        return if (mode == MotionX2Mode.INTERP) {
-            MotionX2FrcShaderProgram(useHdr, strength, demoSplit)
+        return when (mode) {
+            MotionX2Mode.INTERP -> MotionX2FrcShaderProgram(useHdr, strength, demoSplit)
                 .also { frcProgram = it }
-        } else {
-            MotionX2BoostShaderProgram(context, useHdr, mode, strength, demoSplit)
+            MotionX2Mode.REAL60 ->
+                com.karin.streamtv.player.sixty.SixtyFpsInterpShaderProgram(useHdr, demoSplit)
+                    .also { real60Program = it }
+            else -> MotionX2BoostShaderProgram(context, useHdr, mode, strength, demoSplit)
                 .also { program = it }
         }
     }

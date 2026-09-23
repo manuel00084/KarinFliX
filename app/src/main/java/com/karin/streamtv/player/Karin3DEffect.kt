@@ -29,51 +29,24 @@ import androidx.media3.effect.GlShaderProgram
  * Con demoSplit la mitad izquierda queda intacta para comparar.
  */
 class Karin3DEffect(
-    private var mode: Int = Karin3DController.MODE_OFF,
+    private val mode: Int = Karin3DController.MODE_OFF,
     private var depth: Float = 0.4f,
-    private var swapEye: Boolean = false,
-    private var stereoInput: Boolean = false,
-    private var demoSplit: Boolean = false,
-    private var anaglyph: Int = Karin3DController.ANAG_RED_CYAN,
-    private var inputKind: Int = -1, // -1 = auto (SBS_2D->SBS, TAB_2D->TAB, resto según stereoInput)
+    private val swapEye: Boolean = false,
+    private val demoSplit: Boolean = false,
+    private val anaglyph: Int = Karin3DController.ANAG_RED_CYAN,
+    private val inputKind: Int = Karin3DController.INPUT_2D,
 ) : GlEffect {
 
     private var program: Karin3DShaderProgram? = null
 
-    private fun resolvedInput(): Int {
-        if (inputKind in 0..2) return inputKind
-        return when (mode) {
-            Karin3DController.MODE_SBS_2D -> Karin3DController.INPUT_SBS
-            Karin3DController.MODE_TAB_2D -> Karin3DController.INPUT_TAB
-            Karin3DController.MODE_PULFRICH -> Karin3DController.INPUT_2D
-            Karin3DController.MODE_ANAGLYPH ->
-                if (stereoInput) Karin3DController.INPUT_SBS else Karin3DController.INPUT_2D
-            else -> Karin3DController.INPUT_2D
-        }
-    }
-
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
         return Karin3DShaderProgram(
-            context, useHdr, mode, depth, swapEye, resolvedInput(), anaglyph, demoSplit,
+            context, useHdr, mode, depth, swapEye, inputKind, anaglyph, demoSplit,
         ).also { program = it }
     }
 
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean =
         mode == Karin3DController.MODE_OFF
-
-    fun update(mode: Int, depth: Float, swapEye: Boolean, stereoInput: Boolean) {
-        updateFull(mode, depth, swapEye, if (stereoInput) Karin3DController.INPUT_SBS else Karin3DController.INPUT_2D, anaglyph)
-    }
-
-    fun updateFull(mode: Int, depth: Float, swapEye: Boolean, inputKind: Int, anaglyph: Int) {
-        this.mode = mode.coerceIn(0, Karin3DController.MODE_COUNT - 1)
-        this.depth = depth.coerceIn(0f, 1f)
-        this.swapEye = swapEye
-        this.inputKind = inputKind.coerceIn(0, 2)
-        this.stereoInput = this.inputKind != Karin3DController.INPUT_2D
-        this.anaglyph = anaglyph.coerceIn(0, Karin3DController.ANAG_COUNT - 1)
-        program?.updateFull(this.mode, this.depth, this.swapEye, this.inputKind, this.anaglyph)
-    }
 
     fun updateDepth(newDepth: Float) {
         depth = newDepth.coerceIn(0f, 1f)
@@ -84,12 +57,12 @@ class Karin3DEffect(
 class Karin3DShaderProgram(
     context: Context,
     useHdr: Boolean,
-    private var mode: Int,
+    private val mode: Int,
     private var depth: Float,
-    private var swapEye: Boolean,
-    private var inputKind: Int,
-    private var anaglyph: Int,
-    private var demoSplit: Boolean = false,
+    private val swapEye: Boolean,
+    private val inputKind: Int,
+    private val anaglyph: Int,
+    private val demoSplit: Boolean = false,
 ) : BaseGlShaderProgram(useHdr, 1) {
 
     private val glProgram: GlProgram
@@ -152,21 +125,6 @@ class Karin3DShaderProgram(
         }
     }
 
-    fun update(mode: Int, depth: Float, swapEye: Boolean, stereoInput: Boolean) {
-        updateFull(
-            mode, depth, swapEye,
-            if (stereoInput) Karin3DController.INPUT_SBS else Karin3DController.INPUT_2D, anaglyph,
-        )
-    }
-
-    fun updateFull(mode: Int, depth: Float, swapEye: Boolean, inputKind: Int, anaglyph: Int) {
-        this.mode = mode
-        this.depth = depth.coerceIn(0f, 1f)
-        this.swapEye = swapEye
-        this.inputKind = inputKind.coerceIn(0, 2)
-        this.anaglyph = anaglyph.coerceIn(0, 2)
-    }
-
     fun updateDepth(newDepth: Float) { depth = newDepth.coerceIn(0f, 1f) }
 
     companion object {
@@ -203,7 +161,7 @@ class Karin3DShaderProgram(
                     L = (uSwap == 1) ? bot : top;
                     R = (uSwap == 1) ? top : bot;
                 } else {
-                    // SBS (default, también si uInput==0 pero se pide estéreo).
+                    // SBS (uInput==1; uInput==2 se trata arriba).
                     vec3 l = texture2D(uTexSampler, vec2(uv.x * 0.5, uv.y)).rgb;
                     vec3 r = texture2D(uTexSampler, vec2(uv.x * 0.5 + 0.5, uv.y)).rgb;
                     L = (uSwap == 1) ? r : l;
@@ -222,7 +180,9 @@ class Karin3DShaderProgram(
 
             void main() {
                 vec2 uv = vTexCoord;
-                vec3 outc = texture2D(uTexSampler, uv).rgb;
+                // outc solo se muestrea donde se usa: los modos SBS/TAB/VR y
+                // el anaglifo estéreo sobrescribirían el fetch inicial.
+                vec3 outc;
 
                 if (uMode == 1) {
                     // SBS -> 2D: cada mitad ocupa todo el ancho.
@@ -252,6 +212,7 @@ class Karin3DShaderProgram(
                         }
                     } else {
                         // Pseudo-3D desde 2D: paralaje horizontal por luma.
+                        outc = texture2D(uTexSampler, uv).rgb;
                         float luma = dot(outc, vec3(0.299, 0.587, 0.114));
                         float shift = (luma - 0.5) * uDepth * 2.0;
                         vec3 cl = texture2D(uTexSampler, vec2(clamp(uv.x - shift, 0.0, 1.0), uv.y)).rgb;
@@ -267,8 +228,8 @@ class Karin3DShaderProgram(
                     }
                 } else if (uMode == 4) {
                     // 2D -> SBS para Cardboard: misma imagen en ambas mitades.
-                    float half = step(0.5, uv.x);
-                    outc = texture2D(uTexSampler, vec2(uv.x * 2.0 - half, uv.y)).rgb;
+                    float right = step(0.5, uv.x);
+                    outc = texture2D(uTexSampler, vec2(uv.x * 2.0 - right, uv.y)).rgb;
                 } else if (uMode == 5) {
                     // PULFRICH (Fabulojos 1997): la profundidad la pone un
                     // lente OSCURO en un ojo (el ojo oscurecido procesa ~1
@@ -276,6 +237,7 @@ class Karin3DShaderProgram(
                     // profundidad). Sin lentes se ve normal, como debe ser.
                     // La app solo refuerza bordes horizontales en movimiento
                     // (más señal para el efecto) preservando tono.
+                    outc = texture2D(uTexSampler, uv).rgb;
                     vec2 hpx = vec2(1.0 / max(uResolution.x, 1.0), 0.0);
                     vec3 lh = texture2D(uTexSampler, uv - hpx).rgb;
                     vec3 rh = texture2D(uTexSampler, uv + hpx).rgb;
@@ -287,6 +249,9 @@ class Karin3DShaderProgram(
                     float amt = clamp(uDepth * 20.0, 0.0, 0.5) * edge;
                     float nl = clamp(lc0 + (lc0 - (lh0 + rh0) * 0.5) * amt, 0.0, 1.5);
                     outc = clamp(outc * (nl / max(lc0, 0.0001)), 0.0, 1.0);
+                } else {
+                    // Modo desconocido/off: passthrough defensivo.
+                    outc = texture2D(uTexSampler, uv).rgb;
                 }
 
                 if (uDemoSplit == 1 && vTexCoord.x < 0.5) {

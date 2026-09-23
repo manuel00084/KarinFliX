@@ -51,4 +51,22 @@ object CrashLogger {
             File(context.cacheDir, FILE_NAME).readText()
         } catch (_: Exception) { "No log" }
     }
+
+    /** Último cierre registrado (bloque "timestamp / Thread / stack / ---")
+     *  o null si no hubo ninguno todavía. */
+    fun latestCrash(context: Context): String? {
+        return try {
+            val text = File(context.cacheDir, FILE_NAME).readText()
+            if (text.isBlank()) return null
+            val block = text.split("\n---\n").lastOrNull()?.trim().orEmpty()
+            val lines = block.lines()
+            if (lines.size >= 2 && lines[1].startsWith("Thread:")) block else null
+        } catch (_: Exception) { null }
+    }
+
+    fun clear(context: Context) {
+        try {
+            File(context.cacheDir, FILE_NAME).delete()
+        } catch (_: Exception) {}
+    }
 }

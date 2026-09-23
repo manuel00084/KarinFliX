@@ -95,16 +95,16 @@ object VideoStatsHelper {
 
         // ---------- Salida (tras la cadena de efectos) ----------
         val motionReqOn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false)
-        val motionLegacy = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0).coerceIn(0, 3)
+        val motionLegacy = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0).coerceIn(0, 4)
         val motionLabel = shortMotion(
             chainMotionLabel?.takeIf { it.isNotBlank() } ?: motionLegacyLabel(motionLegacy),
         )
-        // Realidad del pipeline: solo INTERP emite cuadros extra (~60 fps).
+        // Realidad del pipeline: solo INTERP/REAL60 emiten cuadros extra (~60 fps).
         // HYBRID/BLEND/DOUBLING son 1:1 (misma cadencia + suavizado).
         // Se usa la etiqueta REAL de la cadena (gama baja fuerza HYBRID
         // aunque prefs pida INTERP); si no hay cadena aún, se usa prefs.
-        val isInterpReal = motionLabel.contains("INTERP", ignoreCase = true) ||
-            (chainMotionLabel.isNullOrBlank() && motionLegacy == 3)
+        val isInterpReal = motionLabel.contains("60", ignoreCase = true) ||
+            (chainMotionLabel.isNullOrBlank() && MotionX2Mode.isRealFps(motionLegacy))
         val finalFps = when {
             !motionReqOn -> vFps
             isInterpReal -> if (srcFps > 0) "%.2f → ~60".format(srcFps) else "~60 fps"
@@ -768,7 +768,9 @@ object VideoStatsHelper {
             out += line
         }
         if (motionOn) {
-            val isInterp = motionMode.contains("INTERP", ignoreCase = true)
+            val isInterp = motionMode.contains("INTERP", ignoreCase = true) ||
+                motionMode.contains("GRID", ignoreCase = true) ||
+                motionMode.contains("60 fps", ignoreCase = true)
             out += if (isInterp) "MotionX2 $motionMode (~60 fps)"
                 else "MotionX2 $motionMode (suavizado)"
         }

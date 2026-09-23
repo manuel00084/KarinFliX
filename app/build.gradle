@@ -40,17 +40,9 @@ android {
         }
     }
 
-    // La feature SixtyFpsInterp (interpolador 60fps) NO se excluye del disco: su archivo
-    // queda intacto en el repo. Solo se omite de la compilación para que este build
-    // pueda compilar e instalar mientras esa feature se termina. Nada más en el repo
-    // la referencia (verificado), así que excluir es seguro.
-    // Cuando la feature esté lista, borrar este bloque sourceSets.
-    sourceSets {
-        main {
-            java.exclude '**/player/sixty/**'
-            kotlin.exclude '**/player/sixty/**'
-        }
-    }
+    // La feature SixtyFpsInterp (interpolador 60 fps reales) YA compila contra
+    // media3 1.9.3: MotionX2Mode.REAL60 la usa como "60 fps reales (GRID)"
+    // experimental, solo ofrecida en gama alta.
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
@@ -87,11 +79,7 @@ android {
     }
 }
 
-// SixtyFpsInterp está en desarrollo y no compila contra media3 1.9.3.
-// Se excluye de TODAS las tareas KotlinCompile (el sourceSets android no basta).
-tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-    exclude('**/player/sixty/**')
-}
+// SixtyFpsInterp ya compila contra media3 1.9.3 (MotionX2Mode.REAL60).
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
@@ -128,15 +116,15 @@ dependencies {
     // implementation 'io.sentry:sentry-android:7.14.0'
 
     // ExoPlayer (Media3) for native video playback
-    implementation 'androidx.media3:media3-exoplayer:1.9.3'
-    implementation 'androidx.media3:media3-exoplayer-hls:1.9.3'
-    implementation 'androidx.media3:media3-ui:1.9.3'
-    implementation 'androidx.media3:media3-ui-leanback:1.9.3'
-    implementation 'androidx.media3:media3-effect:1.9.3'
-    implementation 'androidx.media3:media3-common:1.9.3'
-    implementation 'androidx.media3:media3-datasource-cronet:1.9.3'
-    implementation 'androidx.media3:media3-datasource:1.9.3'
-    implementation 'androidx.media3:media3-database:1.9.3'
+    implementation 'androidx.media3:media3-exoplayer:1.11.0'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.11.0'
+    implementation 'androidx.media3:media3-ui:1.11.0'
+    implementation 'androidx.media3:media3-ui-leanback:1.11.0'
+    implementation 'androidx.media3:media3-effect:1.11.0'
+    implementation 'androidx.media3:media3-common:1.11.0'
+    implementation 'androidx.media3:media3-datasource-cronet:1.11.0'
+    implementation 'androidx.media3:media3-datasource:1.11.0'
+    implementation 'androidx.media3:media3-database:1.11.0'
 
     // Unit tests
     testImplementation 'junit:junit:4.13.2'

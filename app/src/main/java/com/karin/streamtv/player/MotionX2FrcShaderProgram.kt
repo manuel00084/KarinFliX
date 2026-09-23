@@ -235,7 +235,7 @@ class MotionX2FrcShaderProgram(
         )
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
-        return GlTextureInfo(fbo[0], tex[0], 0, w, h)
+        return GlTextureInfo(tex[0], fbo[0], 0, w, h)
     }
 
     private fun deletePool() {
@@ -303,7 +303,11 @@ class MotionX2FrcShaderProgram(
     }
 
     private fun signalReady() {
-        if (freeTextures.size >= MIN_FREE_TO_ACCEPT) {
+        // El pool de salida se crea DENTRO de queueInputFrame (necesita el ancho
+        // del primer cuadro). Si no existe aun, declarar lista la primera vez:
+        // de lo contrario Media3 nunca envia el primer input y la cadena queda
+        // colgada en negro (no hay cuadros que pintar).
+        if (!poolCreated || freeTextures.size >= MIN_FREE_TO_ACCEPT) {
             inputListener?.onReadyToAcceptInputFrame()
         }
     }

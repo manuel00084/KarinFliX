@@ -96,8 +96,8 @@ object AudioDspUi {
             AudioEnhanceConfig.setSurround(c)
             AudioEnhanceConfig.setQuickAdjSurround(c - qaBase.surroundWidth)
         }
-        slider("Potencia general", AudioEnhanceConfig.getMaster(), 0.5f, 2f, { v -> "%.2fx".format(v) }) { v ->
-            val c = v.coerceIn(0.5f, 2f)
+        slider("Potencia general", AudioEnhanceConfig.getMaster(), 0.5f, 4f, { v -> "%.2fx".format(v) }) { v ->
+            val c = v.coerceIn(0.5f, 4f)
             AudioEnhanceConfig.setMaster(c)
             AudioEnhanceConfig.setQuickAdjMaster(c - qaBase.masterGain)
         }
@@ -197,13 +197,13 @@ object AudioDspUi {
         }
         container.addView(powerLabel)
         val powerSeek = SeekBar(context).apply {
-            this.max = 100 // 0.5x..2.0x
-            progress = ((AudioEnhanceConfig.getMaster() - 0.5f) / 1.5f * 100).toInt().coerceIn(0, this.max)
+            this.max = 100 // 0.5x..4.0x
+            progress = ((AudioEnhanceConfig.getMaster() - 0.5f) / 3.5f * 100).toInt().coerceIn(0, this.max)
             isFocusable = true
             isFocusableInTouchMode = true
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val v = 0.5f + progress / 100f * 1.5f
+                    val v = 0.5f + progress / 100f * 3.5f
                     powerLabel.text = powLabel(v)
                     if (fromUser) AudioEnhanceConfig.setMaster(v)
                 }
@@ -215,7 +215,7 @@ object AudioDspUi {
         container.addView(powerSeek)
         powerLabel.text = powLabel(AudioEnhanceConfig.getMaster())
         container.addView(TextView(context).apply {
-            text = "50% – 200% de la ganancia general del procesador de sonido."
+            text = "50% – 400% de la ganancia general del procesador de sonido. El limiter true-peak evita el recorte."
             textSize = 12f
             setTextColor(0xFF90A4AE.toInt())
             setPadding(0, 4, 0, 6)
@@ -234,6 +234,7 @@ object AudioDspUi {
                 AudioEnhanceConfig.Preset.ANIME to "Voz nítida + OST con cuerpo",
                 AudioEnhanceConfig.Preset.SURROUND_ENVOLVENTE to "Surround Envolvente: convierte cualquier fuente (2.0/5.1) en surround real",
                 AudioEnhanceConfig.Preset.DIALOGUE to "Noticias, presentadores y diálogos: voz central, máxima claridad",
+                AudioEnhanceConfig.Preset.BASS_BOOST to "Graves rápidos y con punch: kick y sub separados del muro",
                 AudioEnhanceConfig.Preset.MUSIC to "Música: cuerpo, detalle y estéreo natural",
                 AudioEnhanceConfig.Preset.SPEAKER to "True MaxBass: máximo grave en bocina chica"
             )

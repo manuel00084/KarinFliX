@@ -23,6 +23,7 @@ import com.karin.streamtv.R
 import com.karin.streamtv.model.SiteConfig
 import com.karin.streamtv.scraper.ScraperRegistry
 import com.karin.streamtv.util.AppPreferences
+import com.karin.streamtv.util.CrashLogger
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.onActionKey
 import com.karin.streamtv.util.DiskImageCache
@@ -156,6 +157,7 @@ class MainActivity : FragmentActivity() {
 
             loadHistory()
             loadContinueWatching()
+            maybeShowCrashReport()
         } catch (e: Exception) {
             Log.e("MainActivity", "FATAL onCreate: ${e.message}", e)
             try {
@@ -168,6 +170,33 @@ class MainActivity : FragmentActivity() {
                 finish()
             }
         }
+    }
+
+    // Si la app se cerró la última vez (ej. solo en TV), muestra la causa
+    // real en pantalla la próxima vez que abra, para poder reportarla.
+    private fun maybeShowCrashReport() {
+        val crash = CrashLogger.latestCrash(this) ?: return
+        val density = resources.displayMetrics.density
+        val traceView = TextView(this).apply {
+            text = crash.lineSequence().take(22).joinToString("\n")
+            textSize = 12f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setPadding(24, 24, 24, 24)
+        }
+        val scroll = ScrollView(this).apply {
+            addView(traceView, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                (300 * density).toInt(),
+            ))
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("La app se cerró por un error la última vez")
+            .setMessage("Esto ocurrió en este equipo. Cópialo o mándamelo:\n")
+            .setView(scroll)
+            .setNegativeButton("Borrar") { _, _ -> CrashLogger.clear(this) }
+            .setPositiveButton("Listo", null)
+            .show()
     }
 
     override fun onResume() {

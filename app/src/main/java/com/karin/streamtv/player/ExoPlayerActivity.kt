@@ -1,8 +1,10 @@
 package com.karin.streamtv.player
 
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.view.SurfaceView
 import android.widget.ImageButton
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -26,6 +28,7 @@ import com.karin.streamtv.enhancer.gpu.KarinLightBoostEffect
 import com.karin.streamtv.player.dsp.AudioDspUi
 import com.karin.streamtv.player.dsp.AudioEnhanceConfig
 import com.karin.streamtv.player.dsp.AudioEnhanceProcessor
+import com.karin.streamtv.player.sixty.MotionX2GlesRenderer
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.DeviceProfile
 import com.karin.streamtv.util.PlaylistQueue
@@ -44,6 +47,10 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var dsp: AudioEnhanceProcessor? = null
     private lateinit var playerView: PlayerView
     private var wasPlayingBeforePause = true
+    // Render propio GLES2 de 60 fps (modos MotionX2 INTERP/REAL60): bypass total
+    // del grafo de efectos de Media3. Nulo en el resto de modos.
+    private var ownRenderActive = false
+    private var glesRenderer: MotionX2GlesRenderer? = null
 
     private var currentVideoUrl: String? = null
 
@@ -89,8 +96,23 @@ class ExoPlayerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         // La pantalla no se apaga mientras se ve video.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setContentView(R.layout.activity_exo_player)
+        // Modos MotionX2 de 60 fps reales (INTERP/REAL60): layout con TextureView
+        // propio + PlayerView sin superficie. Sin gate de gama: el render propio
+        // es más barato que el grafo (<=2 pases por vsync) y se honra el modo
+        // pedido explícito. El resto de modos usa el layout original.
+        val mxOrdinal = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
+        ownRenderActive = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false) &&
+            MotionX2Mode.isRealFps(mxOrdinal)
+        setContentView(
+            if (ownRenderActive) R.layout.activity_exo_player_motionx2
+            else R.layout.activity_exo_player,
+        )
         playerView = findViewById(R.id.player_view)
+        if (ownRenderActive) {
+            // El shutter negro del PlayerView taparía nuestro video: transparente.
+            playerView.setShutterBackgroundColor(Color.TRANSPARENT)
+            glesRenderer = MotionX2GlesRenderer()
+        }
         wirePlayerButtons(playerView)
         AudioEnhanceConfig.setAppVolume(AppPreferences.getPlayerVolume())
 
@@ -169,12 +191,39 @@ class ExoPlayerActivity : AppCompatActivity() {
                     if (videoSize.width > 0 && videoSize.height > 0) {
                         osdInputW = videoSize.width
                         osdInputH = videoSize.height
+                        glesRenderer?.setVideoSize(videoSize.width, videoSize.height)
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    glesRenderer?.setPlaying(isPlaying)
+                }
+
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int,
+                ) {
+                    if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                        glesRenderer?.reset()
                     }
                 }
             })
             it.prepare()
             it.playWhenReady = true
             playerView.player = it
+            if (ownRenderActive) {
+                val modeIdx = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
+                val mxMode = MotionX2Mode.values().getOrNull(modeIdx) ?: MotionX2Mode.REAL60
+                val demo = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false)
+                val texView = findViewById<SurfaceView>(R.id.motionx2_surface)
+                glesRenderer?.attach(
+                    texView,
+                    it,
+                    mxMode,
+                    demo,
+                ) { ExoPlayerSettingsHelper.getAspectRatioMode(prefs) }
+            }
         }
     }
 
@@ -207,7 +256,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         }
         // Botón lentes: TECNOLOGÍA 3D. Abre el diálogo 3D directo con
         // rebuildEffects/liveRoute (misma ruta que los ajustes avanzados).
-        pv.findViewById<ImageButton>(R.id.btn_shader)?.apply {
+        pv.findViewById<ImageButton>(R.id.btn_3d)?.apply {
             isEnabled = true
             isClickable = true
             isFocusable = true
@@ -224,8 +273,9 @@ class ExoPlayerActivity : AppCompatActivity() {
             }
         }
         pv.findViewById<ImageButton>(R.id.btn_vision)?.setOnClickListener {
-            // Botón de anteojos: Ayuda de visión (VP a la cadena, propio del
-            // reproductor, no dentro de las Opciones Avanzadas de Video).
+            // Botón de anteojos: Asistencia de visión y audición (visión a la
+            // cadena GL del reproductor, audición al DSP; no vive dentro de las
+            // Opciones Avanzadas de Video).
             VisionAssistHelper.showVisionDialog(
                 activity = this@ExoPlayerActivity,
                 prefs = prefs,
@@ -515,6 +565,22 @@ class ExoPlayerActivity : AppCompatActivity() {
         chainOmitted.clear()
         chainMotionLabel = ""
         chainUpscalerLabel = ""
+        // Render propio GLES2 (modos INTERP/REAL60): el decodificador vuelca
+        // directo a nuestro SurfaceTexture y el vsync dibuja los 60 fps. NO se
+        // llama a setVideoEffects ni siquiera con lista vacía: una lista vacía
+        // (no-nula) TAMBIÉN crea el PlaybackVideoGraphWrapper y su
+        // FinalShaderWrapper descarta los cuadros ("Output surface and size
+        // not set"). Sin llamar queda null = ruta directa del decodificador.
+        // El resto de filtros de imagen se pausan en este modo (una salida).
+        if (ownRenderActive) {
+            val modeIdx = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
+            val mxMode = MotionX2Mode.values().getOrNull(modeIdx) ?: MotionX2Mode.REAL60
+            chainMotionLabel = mxMode.label
+            chainActive.add("MotionX2 ${mxMode.label} (render propio 60fps)")
+            chainOmitted.add("Filtros de imagen (en pausa en este modo)")
+            Log.d("ExoPlayerActivity", "Render propio GLES2 activo: $mxMode, grafo vacío")
+            return
+        }
         // Demo: cada efecto conserva la mitad izquierda intacta y al final
         // solo se pinta la línea. Sin copias entre cuadros: no se desincroniza.
         val effects = mutableListOf<Effect>()
@@ -717,18 +783,23 @@ class ExoPlayerActivity : AppCompatActivity() {
                 addHeavyEffect("Shader:$label", shaderEffect!!)
             }
         }
-        // 6b. Ayuda de visión (botón de anteojos): perfil de accesibilidad en
-        //     UN pase GL, va tras el Shader y antes del 3D (el 3D reformatea
-        //     la salida y no debe teñir el efecto visual).
+        // 6b. Asistencia (botón de anteojos): perfil de accesibilidad.
+        //     Visión → UN pase GL tras el Shader y antes del 3D (el 3D
+        //     reformatea la salida y no debe teñir el efecto visual).
+        //     Audición → corre en el DSP de audio (no ocupa pases GL).
         //     EXENTA del presupuesto de pases: es accesibilidad (un solo pase
         //     barato) y nunca debe quedar "omitida" al activarla el usuario.
         run {
-            if (VisionAssistHelper.isActive(prefs)) {
-                val cfg = VisionAssistHelper.fromPrefs(prefs)
+            val cfg = VisionAssistHelper.fromPrefs(prefs)
+            if (cfg.isActive && cfg.hasVision) {
                 visionEffect = VisionAssistEffect(cfg)
                 effects.add(visionEffect!!)
                 chainActive.add("Visión")
                 Log.d("ExoPlayerActivity", "Visión activa (${VisionAssistHelper.needsLabel(cfg)}), fuera de cupo por accesibilidad")
+            }
+            if (cfg.hasAudSpeech || cfg.hasAudLoss) {
+                chainActive.add("Audición")
+                Log.d("ExoPlayerActivity", "Asistencia de audición activa (voz=${cfg.hasAudSpeech}, agudos=${cfg.hasAudLoss})")
             }
         }
         // 7. Tecnología 3D (botón lentes): reformatea la SALIDA al final de
@@ -738,17 +809,15 @@ class ExoPlayerActivity : AppCompatActivity() {
         //    degradan según modo (el diálogo ya avisa).
         run {
             if (Karin3DController.isActive(prefs)) {
-                val label = Karin3DController.chainLabel(prefs).ifBlank { "3D" }
                 karin3DEffect = Karin3DEffect(
                     mode = Karin3DController.currentMode(prefs),
                     depth = Karin3DController.currentDepth(prefs),
                     swapEye = Karin3DController.isSwapEye(prefs),
-                    stereoInput = Karin3DController.isStereoInput(prefs),
                     demoSplit = demoEnabled,
                     anaglyph = Karin3DController.anaglyphType(prefs),
                     inputKind = Karin3DController.inputKind(prefs),
                 )
-                addHeavyEffect(label, karin3DEffect!!)
+                addHeavyEffect(Karin3DController.chainLabel(prefs), karin3DEffect!!)
                 // Los avisos ⛔/⚠ se muestran en el diálogo 3D y al aplicar;
                 // además se dejan en log para diagnóstico.
                 Karin3DController.compatWarnings(prefs).forEach {
@@ -815,18 +884,22 @@ class ExoPlayerActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         playerView.onResume()
+        glesRenderer?.onActivityResume()
         if (wasPlayingBeforePause) player?.playWhenReady = true
     }
 
     override fun onPause() {
         wasPlayingBeforePause = player?.playWhenReady == true
         player?.playWhenReady = false
+        glesRenderer?.onActivityPause()
         playerView.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        glesRenderer?.detach()
+        glesRenderer = null
         playerView.player = null
         player?.release()
         player = null
