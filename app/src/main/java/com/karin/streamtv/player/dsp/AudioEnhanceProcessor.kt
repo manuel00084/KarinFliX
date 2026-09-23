@@ -173,6 +173,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     // RTA en vivo (medidor de espectro + LUFS) que el UI dibuja.
     private val rta = LiveRta()
 
+    // Scratch estéreo reutilizado: las funciones del camino caliente que antes
+    // devolvían Pair<Double,Double> por muestra generaban ~9 MB/s de basura GC
+    // justo en el hilo de audio (picos de GC = clicks).
+    private val scratch2 = DoubleArray(2)
+
     // LCG para dither TPDF: 5-10x más rápido que kotlin.random.Random.nextDouble()
     private var ditherState = 0xC0FFEE17L
 
@@ -503,9 +508,9 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             if (vsw > 0f) {
                 // Virtualización de altavoces: los diálogos quedan anclados al centro
                 // y el lateral se virtualiza hacia los lados/fondo (engaño 5.1).
-                val pair = vs.process(l0.toDouble(), r0.toDouble(), vsw)
-                l = pair.first
-                r = pair.second
+                vs.process(l0.toDouble(), r0.toDouble(), vsw, scratch2)
+                l = scratch2[0]
+                r = scratch2[1]
             } else {
                 l = l0.toDouble()
                 r = r0.toDouble()
@@ -636,14 +641,14 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
                 feeds[4] = mcBinaural[4].process(-s, params)
                 for (c in 2 until channels) readSample(inputBuffer)
             }
-            val pair = virtual.process(feeds)
+            virtual.process(feeds, scratch2)
             val mg = masterGain * loudness.gain()
             limMaster.setThreshold(0.99)
-            val pl = limMaster.process(pair.first * mg, pair.second * mg)
-            loudness.tap(pl.first, pl.second)
-            rta.process(pl.first, pl.second)
-            writeSample(out, pl.first)
-            writeSample(out, pl.second)
+            limMaster.process(scratch2[0] * mg, scratch2[1] * mg, scratch2)
+            loudness.tap(scratch2[0], scratch2[1])
+            rta.process(scratch2[0], scratch2[1])
+            writeSample(out, scratch2[0])
+            writeSample(out, scratch2[1])
         }
     }
 
@@ -659,9 +664,9 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         // comparten fase L/R → anclados, definidos y con mejor "punch" en bocinas
         // que no pueden separar el extremo inferior del estéreo.
         if (params.subAnchor > 0f) {
-            val pair = subAnchor.process(lo, ro, params.subAnchor.toDouble())
-            lo = pair.first
-            ro = pair.second
+            subAnchor.process(lo, ro, params.subAnchor.toDouble(), scratch2)
+            lo = scratch2[0]
+            ro = scratch2[1]
         }
         if (params.harmonicBass > 0f) {
             val hl = vbL.process(lo)
@@ -732,7 +737,15 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             lo += dr * 0.38 * fk * volumeAmb
             ro += dl * 0.38 * fk * volumeAmb
         }
-        compressStereo(lo, ro, params.compression, res)
+        // compression==0: saltar (la reconstrucción de bandas con ganancia 1
+        // era exactamente la señal, pero costaba 6 biquads + 3 log/pow por
+        // muestra por nada).
+        if (params.compression > 0f) {
+            compressStereo(lo, ro, params.compression, res)
+        } else {
+            res[0] = lo
+            res[1] = ro
+        }
         if (params.loudnessComp) {
             res[0] = loudHpL.process(loudLpL.process(res[0]))
             res[1] = loudHpR.process(loudLpR.process(res[1]))
@@ -805,9 +818,9 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         // (inter-sample) garantiza que nada recorte.
         val mg = masterGain * loudness.gain()
         limMaster.setThreshold(0.99)
-        val pl = limMaster.process(res[0] * mg, res[1] * mg)
-        res[0] = pl.first
-        res[1] = pl.second
+        limMaster.process(res[0] * mg, res[1] * mg, scratch2)
+        res[0] = scratch2[0]
+        res[1] = scratch2[1]
         loudness.tap(res[0], res[1])
         rta.process(res[0], res[1])
     }
@@ -1583,6 +1596,10 @@ private class MonoChain {
     }
 
     private fun compress(x: Double, strength: Float): Double {
+        // compression==0: con strength 0 la salida era exactamente x (bandas
+        // con ganancia 1), pero costaba 2 biquads + 3 log/pow por muestra por
+        // nada — se salta (importante en la ruta binaural: ×5 feeds).
+        if (strength <= 0f) return x
         val ll = compLp.process(x)
         val lh = compHp.process(x)
         val lm = x - ll - lh
@@ -1738,7 +1755,7 @@ class LookaheadLimiterPair {
         prev2R = 0.0
     }
 
-    fun process(l: Double, r: Double): Pair<Double, Double> {
+    fun process(l: Double, r: Double, out: DoubleArray) {
         val ol = bufL[idx]
         val or = bufR[idx]
         bufL[idx] = l
@@ -1756,7 +1773,8 @@ class LookaheadLimiterPair {
         env = if (a > env) a else env * release
         val target = if (env > threshold) threshold / env else 1.0
         gain += (target - gain) * (1 - smooth)
-        return ol * gain to or * gain
+        out[0] = ol * gain
+        out[1] = or * gain
     }
 
     fun reset() {
@@ -1908,7 +1926,7 @@ private class VirtualSpeaker {
         kSm = 0.0
     }
 
-    fun process(l: Double, r: Double, strength: Float): Pair<Double, Double> {
+    fun process(l: Double, r: Double, strength: Float, out: DoubleArray) {
         // Señal lateral bandlimitada (sin graves que "vagarían") y decorrelada.
         val amb = ambLp.process(ambHp.process((l - r) * 0.5))
         val dec = ap.process(amb)
@@ -1931,7 +1949,8 @@ private class VirtualSpeaker {
         val ambL = aL + 0.45 * cR + 0.25 * aRef
         val ambR = aR + 0.45 * cL + 0.25 * aRef
         kSm += (1.0 * strength.toDouble() - kSm) * 0.0006
-        return Pair(l + kSm * ambL, r + kSm * ambR)
+        out[0] = l + kSm * ambL
+        out[1] = r + kSm * ambR
     }
 }
 
@@ -2055,14 +2074,15 @@ private class VirtualSurround {
         )
     }
 
-    fun process(feeds: DoubleArray): Pair<Double, Double> {
+    fun process(feeds: DoubleArray, out: DoubleArray) {
         var ol = 0.0
         var or = 0.0
         for (i in 0 until 5) {
             ol += earsL[i].process(feeds[i])
             or += earsR[i].process(feeds[i])
         }
-        return ol to or
+        out[0] = ol
+        out[1] = or
     }
 
     fun reset() {
@@ -2154,16 +2174,15 @@ private class SubAnchorCenter {
         ready = true
     }
 
-    fun process(l: Double, r: Double, amt: Double): Pair<Double, Double> {
+    fun process(l: Double, r: Double, amt: Double, out: DoubleArray) {
         val bl = if (ready) lpL.process(l) else l
         val br = if (ready) lpR.process(r) else r
         // Mezcla el contenido grave hacia la suma mono (media), manteniendo
         // ligero "aire" estéreo según amt.
         val m = (bl + br) * 0.5
         val k = amt.coerceIn(0.0, 1.0)
-        val newL = l - bl + (bl * (1.0 - k) + m * k)
-        val newR = r - br + (br * (1.0 - k) + m * k)
-        return Pair(newL, newR)
+        out[0] = l - bl + (bl * (1.0 - k) + m * k)
+        out[1] = r - br + (br * (1.0 - k) + m * k)
     }
 
     fun reset() {

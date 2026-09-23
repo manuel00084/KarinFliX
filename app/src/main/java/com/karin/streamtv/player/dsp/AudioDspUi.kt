@@ -555,6 +555,9 @@ object AudioDspUi {
 
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
+            // El hilo de audio solo alimenta el RTA mientras esta vista existe
+            // (ahorro de CPU fijo cuando el medidor no está en pantalla).
+            LiveRta.uiActive = true
             startMeter()
         }
 
@@ -562,6 +565,7 @@ object AudioDspUi {
             super.onDetachedFromWindow()
             running.set(false)
             handler.removeCallbacks(tick)
+            LiveRta.uiActive = false
         }
 
         override fun onDraw(canvas: Canvas) {

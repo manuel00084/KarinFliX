@@ -130,6 +130,10 @@ class MultibandLimiter {
     private val fMid = LookaheadLimiterPair()
     private val fHigh = LookaheadLimiterPair()
     private val fMaster = LookaheadLimiterPair()
+    // Scratch reutilizado: el proceso por muestra NO debe allocar (antes
+    // devolvía Pair<Double,Double> → ~9 MB/s de basura GC en el hilo de audio).
+    private val tA = DoubleArray(2)
+    private val tB = DoubleArray(2)
 
     // Cascadas LR4 (dos Biquad 2º orden en serie) por canal.
     private val lpLowAL = BiquadFilter()
@@ -170,7 +174,7 @@ class MultibandLimiter {
         fMaster.configure(fs, 2f, 100f, 0.99)
     }
 
-    fun process(l: Double, r: Double): Pair<Double, Double> {
+    fun process(l: Double, r: Double, out: DoubleArray) {
         // Bandas (crossovers LR4 en serie)
         val lowL = lpLowBL.process(lpLowAL.process(l))
         val lowR = lpLowBR.process(lpLowAR.process(r))
@@ -179,11 +183,13 @@ class MultibandLimiter {
         val hiL = hpHighBL.process(hpHighAL.process(l))
         val hiR = hpHighBR.process(hpHighAR.process(r))
 
-        // Limitación por banda (linkeada L/R, true-peak)
-        val pl = fLow.process(lowL, lowR)
-        val pm = fMid.process(midL, midR)
-        val ph = fHigh.process(hiL, hiR)
-        return fMaster.process(pl.first + pm.first + ph.first, pl.second + pm.second + ph.second)
+        // Limitación por banda (linkeada L/R, true-peak) sin allocar.
+        fLow.process(lowL, lowR, tA)
+        val sL = tA[0]
+        val sR = tA[1]
+        fMid.process(midL, midR, tB)
+        fHigh.process(hiL, hiR, tA)
+        fMaster.process(sL + tB[0] + tA[0], sR + tB[1] + tA[1], out)
     }
 
     fun setThreshold(t: Double) {
@@ -296,6 +302,11 @@ class LiveRta {
         var current = Snapshot(FloatArray(BAND_COUNT) { -120f }, -160f)
         // Bordes geométricos de las bandas (Hz): [45..90..180..355..707..1414..2828..5657..11314]
         private val EDGE_HZ = intArrayOf(45, 90, 180, 355, 707, 1414, 2828, 5657, 11314)
+        // Solo corre cuando el diálogo RTA está visible: sin esto gastábamos
+        // 16 biquads + LUFS por muestra el 99% del tiempo (el medidor cerrado
+        // no se mira). Coste del RTA en reposo = 0.
+        @Volatile
+        var uiActive = false
     }
 
     private val hp = Array(BAND_COUNT) { BiquadFilter() }
@@ -333,7 +344,7 @@ class LiveRta {
 
     /** Alimentar post-procesamiento (ya con ganancia de master aplicada). */
     fun process(l: Double, r: Double) {
-        if (!ready) return
+        if (!ready || !uiActive) return
         peak[0] = maxOf(peak[0] * freeze, abs(l))
         peak[1] = maxOf(peak[1] * freeze, abs(r))
         val mono = (l + r) * 0.5
