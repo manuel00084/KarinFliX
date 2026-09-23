@@ -35,17 +35,11 @@ object ExoPlayerSettingsHelper {
     const val SHADER_CRT = 1
     const val SHADER_CINE = 2
     const val SHADER_BW = 3
-    const val SHADER_PIXEL = 4
-    const val SHADER_FILM = 5
-    const val SHADER_RETRO = 6
 
     fun shaderTypeName(type: Int): String = when (type) {
         SHADER_CRT -> "CRT"
         SHADER_CINE -> "Cine"
         SHADER_BW -> "B/N"
-        SHADER_PIXEL -> "Pixel"
-        SHADER_FILM -> "Film"
-        SHADER_RETRO -> "Retro Anime"
         else -> "Off"
     }
 
@@ -56,7 +50,7 @@ object ExoPlayerSettingsHelper {
     fun shaderSelection(prefs: SharedPreferences): Pair<Int, Float> {
         if (prefs.contains(KEY_SHADER_EN)) {
             if (!prefs.getBoolean(KEY_SHADER_EN, false)) return SHADER_OFF to 0f
-            val t = prefs.getInt(KEY_SHADER_TYPE, SHADER_CRT).coerceIn(0, 6)
+                val t = prefs.getInt(KEY_SHADER_TYPE, SHADER_CRT).coerceIn(0, 3)
             val s = prefs.getInt(KEY_SHADER_STRENGTH, 50) / 100f
             return t to s.coerceIn(0f, 1f)
         }
@@ -211,7 +205,7 @@ object ExoPlayerSettingsHelper {
             //    si Light Boost está en la cadena, pesado si va solo)
             FeatureEntry(
                 { "4. Upscaler • ${onOff(prefs.getBoolean(KEY_UPSCALER_EN, false))}" },
-                "Reescala el video (FSR o Anime4K) con afilado propio. En gama alta, FSR afila el resultado real en 2 pases; en media/baja usa un solo pase para mantener los fps.",
+                "Reescala el video (KarinSuperRes, FSR o Anime4K) con afilado propio. En gama alta, Karin HiRes y FSR afilan el resultado real en 2 pases; en media/baja usan un solo pase para mantener los fps.",
                 android.R.drawable.ic_menu_zoom,
             ) {
                 showUpscalerDialog(
@@ -258,25 +252,6 @@ object ExoPlayerSettingsHelper {
                         prefs.edit().putBoolean(KEY_DEMO_EN, en).apply()
                         player?.let { onEffectsChanged(it) }
                     },
-                )
-            },
-            // 7. Tecnología 3D: SBS/TAB a 2D, anaglifo y VR Cardboard.
-            //    Va al final de la cadena (reformatea la salida).
-            FeatureEntry(
-                {
-                    val active = Karin3DController.isActive(prefs)
-                    val mode = Karin3DController.currentMode(prefs)
-                    "7. Modo 3D ${Karin3DController.modeName(mode, prefs)} • ${onOff(active)}"
-                },
-                "Estereoscopía: convierte SBS/TAB a 2D, emite anaglifo rojo-cian o duplica a VR Cardboard. Un pase GL al final de la cadena.",
-                android.R.drawable.ic_menu_camera,
-            ) {
-                show3DDialog(
-                    activity = activity,
-                    prefs = prefs,
-                    player = player,
-                    onEffectsChanged = onEffectsChanged,
-                    onLiveDepth = { v -> onStrengthChanged("td_depth", v) },
                 )
             },
         )
@@ -361,9 +336,6 @@ object ExoPlayerSettingsHelper {
             SHADER_CRT -> "CRT retro: curvatura + scanlines + rejilla RGB + viñeta."
             SHADER_CINE -> "Cine: viñeta suave + grano de película animado."
             SHADER_BW -> "Blanco y negro con contraste."
-            SHADER_PIXEL -> "Pixel Art: bloques gruesos estilo retro."
-            SHADER_FILM -> "Film: weave + fade + flicker + grano de celuloide."
-            SHADER_RETRO -> "Retro Anime 80s/90s: lavado fílmico + halación + grano cálido."
             else -> "Sin acabado (imagen tal cual sale de la cadena)."
         }
         fun pct(v: Float) = "Intensidad: ${(v * 100).toInt()}%"
@@ -376,17 +348,11 @@ object ExoPlayerSettingsHelper {
         val rbCrt = RadioButton(activity).apply { text = "CRT" }
         val rbCine = RadioButton(activity).apply { text = "Cine" }
         val rbBw = RadioButton(activity).apply { text = "B/N" }
-        val rbPixel = RadioButton(activity).apply { text = "Pixel" }
-        val rbFilm = RadioButton(activity).apply { text = "Film" }
-        val rbRetro = RadioButton(activity).apply { text = "Retro Anime" }
         fun syncRadios() {
             rbOff.isChecked = type == SHADER_OFF
             rbCrt.isChecked = type == SHADER_CRT
             rbCine.isChecked = type == SHADER_CINE
             rbBw.isChecked = type == SHADER_BW
-            rbPixel.isChecked = type == SHADER_PIXEL
-            rbFilm.isChecked = type == SHADER_FILM
-            rbRetro.isChecked = type == SHADER_RETRO
             desc.text = typeDesc(type)
         }
         fun pick(t: Int) {
@@ -402,18 +368,12 @@ object ExoPlayerSettingsHelper {
         rbCrt.setOnClickListener { pick(SHADER_CRT) }
         rbCine.setOnClickListener { pick(SHADER_CINE) }
         rbBw.setOnClickListener { pick(SHADER_BW) }
-        rbPixel.setOnClickListener { pick(SHADER_PIXEL) }
-        rbFilm.setOnClickListener { pick(SHADER_FILM) }
-        rbRetro.setOnClickListener { pick(SHADER_RETRO) }
         val typeRow = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             addView(rbOff)
             addView(rbCrt)
             addView(rbCine)
             addView(rbBw)
-            addView(rbPixel)
-            addView(rbFilm)
-            addView(rbRetro)
         }
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -472,6 +432,7 @@ object ExoPlayerSettingsHelper {
             val mode = prefs.getInt(KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
             if (mode == SuperResolutionEffect.MODE_FSR) return 0.55f
             if (mode == SuperResolutionEffect.MODE_ANIME4K) return 0.5f
+            if (mode == SuperResolutionEffect.MODE_KARIN) return 0.55f
             return 1f
         }
         var dep = if (custom) prefs.getInt(KEY_DEPIXEL_STRENGTH, 60) / 100f else master
@@ -658,9 +619,11 @@ object ExoPlayerSettingsHelper {
 
     /**
      * UPSCALER de calidad: sustituye el upsample bilineal de restauración
-     * por FSR (default: EASU+RCAS, la mejor calidad por consumo, sin halos)
-     * o Anime4K rápido (doG, tuneado para anime).
-     * Reescala 2x. Gratis cuando sustituye la pasada de restauraciÃ³n de
+     * por FSR (default: EASU+RCAS, buena calidad por consumo),
+     * KarinSuperRes (experimental: upscaler propio, nitido sin halos ni
+     * ruido, DRS-aware, variante por gama) o Anime4K rápido (doG, tuneado
+     * para anime).
+     * Reescala 2x. Gratis cuando sustituye la pasada de restauración de
      * Light Boost half-res; si va solo, ocupa presupuesto de efectos pesados.
      */
     private fun showUpscalerDialog(
@@ -673,9 +636,10 @@ object ExoPlayerSettingsHelper {
     ) {
         var enabled = prefs.getBoolean(KEY_UPSCALER_EN, false)
         var mode = prefs.getInt(KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
-        // Modos válidos: FSR (0) y Anime4K (2). El antiguo Bicúbico (1),
-        // KarinSuperRes (3) y cualquier valor obsoleto caen a FSR.
-        if (mode != SuperResolutionEffect.MODE_FSR &&
+        // Modos válidos: FSR (0), KarinSuperRes (3) y Anime4K (2). El antiguo
+        // Bicúbico (1) y cualquier valor obsoleto caen a FSR (default estable).
+        if (mode != SuperResolutionEffect.MODE_KARIN &&
+            mode != SuperResolutionEffect.MODE_FSR &&
             mode != SuperResolutionEffect.MODE_ANIME4K
         ) {
             mode = SuperResolutionEffect.MODE_FSR
@@ -691,8 +655,12 @@ object ExoPlayerSettingsHelper {
             }
         }
 
+        val modeKarin = RadioButton(activity).apply {
+            text = "KarinSuperRes (Experimental)"
+            isChecked = mode == SuperResolutionEffect.MODE_KARIN
+        }
         val modeFsr = RadioButton(activity).apply {
-            text = "FSR (Recomendado)"
+            text = "FSR"
             isChecked = mode == SuperResolutionEffect.MODE_FSR
         }
         val modeAnime = RadioButton(activity).apply {
@@ -701,13 +669,16 @@ object ExoPlayerSettingsHelper {
         }
         fun selectMode(m: Int) {
             mode = m
+            modeKarin.isChecked = m == SuperResolutionEffect.MODE_KARIN
             modeFsr.isChecked = m == SuperResolutionEffect.MODE_FSR
             modeAnime.isChecked = m == SuperResolutionEffect.MODE_ANIME4K
         }
+        modeKarin.setOnClickListener { selectMode(SuperResolutionEffect.MODE_KARIN) }
         modeFsr.setOnClickListener { selectMode(SuperResolutionEffect.MODE_FSR) }
         modeAnime.setOnClickListener { selectMode(SuperResolutionEffect.MODE_ANIME4K) }
         val modeRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = LinearLayout.VERTICAL
+            addView(modeKarin)
             addView(modeFsr)
             addView(modeAnime)
         }
@@ -737,8 +708,9 @@ object ExoPlayerSettingsHelper {
             addView(
                 TextView(activity).apply {
                     text = "Reescala 2x con calidad:\n" +
-                        "· FSR de AMD (default): edge-adaptive con afilado adaptativo; la " +
-                        "mejor calidad por consumo.\n" +
+                        "· FSR de AMD (default): edge-adaptive con afilado adaptativo.\n" +
+                        "· KarinSuperRes (experimental): upscaler propio, nitido, sin halos " +
+                        "ni ruido, DRS-aware, variante por gama (ECO/CRISP/HiRes).\n" +
                         "· Anime4K rápido: afilado tuneado para anime.\n" +
                         "Al restaurar la pasada de Light Boost a media resolución, " +
                         "este upscaler la sustituye sin pases extra; solo (sin Light " +
@@ -1055,14 +1027,25 @@ object ExoPlayerSettingsHelper {
         var depth = (prefs.getInt(KEY_3D_DEPTH, Karin3DController.DEFAULT_DEPTH) / 100f)
             .coerceIn(0f, 1f)
         var swapEye = prefs.getBoolean(KEY_3D_SWAP, false)
+        // Sin TAB: si había uno guardado, migra a SBS al abrir.
         var inputKind = Karin3DController.inputKind(prefs)
+            .let { if (it == Karin3DController.INPUT_TAB) Karin3DController.INPUT_SBS else it }
         var anaglyph = Karin3DController.anaglyphType(prefs)
+        // Modos visibles: Anaglifo, VR y Pulfrich (sin Apagado, SBS/TAB→2D
+        // ni Polarizado). modeValues mapea índice visible -> MODE_*.
+        val modeValues = intArrayOf(
+            Karin3DController.MODE_ANAGLYPH,
+            Karin3DController.MODE_VR_SBS,
+            Karin3DController.MODE_PULFRICH,
+        )
         if (!enabled) {
-            // Si estaba apagado mostramos el último modo elegido si existe,
-            // si no SBS→2D como punto de partida.
+            // Si estaba apagado mostramos el último modo visible si existe,
+            // si no Anaglifo como punto de partida.
             val last = prefs.getInt(KEY_3D_MODE, Karin3DController.MODE_OFF)
                 .coerceIn(0, Karin3DController.MODE_COUNT - 1)
-            mode = if (last != Karin3DController.MODE_OFF) last else Karin3DController.MODE_SBS_2D
+            mode = if (last in modeValues) last else Karin3DController.MODE_ANAGLYPH
+        } else if (mode !in modeValues) {
+            mode = Karin3DController.MODE_ANAGLYPH
         }
 
         val switch = Switch(activity).apply {
@@ -1074,26 +1057,47 @@ object ExoPlayerSettingsHelper {
             }
         }
         val titles = arrayOf(
-            "⏻ Apagado",
-            "SBS → 2D (lado-a-lado)",
-            "TAB → 2D (arriba-abajo)",
             "Anaglifo (lentes bicolor)",
             "VR Cardboard (2D → SBS)",
-            "Polarizado (TV pasivo, entrelazado)",
+            "Pulfrich (Fabulojos 1997)",
         )
         val descs = arrayOf(
-            "Sin proceso 3D.",
-            "El video trae izq|der. Se muestra un ojo a pantalla completa.",
-            "El video trae sup/inf. Se muestra un ojo a pantalla completa.",
-            "Rojo-cian, rojo-azul o rojo-verde (abajo). Con SBS/TAB mezcla ambos ojos; con 2D genera pseudo-3D.",
+            "Con SBS mezcla ambos ojos; con 2D genera pseudo-3D. Elige tus lentes abajo.",
             "Duplica el 2D para visor VR. Sin seguimiento de cabeza.",
-            "Líneas pares/impares para TV polarizado pasivo. Requiere fuente SBS o TAB.",
+            "Homenaje Fabulojos: ponte un lente oscuro en un ojo y busca movimiento lateral. Sin lentes se ve normal.",
         )
         val radios = mutableListOf<RadioButton>()
-        // pending mapea 1:1 a Karin3DController.MODE_* (0=off..5=polarizado).
-        var pending = if (enabled) mode else 0
+        // pending es ÍNDICE visible (0..2); modeValues lo traduce a MODE_*.
+        var pending = modeValues.indexOf(mode).coerceAtLeast(0)
+        // Lentes anaglifo anidados bajo la opción Anaglifo (se construyen
+        // antes para poder insertarlos en la lista y mostrarlos solo ahí).
+        val anagNames = arrayOf("Rojo-cian", "Rojo-azul", "Rojo-verde")
+        val anagRadios = mutableListOf<RadioButton>()
+        fun syncAnag() {
+            anagRadios.forEachIndexed { i, r -> r.isChecked = i == anaglyph }
+        }
+        val anagBox = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(56, 0, 0, 8)
+        }
+        anagNames.forEachIndexed { i, name ->
+            val rb = RadioButton(activity).apply {
+                text = name
+                isChecked = i == anaglyph
+            }
+            anagRadios.add(rb)
+            rb.setOnClickListener {
+                anaglyph = i
+                syncAnag()
+            }
+            anagBox.addView(rb)
+        }
         fun syncRadios() {
             radios.forEachIndexed { i, r -> r.isChecked = i == pending }
+            // Las 3 opciones de lentes solo se ven con Anaglifo elegido.
+            anagBox.visibility =
+                if (modeValues[pending.coerceIn(modeValues.indices)] == Karin3DController.MODE_ANAGLYPH) android.view.View.VISIBLE
+                else android.view.View.GONE
         }
         val listBox = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -1123,42 +1127,19 @@ object ExoPlayerSettingsHelper {
                 syncRadios()
             }
             listBox.addView(row)
-        }
-
-        // Sub-tipo de lentes anaglifo (solo aplica al modo Anaglifo).
-        val anagTitle = TextView(activity).apply {
-            text = "Lentes anaglifo:"
-            textSize = 13f
-            setPadding(0, 16, 0, 4)
-        }
-        val anagNames = arrayOf("Rojo-cian", "Rojo-azul", "Rojo-verde")
-        val anagRadios = mutableListOf<RadioButton>()
-        fun syncAnag() {
-            anagRadios.forEachIndexed { i, r -> r.isChecked = i == anaglyph }
-        }
-        val anagBox = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        anagNames.forEachIndexed { i, name ->
-            val rb = RadioButton(activity).apply {
-                text = name
-                isChecked = i == anaglyph
+            if (modeValues[i] == Karin3DController.MODE_ANAGLYPH) {
+                listBox.addView(anagBox)
             }
-            anagRadios.add(rb)
-            rb.setOnClickListener {
-                anaglyph = i
-                syncAnag()
-            }
-            anagBox.addView(rb)
         }
+        syncRadios()
 
-        // Fuente estéreo (aplica a Anaglifo y Polarizado; SBS/TAB→2D la fuerzan).
+        // Fuente estéreo (aplica a Anaglifo).
         val inputTitle = TextView(activity).apply {
             text = "Fuente del video 3D:"
             textSize = 13f
             setPadding(0, 16, 0, 4)
         }
-        val inputNames = arrayOf("2D (pseudo-3D)", "SBS (lado-a-lado)", "TAB (arriba-abajo)")
+        val inputNames = arrayOf("2D (pseudo-3D)", "SBS (lado-a-lado)")
         val inputRadios = mutableListOf<RadioButton>()
         fun syncInput() {
             inputRadios.forEachIndexed { i, r -> r.isChecked = i == inputKind }
@@ -1179,7 +1160,7 @@ object ExoPlayerSettingsHelper {
             inputBox.addView(rb)
         }
 
-        fun pct(v: Float) = "Profundidad: ${(v * 100).toInt()}% (paralaje anaglifo/polarizado-2D)"
+        fun pct(v: Float) = "Profundidad: ${(v * 100).toInt()}% (paralaje anaglifo / realce Pulfrich)"
         val depthLabel = TextView(activity).apply { text = pct(depth) }
         val depthSeek = SeekBar(activity).apply {
             max = 100
@@ -1197,7 +1178,7 @@ object ExoPlayerSettingsHelper {
         })
 
         val swapBox = Switch(activity).apply {
-            text = "Swap: ojo derecho / imagen inferior / líneas impares"
+            text = "Swap: ojo derecho (no aplica en Pulfrich)"
             isChecked = swapEye
             setOnCheckedChangeListener { _, isChecked -> swapEye = isChecked }
         }
@@ -1225,8 +1206,6 @@ object ExoPlayerSettingsHelper {
                 setPadding(0, 16, 0, 8)
             })
             addView(listBox)
-            addView(anagTitle)
-            addView(anagBox)
             addView(inputTitle)
             addView(inputBox)
             addView(depthLabel)
@@ -1239,7 +1218,7 @@ object ExoPlayerSettingsHelper {
             .setTitle("Tecnología 3D")
             .setView(ScrollView(activity).apply { addView(layout) })
             .setPositiveButton("Aplicar") { _, _ ->
-                val finalMode = pending.coerceIn(0, Karin3DController.MODE_COUNT - 1)
+                val finalMode = modeValues[pending.coerceIn(modeValues.indices)]
                 val effInput = when (finalMode) {
                     Karin3DController.MODE_SBS_2D -> Karin3DController.INPUT_SBS
                     Karin3DController.MODE_TAB_2D -> Karin3DController.INPUT_TAB

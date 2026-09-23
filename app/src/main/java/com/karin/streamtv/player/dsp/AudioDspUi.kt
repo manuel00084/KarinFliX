@@ -1,6 +1,12 @@
 ﻿package com.karin.streamtv.player.dsp
 
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.os.Handler
+import android.os.Looper
+import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -384,13 +390,57 @@ object AudioDspUi {
 
         header("Acciones rápidas")
         actionButton("Ajuste rápido (graves, agudos, voz, espacial, potencia)") { showQuickAdjust(context) }
+        actionButton("A/B: alternar original/procesado") {
+            val wasOn = AudioEnhanceConfig.isEnabled()
+            AudioEnhanceConfig.setEnabled(!wasOn)
+            Toast.makeText(context, if (wasOn) "A · Procesado" else "B · Original", Toast.LENGTH_SHORT).show()
+        }
         actionButton("Restablecer todo al preset") {
             AudioEnhanceConfig.setEq10(null)
             AudioEnhanceConfig.setHeadphone(null)
             AudioEnhanceConfig.setParametric(null)
             AudioEnhanceConfig.clearQuickAdjust()
+            // Restaurar también los gains/params del preset: antes solo se
+            // limpiaba el EQ y bass/treble/surround seguían como los dejó el
+            // usuario, fuera del preset seleccionado.
+            AudioEnhanceConfig.applyPreset(AudioEnhanceConfig.preset())
             Toast.makeText(context, "Sonido restablecido", Toast.LENGTH_SHORT).show()
         }
+
+        header("0 · Mastering")
+        container.addView(CheckBox(context).apply {
+            text = "Volumen nivelado (EBU R128 / LUFS): serie y películas al mismo volumen"
+            isChecked = AudioEnhanceConfig.getLoudnessNorm() > 0f
+            setPadding(0, 8, 0, 8)
+            setOnCheckedChangeListener { _, _ ->
+                AudioEnhanceConfig.setLoudnessNorm(if (isChecked) 0.5f else 0f)
+            }
+        })
+        container.addView(CheckBox(context).apply {
+            text = "DDC: corrección por medición del altavoz (DRC)"
+            isChecked = AudioEnhanceConfig.getDdc()
+            setPadding(0, 8, 0, 8)
+            setOnCheckedChangeListener { _, _ ->
+                AudioEnhanceConfig.setDdc(isChecked)
+            }
+        })
+        container.addView(CheckBox(context).apply {
+            text = "HRTF medido para auriculares (binaural real)"
+            isChecked = AudioEnhanceConfig.getUseHrtf()
+            setPadding(0, 8, 0, 8)
+            setOnCheckedChangeListener { _, _ ->
+                AudioEnhanceConfig.setUseHrtf(isChecked)
+            }
+        })
+
+        // RTA en vivo (⑥): espectro en 8 bandas + LUFS, ~10 Hz.
+        // El tick arranca en onAttachedToWindow (no aquí: la vista aún no está
+        // en la jerarquía y el dialog podría no llegar a mostrarse).
+        val rtaView = RtaView(context)
+        container.addView(rtaView, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (context.resources.displayMetrics.density * 72).toInt()
+        ))
 
         header("1 · Surround de campo")
         slider("Campo (0-100%)", (field * 100).toInt().coerceIn(0, 100)) { pr ->
@@ -432,6 +482,18 @@ object AudioDspUi {
                 AudioEnhanceConfig.setLoudnessComp(isChecked)
             }
         })
+        header("6 · Multichannel / 5.1·7.1")
+        slider("Retardo del surround (0-30 ms)", (AudioEnhanceConfig.getRearDelayMs()).toInt().coerceIn(0, 30)) { pr ->
+            AudioEnhanceConfig.setRearDelayMs(pr.toFloat())
+        }
+        container.addView(CheckBox(context).apply {
+            text = "Invertir fase de traseros/laterales"
+            isChecked = AudioEnhanceConfig.getRearPhaseInvert()
+            setPadding(0, 8, 0, 8)
+            setOnCheckedChangeListener { _, _ ->
+                AudioEnhanceConfig.setRearPhaseInvert(isChecked)
+            }
+        })
         container.addView(CheckBox(context).apply {
             text = "Resonancia de superficie (caja/mesa, preset Altavoz)"
             isChecked = AudioEnhanceConfig.getSurfaceResonance()
@@ -461,5 +523,77 @@ object AudioDspUi {
             }
             .setNegativeButton("Cerrar", null)
             .show()
+    }
+
+    /**
+     * Medidor de espectro + LUFS en vivo (⑥). Dibuja 8 barritas y el valor
+     * LUFS actuales leyendo LiveRta.current cada ~150 ms; se auto-pausa al
+     * desacoplarse de la ventana (sin fugas de Handler).
+     */
+    internal class RtaView(context: Context) : View(context) {
+        private val handler = Handler(Looper.getMainLooper())
+        private val lowPaint = Paint().apply { color = Color.argb(90, 0, 255, 60) }
+        private val midPaint = Paint().apply { color = Color.argb(90, 255, 210, 40) }
+        private val highPaint = Paint().apply { color = Color.argb(90, 255, 70, 40) }
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(220, 200, 210, 230)
+            textSize = 11f
+        }
+        private val running = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun startMeter() {
+            if (running.getAndSet(true)) return
+            handler.post(tick)
+        }
+
+        private val tick = object : Runnable {
+            override fun run() {
+                invalidate()
+                if (running.get()) handler.postDelayed(this, 150L)
+            }
+        }
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            startMeter()
+        }
+
+        override fun onDetachedFromWindow() {
+            super.onDetachedFromWindow()
+            running.set(false)
+            handler.removeCallbacks(tick)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val snap = LiveRta.current
+            val bands = snap.bands
+            var maxDb = -120f
+            for (b in bands) if (b > maxDb) maxDb = b
+            if (maxDb < -70f) maxDb = -24f // sin señal
+            val n = bands.size
+            val w = width - 8f * (n - 1)
+            val bw = w / n
+            val top = 8f
+            val bottom = height - 22f
+            val h = bottom - top
+            for (i in 0 until n) {
+                val db = bands[i]
+                val frac = ((db - (maxDb - 38f)) / 38f).coerceIn(0f, 1f)
+                val barH = if (db > -70f) frac * h else 0f
+                val x = 4f + i * (bw + 8f)
+                val paint = when {
+                    frac < 0.5f -> lowPaint
+                    frac < 0.8f -> midPaint
+                    else -> highPaint
+                }
+                canvas.drawRect(x, bottom - barH, x + bw, bottom, paint)
+            }
+            // Locale.US: sin él, en locales con coma decimal el formato salía
+            // raro; con lufs de reposo (−160) se muestra "—" en vez de −160.0.
+            val lufsTxt = if (snap.lufs < -60f) "LUFS  —"
+            else String.format(java.util.Locale.US, "%.1f  LUFS", snap.lufs)
+            canvas.drawText(lufsTxt, 6f, bottom + 20f, textPaint)
+        }
     }
 }

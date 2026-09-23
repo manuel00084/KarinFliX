@@ -80,6 +80,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             speechClarity = raw.speechClarity,
             masterGain = raw.masterGain,
             useSystemSpatializer = raw.useSystemSpatializer,
+            loudnessNorm = raw.loudnessNorm,
+            ddc = raw.ddc,
+            useHrtf = raw.useHrtf,
+            rearDelayMs = raw.rearDelayMs,
+            rearPhaseInvert = raw.rearPhaseInvert,
         )
 
     private fun effectiveParams(raw: AudioEnhanceConfig.Params): AudioEnhanceConfig.Params {
@@ -137,6 +142,37 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     private var dryIdxR = 0
     private var dryFill = 0
 
+    // DDC (corrección por medición del altavoz): convolución con la inversa
+    // regularizada de la medida. Opcional (params.ddc).
+    private var ddcConvL = DdcFilter()
+    private var ddcConvR = DdcFilter()
+    private var ddcFill = 0
+    private var ddcApplied = false
+    // Crossfade seco→DDC tras el llenado: sin él, el salto de seco a la señal
+    // convolucionada era un escalón (clic en cada seek/activación).
+    private var ddcCross = 0
+
+    // HRTF medido para binaural (loader externo) + ITD físico de respaldo.
+    private var hrtf = Hrtf(null)
+    private var hrtfLoaded = false
+
+    // Setters externos (setHrtfData/setSpeakerIr) llegan desde la UI/hilo de
+    // trabajo; se aplican en el próximo queueInput para no tocar estado desde
+    // otro hilo mientras el de audio lo lee.
+    @Volatile private var pendingHrtfRaw: String? = null
+    @Volatile private var pendingHrtfSet = false
+    @Volatile private var pendingSpeakerIr: FloatArray? = null
+    @Volatile private var pendingSpeakerFs = 0
+    @Volatile private var forceReconfig = false
+    private var speakerIrCustom = false
+    private var failedParams: AudioEnhanceConfig.Params? = null
+    // ¿La IR actual sigue residente en el convolver? Evita regenerar la IR
+    // (alloc + clic por dryFill=0) cada vez que solo cambia irMix.
+    private var irResident = false
+
+    // RTA en vivo (medidor de espectro + LUFS) que el UI dibuja.
+    private val rta = LiveRta()
+
     // LCG para dither TPDF: 5-10x más rápido que kotlin.random.Random.nextDouble()
     private var ditherState = 0xC0FFEE17L
 
@@ -156,6 +192,10 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     private var compSmooth = 0.0
 
     private var masterGain = 1.0
+    // Compensación espacial a volumen bajo: +0..0.6× a la mezcla de reverb y
+    // campo/crosstalk cuando el usuario baja el volumen, para que la envuelta
+    // no se hunda bajo la portadora centrada (a pleno volumen = 1, sin tocar).
+    private var volumeAmb = 1f
 
     // Tubo (saturación analógica): DC-block por canal para eliminar el offset
     // que genera la asimetría (armónico par) del wave-shaper.
@@ -201,6 +241,27 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     // Limiter maestro con lookahead (~2 ms) y detección linkeada estéreo.
     // Reemplaza al softLimit: anticipa los picos gracias al buffer de retardo.
     private val limStereo = LookaheadLimiterPair()
+
+    // Limiter multibanda (LR4 + true-peak por banda): substituye al maestro de
+    // banda completa en las rutas estéreo/binaural. Evita que un golpe de graves
+    // comprima los agudos y permite releases por banda.
+    private val limMaster = MultibandLimiter()
+
+    // Nivelación de sonoridad EBU R128: AGC lento sobre la LUFS de salida.
+    private val loudness = LoudnessAgc()
+
+    // Sobremuestreo 2× anti-aliasing de las saturaciones estéreo principales:
+    // clamp del VirtualBass y tanh del exciter (el racional del tubo usa los
+    // aaTube*). La ruta mono (MonoChain) tiene sus propias instancias *_M.
+    private val aaBassL = Over2x { u -> bassClamp(u) }
+    private val aaBassR = Over2x { u -> bassClamp(u) }
+    private val aaTubeL = Over2x()
+    private val aaTubeR = Over2x()
+    private val aaExciteL = Over2x { u -> tanh(u * 4.0) * 0.4 }
+    private val aaExciteR = Over2x { u -> tanh(u * 4.0) * 0.4 }
+
+    // Dither + noise-shaping para la cuantización 24/32-bit en writeSample.
+    private val ditherNs = NoiseShaper()
 
     // Rutas multicanal / virtual
     private var mcCenter = MonoChain()
@@ -293,7 +354,10 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             else -> Route.STEREO
         }
         outChannels = when (route) {
-            Route.UPMIX, Route.MULTI -> 6
+            // MULTI pasa el acondicionado al HAL/Spatializer: 8 canales si la
+            // fuente es realmente 7.1 (7.1 passthrough), 6 si es 5.1.
+            Route.MULTI -> if (channels >= 8) 8 else 6
+            Route.UPMIX -> 6
             else -> 2
         }
         reverbL = SimpleReverb(sampleRate, 0)
@@ -308,6 +372,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         fieldIdxL = 0
         fieldIdxR = 0
         limStereo.configure(sampleRate, 2f, 100f, 0.95)
+        limMaster.configure(sampleRate)
         lastParams = null
         lastVolume = Float.NaN
         lastIr = AudioEnhanceConfig.IrPreset.NONE
@@ -320,6 +385,15 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         dryIdxL = 0
         dryIdxR = 0
         dryFill = 0
+        // Estado ligado al sampleRate: sin resetear aquí, ddcApplied impedía
+        // recomputar la FIR tras cambiar de fs y la IR residente no se
+        // recargaba para la nueva frecuencia.
+        ddcApplied = false
+        ddcFill = 0
+        ddcCross = 0
+        irResident = false
+        lastIr = AudioEnhanceConfig.IrPreset.NONE
+        if (!speakerIrCustom) speakerMeasurement = tvSpeakerMeasurement(sampleRate)
         mcCenter = MonoChain()
         mcRearL = MonoChain()
         mcRearR = MonoChain()
@@ -334,6 +408,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         rearDelayR.configure((0.023 * sampleRate).toInt().coerceAtLeast(4))
         lfeLp.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 120f, 0f, 0.707f)
         centerLp.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 600f, 0f, 0.707f)
+        rta.configure(sampleRate)
         Log.i("AudioEnhance", "config fs=$sampleRate ch=$channels out=$outChannels ruta=$route enc=$encoding")
         return AudioProcessor.AudioFormat(sampleRate, outChannels, encoding)
     }
@@ -349,19 +424,49 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             bypass(inputBuffer)
             return
         }
+        // Setters externos: se aplican aquí y fuerzan reconfiguración.
+        if (pendingHrtfSet) {
+            pendingHrtfSet = false
+            hrtf = Hrtf(pendingHrtfRaw)
+            hrtfLoaded = !hrtf.isEmpty
+            forceReconfig = true
+        }
+        val spIr = pendingSpeakerIr
+        if (spIr != null) {
+            pendingSpeakerIr = null
+            speakerMeasurement = spIr
+            speakerIrCustom = true
+            if (ddcApplied) {
+                val fs = if (pendingSpeakerFs > 0) pendingSpeakerFs else sampleRate
+                ddcConvL.setMeasurement(spIr, fs, 0.7f)
+                ddcConvR.setMeasurement(spIr, fs, 0.7f)
+                ddcFill = 0
+                ddcCross = 0
+            }
+            forceReconfig = true
+        }
         val raw = AudioEnhanceConfig.params()
         val params = effectiveParams(raw)
         val volume = AudioEnhanceConfig.getPlaybackVolume()
-        if (params != lastParams || volume != lastVolume) {
+        if (params !== failedParams && (params != lastParams || volume != lastVolume || forceReconfig)) {
+            forceReconfig = false
+            var ok = true
             try {
                 ensureConfigured(params, volume)
             } catch (t: Throwable) {
-                // Nunca dejar que una reconfiguración (alocaciones IR, etc.) tumbe el hilo de audio.
-                Log.w("AudioEnhance", "reconfigure fallo: ${t.message}")
+                // Nunca dejar que una reconfiguración tumbe el hilo de audio, y
+                // NO cachear el fallo como éxito (antes lastParams se escribía
+                // igual y el error se tragaba sin reintento).
+                ok = false
+                failedParams = params
+                Log.w("AudioEnhance", "reconfigure fallo (sin reintento hasta el próximo cambio): ${t.message}")
             }
-            lastParams = params
-            lastVolume = volume
-            Log.i("AudioEnhance", "dsp activo preset=${params.preset} bass=${params.bassGain} treble=${params.trebleGain} subbass=${params.subBassGain} presence=${params.presenceGain} surround=${params.surroundWidth} field=${params.fieldSurround} exciter=${params.exciterAmount} harmbass=${params.harmonicBass} compression=${params.compression} reverb=${params.reverbMix} master=${params.masterGain} tube=${params.tubeDrive} dynbass=${params.dynamicBass} peq=${params.parametricEq?.size ?: 0} ir=${params.irType} eq10=${params.eq10 != null} ruta=$route vol=$volume")
+            if (ok) {
+                failedParams = null
+                lastParams = params
+                lastVolume = volume
+                Log.i("AudioEnhance", "dsp activo preset=${params.preset} bass=${params.bassGain} treble=${params.trebleGain} subbass=${params.subBassGain} presence=${params.presenceGain} surround=${params.surroundWidth} field=${params.fieldSurround} exciter=${params.exciterAmount} harmbass=${params.harmonicBass} compression=${params.compression} reverb=${params.reverbMix} master=${params.masterGain} tube=${params.tubeDrive} dynbass=${params.dynamicBass} peq=${params.parametricEq?.size ?: 0} ir=${params.irType} eq10=${params.eq10 != null} ruta=$route vol=$volume")
+            }
         }
         masterGain = params.masterGain.toDouble()
         val bytesPerSample = bytesPerSample()
@@ -412,8 +517,23 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         }
     }
 
+    // Clipping suave CONTINUO. La forma anterior (x/(1+(|x|-2))*0.5 solo si
+    // |x|>2) saltaba de 2.0 a ~1.0 (−6 dB) justo en el umbral = clic audible.
+    // Esta: f(2)=2, crece hacia el techo 3, y f'(2)=1 (sin kink).
+    private fun squash(x: Double): Double {
+        val a = abs(x)
+        if (a <= 2.0) return x
+        val s = 2.0 + (a - 2.0) / (1.0 + (a - 2.0))
+        return if (x < 0.0) -s else s
+    }
+
     private fun processMulti(params: AudioEnhanceConfig.Params, inputBuffer: ByteBuffer, out: ByteBuffer, frames: Int) {
         val res = doubleArrayOf(0.0, 0.0)
+        val hasSides = channels >= 8 && outChannels >= 8
+        // Inversión de fase trasera (⑨): alinear/diferenciar los surrounds.
+        val inv = if (params.rearPhaseInvert) -1.0 else 1.0
+        val lg = loudness.gain()
+        val readChans = if (hasSides) 8 else 6
         for (f in 0 until frames) {
             val l0 = readSample(inputBuffer)
             val r0 = readSample(inputBuffer)
@@ -421,27 +541,45 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             val lfe0 = readSample(inputBuffer)
             val bl0 = readSample(inputBuffer)
             val br0 = readSample(inputBuffer)
+            // 7.1 real: los canales laterales (SL/SR) ya vienen en la fuente; se
+            // tratan como traseros y pasan hasta la salida (passthrough real).
+            val sl0 = if (hasSides) readSample(inputBuffer) else 0.0
+            val sr0 = if (hasSides) readSample(inputBuffer) else 0.0
+            // Consumir SIEMPRE el resto de la fuente (p. ej. 7 canales: se
+            // leen 6 y hay que descartar el 7º). Antes solo se descartaban
+            // 8..channels y con exactamente 7 canales un sample quedaba sin
+            // consumir: TODOS los frames posteriores se desfasaban por canal.
+            for (c in readChans until channels) readSample(inputBuffer)
             tonalStereo(params, l0.toDouble(), r0.toDouble(), res)
-            var c = mcCenter.process(c0.toDouble(), params)
-            var bl = mcRearL.process(bl0.toDouble(), params)
-            var br = mcRearR.process(br0.toDouble(), params)
+            var c = mcCenter.process(c0.toDouble(), params, lg)
+            var bl = mcRearL.process(bl0.toDouble(), params, lg)
+            var br = mcRearR.process(br0.toDouble(), params, lg)
             var lfe = lfeLp.process(lfe0.toDouble())
-            if (c * c > 4.0) c = c / (1.0 + (abs(c) - 2.0)) * 0.5
-            if (lfe * lfe > 4.0) lfe = lfe / (1.0 + (abs(lfe) - 2.0)) * 0.5
-            if (bl * bl > 4.0) bl = bl / (1.0 + (abs(bl) - 2.0)) * 0.5
-            if (br * br > 4.0) br = br / (1.0 + (abs(br) - 2.0)) * 0.5
+            c = squash(c)
+            lfe = squash(lfe)
+            bl = squash(bl)
+            br = squash(br)
+            // LFE/sides salen con la misma masterGain/loudness que el resto
+            // (antes salían "secos" y el AGC solo actuaba en los fronts).
             writeSample(out, res[0])
             writeSample(out, res[1])
             writeSample(out, c)
-            writeSample(out, lfe)
-            writeSample(out, bl)
-            writeSample(out, br)
-            for (c in 6 until channels) readSample(inputBuffer)
+            writeSample(out, (lfe * masterGain * lg).coerceIn(-1.0, 1.0))
+            writeSample(out, bl * inv)
+            writeSample(out, br * inv)
+            if (hasSides) {
+                val sl = squash(sl0.toDouble())
+                val sr = squash(sr0.toDouble())
+                writeSample(out, (sl * inv * masterGain * lg).coerceIn(-1.0, 1.0))
+                writeSample(out, (sr * inv * masterGain * lg).coerceIn(-1.0, 1.0))
+            }
         }
     }
 
     private fun processUpmix(params: AudioEnhanceConfig.Params, inputBuffer: ByteBuffer, out: ByteBuffer, frames: Int) {
         val res = doubleArrayOf(0.0, 0.0)
+        val inv = if (params.rearPhaseInvert) -1.0 else 1.0
+        val lg = loudness.gain()
         for (f in 0 until frames) {
             val l0 = readSample(inputBuffer)
             val r0 = if (mono) l0 else readSample(inputBuffer)
@@ -450,23 +588,19 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             val c = centerLp.process(m) * 1.0
             val lf = l0.toDouble() - c * 0.5
             val rf = r0.toDouble() - c * 0.5
-            var lfe = lfeLp.process(m) * 0.5
-            var ls = rearDelayL.process(s) * 0.9
-            var rs = rearDelayR.process(-s) * 0.9
+            val lfe = squash(lfeLp.process(m) * 0.5)
+            val ls = rearDelayL.process(s) * 0.9
+            val rs = rearDelayR.process(-s) * 0.9
             tonalStereo(params, lf, rf, res)
-            var cc = mcCenter.process(c, params)
-            var bl = mcRearL.process(ls, params)
-            var br = mcRearR.process(rs, params)
-            if (cc * cc > 4.0) cc = cc / (1.0 + (abs(cc) - 2.0)) * 0.5
-            if (lfe * lfe > 4.0) lfe = lfe / (1.0 + (abs(lfe) - 2.0)) * 0.5
-            if (bl * bl > 4.0) bl = bl / (1.0 + (abs(bl) - 2.0)) * 0.5
-            if (br * br > 4.0) br = br / (1.0 + (abs(br) - 2.0)) * 0.5
+            val cc = squash(mcCenter.process(c, params, lg))
+            val bl = squash(mcRearL.process(ls, params, lg))
+            val br = squash(mcRearR.process(rs, params, lg))
             writeSample(out, res[0])
             writeSample(out, res[1])
             writeSample(out, cc)
-            writeSample(out, lfe)
-            writeSample(out, bl)
-            writeSample(out, br)
+            writeSample(out, (lfe * masterGain * lg).coerceIn(-1.0, 1.0))
+            writeSample(out, bl * inv)
+            writeSample(out, br * inv)
             for (c in 2 until channels) readSample(inputBuffer)
         }
     }
@@ -483,7 +617,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
                 val br0 = readSample(inputBuffer)
                 feeds[0] = mcBinaural[0].process(l0.toDouble(), params)
                 feeds[1] = mcBinaural[1].process(r0.toDouble(), params)
-                feeds[2] = mcBinaural[2].process(c0.toDouble() + lfe0.toDouble() * 0.3, params)
+                feeds[2] = mcBinaural[2].process(c0.toDouble() + lfeLp.process(lfe0.toDouble()) * 0.3, params)
                 feeds[3] = mcBinaural[3].process(bl0.toDouble(), params)
                 feeds[4] = mcBinaural[4].process(br0.toDouble(), params)
                 for (c in 6 until channels) readSample(inputBuffer)
@@ -503,8 +637,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
                 for (c in 2 until channels) readSample(inputBuffer)
             }
             val pair = virtual.process(feeds)
-            limStereo.setThreshold(0.97)
-            val pl = limStereo.process(pair.first * masterGain, pair.second * masterGain)
+            val mg = masterGain * loudness.gain()
+            limMaster.setThreshold(0.99)
+            val pl = limMaster.process(pair.first * mg, pair.second * mg)
+            loudness.tap(pl.first, pl.second)
+            rta.process(pl.first, pl.second)
             writeSample(out, pl.first)
             writeSample(out, pl.second)
         }
@@ -514,7 +651,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         var lo = l
         var ro = r
         if (params.reverbMix > 0f) {
-            val rm = params.reverbMix.toDouble() * 0.8
+            val rm = params.reverbMix.toDouble() * 0.8 * volumeAmb
             reverbL?.let { lo += rm * it.process(lo) }
             reverbR?.let { ro += rm * it.process(ro) }
         }
@@ -528,9 +665,9 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         }
         if (params.harmonicBass > 0f) {
             val hl = vbL.process(lo)
-            lo += bassBoost(params.harmonicBass * vbL.gainFactor(), hl)
+            lo += aaBassL.process(params.harmonicBass * vbL.gainFactor() * hl)
             val hr = vbR.process(ro)
-            ro += bassBoost(params.harmonicBass * vbR.gainFactor(), hr)
+            ro += aaBassR.process(params.harmonicBass * vbR.gainFactor() * hr)
         }
         // Beat Boost: realza el golpe percuativo del bombo (kick) sobre el muro
         // armónico. El kick es una ráfaga (transient) dentro de la banda de
@@ -540,15 +677,23 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             lo = beatL.process(lo)
             ro = beatR.process(ro)
         }
-        lo = excite(lo, exciteLpL, params.exciterAmount)
-        ro = excite(ro, exciteLpR, params.exciterAmount)
+        if (params.exciterAmount > 0f) {
+            val eat = params.exciterAmount.toDouble()
+            lo += eat * 0.7 * aaExciteL.process(lo - exciteLpL.process(lo))
+            ro += eat * 0.7 * aaExciteR.process(ro - exciteLpR.process(ro))
+        }
         for (i in 0 until eqBands) {
             lo = eqL[i].process(lo)
             ro = eqR[i].process(ro)
         }
         if (params.tubeDrive > 0f) {
-            lo = tubeDrive(lo, tubeDcL, params.tubeDrive)
-            ro = tubeDrive(ro, tubeDcR, params.tubeDrive)
+            val d = params.tubeDrive.toDouble()
+            val g = 1.0 + 2.2 * d
+            val a = 0.22 * d
+            val b = 1.8 * d
+            val mk = 1.0 / (1.0 + 0.35 * d)
+            lo = tubeDcL.process(aaTubeL.processTube(lo * g, a, b)) * mk
+            ro = tubeDcR.process(aaTubeR.processTube(ro * g, a, b)) * mk
         }
         for (i in paramEqL.indices) {
             lo = paramEqL[i].process(lo)
@@ -584,8 +729,8 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             fieldDelayR[fieldIdxR] = ro
             fieldIdxL = (fieldIdxL + 1) % fieldDelayMax
             fieldIdxR = (fieldIdxR + 1) % fieldDelayMax
-            lo += dr * 0.38 * fk
-            ro += dl * 0.38 * fk
+            lo += dr * 0.38 * fk * volumeAmb
+            ro += dl * 0.38 * fk * volumeAmb
         }
         compressStereo(lo, ro, params.compression, res)
         if (params.loudnessComp) {
@@ -627,14 +772,44 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             res[0] = dryL + irMix * convL.process(res[0])
             res[1] = dryR + irMix * convR.process(res[1])
         }
-        // Limiter maestro con lookahead (linkeado L/R): reemplaza al softLimit.
-        // Techo FIJO (~ -0.3 dBTP): ya no se baja al subir masterGain, porque la
-        // detección true-peak (inter-sample) garantiza que nada recorte. Así el
-        // masterGain funciona como pre-ganancia pura: más volumen SIN distorsión.
-        limStereo.setThreshold(0.97)
-        val pl = limStereo.process(res[0] * masterGain, res[1] * masterGain)
+        // DDC: corrección por medición del altavoz. Con volución con la inversa
+        // regularizada de la IR medida, justo antes del limiting maestro (como un
+        // Dirac/Sonarworks "in-line"). Latencia = un bloque de FFT igual al del
+        // escenario IR; durante el llenado pasa directo (10 ms, imperceptible).
+        if (ddcApplied && ddcConvL.isReady) {
+            val lat = ddcConvL.latencySamples()
+            // SIEMPRE alimentar el convolver: antes, durante el llenado no se
+            // procesaba y cada seek dejaba ~10 ms de silencio (clic). La salida
+            // es seco durante el llenado y luego un crossfade corto a la señal
+            // corregida (evita el escalón seco→DDC).
+            val wl = ddcConvL.process(res[0])
+            val wr = ddcConvR.process(res[1])
+            if (ddcFill < lat) {
+                ddcFill++
+            } else {
+                val xf = (0.006 * sampleRate).toInt().coerceAtLeast(1)
+                if (ddcCross < xf) {
+                    ddcCross++
+                    val w = ddcCross.toDouble() / xf
+                    res[0] = res[0] * (1.0 - w) + wl * w
+                    res[1] = res[1] * (1.0 - w) + wr * w
+                } else {
+                    res[0] = wl
+                    res[1] = wr
+                }
+            }
+        }
+        // Limiter maestro multibanda con lookahead (linkeado L/R + LR4): sustituye
+        // al clásico de banda completa en la ruta estéreo. Techo FIJO (~ -0.09 dBTP):
+        // ya no se baja al subir masterGain, porque la detección true-peak
+        // (inter-sample) garantiza que nada recorte.
+        val mg = masterGain * loudness.gain()
+        limMaster.setThreshold(0.99)
+        val pl = limMaster.process(res[0] * mg, res[1] * mg)
         res[0] = pl.first
         res[1] = pl.second
+        loudness.tap(res[0], res[1])
+        rta.process(res[0], res[1])
     }
 
     private fun compressStereo(l: Double, r: Double, strength: Float, res: DoubleArray) {
@@ -720,12 +895,22 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
                     writeSample(out, rf)
                 }
                 channels > 2 && outChannels == 6 -> {
-                    for (c in 0 until 6) writeSample(out, readSample(inputBuffer).toDouble())
-                    for (c in 6 until channels) readSample(inputBuffer)
+                    // Antes leía 6 muestras fijas: con entradas de 3/4/5 canales
+                    // consumía de más (BufferUnderflow) y desfasaba el resto.
+                    val take = minOf(6, channels)
+                    for (c in 0 until take) writeSample(out, readSample(inputBuffer).toDouble())
+                    for (c in take until 6) writeSample(out, 0.0)
+                    for (c in take until channels) readSample(inputBuffer)
                 }
                 else -> {
-                    for (c in 0 until channels) writeSample(out, readSample(inputBuffer).toDouble())
-                    for (c in channels until outChannels) writeSample(out, 0.0)
+                    // outChannels==2 con 3/4/5ch: consumir TODA la entrada y
+                    // escribir solo 2 muestras (antes escribía `channels` samples
+                    // en un buffer de 2 → BufferOverflow).
+                    val l = readSample(inputBuffer).toDouble()
+                    val r = readSample(inputBuffer).toDouble()
+                    writeSample(out, l)
+                    writeSample(out, r)
+                    for (c in 2 until channels) readSample(inputBuffer)
                 }
             }
         }
@@ -734,6 +919,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
 
     private fun ensureConfigured(params: AudioEnhanceConfig.Params, volume: Float) {
         val gains = params.eq10?.copyOf() ?: AudioEnhanceConfig.deriveEq10(params)
+        volumeAmb = 1f + 0.6f * (1f - volume.coerceIn(0.05f, 1f))
         // Compensación de sonoridad para bocinas chicas a volumen bajo: si el
         // usuario tiene activado loudnessComp, los shelves de abajo ya lo hacen;
         // solo aplicamos el boost por eq10 cuando loudnessComp está apagado,
@@ -782,6 +968,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         clarityR.configure(sampleRate, params.spectralClarity)
         duckL.configure(sampleRate, params.explosionDucking)
         duckR.configure(sampleRate, params.explosionDucking)
+        // Retardo de canal trasero/lateral configurable (⑨): alineación temporal
+        // o espaciado de ambiente (Haas). L y R+3 ms para que la imagen no colapse.
+        val rd = (params.rearDelayMs * 0.001 * sampleRate).toInt().coerceAtLeast(4)
+        rearDelayL.configure(rd)
+        rearDelayR.configure((rd + 0.003 * sampleRate).toInt().coerceAtLeast(4))
         // EQ: bocinas humildes (TV/celular) renderizan 5 bandas al centro del rango
         // útil (menos fase acumulada, menos resonancia en driver barato); el
         // resto usa las 10 bandas completas. Los datos de eq10 siempre se
@@ -831,15 +1022,22 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         compHp.configure(BiquadFilter.Kind.HIGHPASS, sampleRate, 3200f, 0f, 0.707f)
         compLpR.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 220f, 0f, 0.707f)
         compHpR.configure(BiquadFilter.Kind.HIGHPASS, sampleRate, 3200f, 0f, 0.707f)
+        loudness.configure(sampleRate, params.loudnessNorm)
 
         // EQ paramétrica (curvas AutoEQ importadas)
         val peq = params.parametricEq
         if (peq.isNullOrEmpty()) {
-            paramEqL = Array(0) { BiquadFilter() }
-            paramEqR = Array(0) { BiquadFilter() }
+            if (paramEqL.isNotEmpty()) {
+                paramEqL = Array(0) { BiquadFilter() }
+                paramEqR = Array(0) { BiquadFilter() }
+            }
         } else {
-            paramEqL = Array(peq.size) { BiquadFilter() }
-            paramEqR = Array(peq.size) { BiquadFilter() }
+            // Reutilizar si el tamaño coincide: se ejecuta en cada reconfigure
+            // y realinear en el hilo de audio era churn puro.
+            if (paramEqL.size != peq.size) {
+                paramEqL = Array(peq.size) { BiquadFilter() }
+                paramEqR = Array(peq.size) { BiquadFilter() }
+            }
             val maxF = 0.45f * sampleRate
             for (i in peq.indices) {
                 val f = minOf(peq[i].freqHz, maxF)
@@ -852,24 +1050,101 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         mcRearL.configure(sampleRate, gains, 0f, params.reverbMix * 1.4f, params.compression, params.dynamicBass, params.parametricEq, volume, params.loudnessComp, scAmt, params.masterGain)
         mcRearR.configure(sampleRate, gains, 0f, params.reverbMix * 1.4f, params.compression, params.dynamicBass, params.parametricEq, volume, params.loudnessComp, scAmt, params.masterGain)
         for (i in 0 until 5) {
-            mcBinaural[i].configure(sampleRate, gains, 0f, params.reverbMix * 0.5f, params.compression, params.dynamicBass, params.parametricEq, volume, params.loudnessComp, scAmt, params.masterGain)
+            // Sin máster aquí: los finals binaurales aplican masterGain una sola
+            // vez (evita doble ganancia/limiter que ahogaba la envuelta a bajo
+            // volumen). El limiter propio de cada feed sigue protegiendo.
+            mcBinaural[i].configure(sampleRate, gains, 0f, params.reverbMix * 0.5f, params.compression, params.dynamicBass, params.parametricEq, volume, params.loudnessComp, scAmt, 1.0f)
         }
 
         val ir = params.irType
-        if (ir != lastIr || params.irMix != lastIrMix) {
+        val wantIr = ir != AudioEnhanceConfig.IrPreset.NONE && params.irMix > 0f
+        // Regenerar SOLO si cambia el tipo de IR (o si no está residente).
+        // Antes `|| params.irMix != lastIrMix` regeneraba la IR con solo mover
+        // el slider de mezcla → alloc + dryFill=0 = clic en el control.
+        if (wantIr && (!irResident || ir != lastIr)) {
+            val pair = ImpulseResponses.pair(ir, sampleRate)
+            convL.setImpulseResponse(pair.first)
+            convR.setImpulseResponse(pair.second)
+            dryFill = 0
+            irResident = true
             lastIr = ir
-            lastIrMix = params.irMix
-            if (ir != AudioEnhanceConfig.IrPreset.NONE && params.irMix > 0f) {
-                val pair = ImpulseResponses.pair(ir, sampleRate)
-                convL.setImpulseResponse(pair.first)
-                convR.setImpulseResponse(pair.second)
-                dryFill = 0
-                Log.i("AudioEnhance", "IR cargado: $ir mix=${params.irMix} len=${pair.first.size}")
-            } else {
-                convL.setImpulseResponse(FloatArray(0))
-                convR.setImpulseResponse(FloatArray(0))
-            }
+            Log.i("AudioEnhance", "IR cargado: $ir mix=${params.irMix} len=${pair.first.size}")
+        } else if (!wantIr && irResident) {
+            convL.setImpulseResponse(FloatArray(0))
+            convR.setImpulseResponse(FloatArray(0))
+            irResident = false
+            lastIr = AudioEnhanceConfig.IrPreset.NONE
         }
+        lastIrMix = params.irMix
+        configureDdc(params)
+        configureHrtf(params)
+    }
+
+    // DDC: si el usuario lo activa, calcula la inversa regularizada de la medida.
+    // Sin medición real (hook setSpeakerIr), se usa una medida procedimental del
+    // driver chico de TV (resonancia ~95 Hz + rodilla de alta): la inversa la
+    // aplana suavemente. Siempre Mild (strength 0.7) y reversible con A/B.
+    private fun configureDdc(params: AudioEnhanceConfig.Params) {
+        if (params.ddc && !ddcApplied) {
+            val meas = speakerMeasurement
+            ddcConvL.setMeasurement(meas, sampleRate, 0.7f)
+            ddcConvR.setMeasurement(meas, sampleRate, 0.7f)
+            ddcApplied = true
+            ddcFill = 0
+            Log.i("AudioEnhance", "DDC activo: corrigiendo IR medida de ${meas.size} taps")
+        } else if (!params.ddc && ddcApplied) {
+            ddcConvL.clear()
+            ddcConvR.clear()
+            ddcApplied = false
+            ddcFill = 0
+        }
+    }
+
+    // HRTF medido: si hay datos parseados (setHrtfData) y useHrtf está activo,
+    // reconstruye el renderizador binaural con esos parámetros; si no hay datos,
+    // cae al ITD físico de Woodworth + perfiles de pinna (respaldo). Reconstruir
+    // solo cuando el fit cambia (una vez por configuración).
+    private fun configureHrtf(params: AudioEnhanceConfig.Params) {
+        val want = params.useHrtf && hrtfLoaded
+        val desired = if (want) hrtf else null
+        // Comparar por IDENTIDAD del objeto HRTF (no una flag booleana): si la
+        // UI cambia los datos con useHrtf=true, la flag no se levantaba y el
+        // renderizador viejo se quedaba. onConfigure crea `virtual` nuevo
+        // (measured=null), así que también reconstruye tras un cambio de fs.
+        if (virtual.measured !== desired) {
+            virtual = VirtualSurround()
+            virtual.measured = desired
+            virtual.configure(sampleRate)
+            Log.i("AudioEnhance", "HRTF: ${if (want) "medido (${hrtf.size} fuentes)" else "ITD Woodworth"}")
+        }
+    }
+
+    // Reemplaza la medición real del altavoz (IR medida con micrófono). Debe
+    // llamarse antes de activar DDC; se aplica en el próximo queueInput.
+    fun setSpeakerIr(ir: FloatArray, fs: Int) {
+        pendingSpeakerIr = ir.copyOf()
+        pendingSpeakerFs = fs
+        forceReconfig = true
+    }
+
+    // Alimenta el HRTF medido (TSV) desde la app (assets/archivo). null = limpia.
+    fun setHrtfData(raw: String?) {
+        pendingHrtfRaw = raw
+        pendingHrtfSet = true
+        forceReconfig = true
+    }
+
+    private var speakerMeasurement: FloatArray = tvSpeakerMeasurement(48000)
+
+    private fun tvSpeakerMeasurement(fs: Int): FloatArray {
+        val len = (0.020 * fs).toInt()
+        val ir = FloatArray(len)
+        val w = 2.0 * Math.PI * 95.0 / fs
+        val rate = 28.0
+        for (n in 0 until len) {
+            ir[n] = (Math.exp(-(n.toDouble() / fs) * rate) * Math.sin(w * n)).toFloat()
+        }
+        return ir
     }
 
     private fun bytesPerSample(): Int = when (encoding) {
@@ -896,13 +1171,22 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         when (encoding) {
             C.ENCODING_PCM_FLOAT -> out.putFloat(v.toFloat())
             C.ENCODING_PCM_24BIT -> {
-                val q = Math.round(v * 8388608.0).toInt().coerceIn(-8388608, 8388607)
+                // Dither TPDF (±1 LSB) + noise-shaping F-weighted de 4º orden:
+                // en 24-bit el LSB ronda -138 dBFS, pero el shaping desplaza el
+                // error de cuantización fuera de la banda más sensible (> 4 kHz).
+                val s = v * 8388608.0 + (nextDither() - nextDither()) * 0.5
+                val shaped = ditherNs.shaped(s)
+                val q = Math.round(shaped).toInt().coerceIn(-8388608, 8388607)
+                ditherNs.pushError(shaped, q.toDouble())
                 out.put((q and 0xFF).toByte())
                 out.put(((q shr 8) and 0xFF).toByte())
                 out.put(((q shr 16) and 0xFF).toByte())
             }
             C.ENCODING_PCM_32BIT -> {
-                val q = Math.round(v * 2147483648.0).coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+                val s = v * 2147483648.0 + (nextDither() - nextDither()) * 0.5
+                val shaped = ditherNs.shaped(s)
+                val q = Math.round(shaped).coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+                ditherNs.pushError(shaped, q.toDouble())
                 out.putInt(q)
             }
             else -> {
@@ -918,6 +1202,15 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
 
     override fun onFlush() {
         ditherState = 0xC0FFEE17L
+        ditherNs.reset()
+        aaBassL.reset()
+        aaBassR.reset()
+        aaTubeL.reset()
+        aaTubeR.reset()
+        aaExciteL.reset()
+        aaExciteR.reset()
+        limMaster.reset()
+        loudness.reset()
         for (b in eqL) b.reset()
         for (b in eqR) b.reset()
         vbL.reset()
@@ -930,6 +1223,10 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         for (b in paramEqL) b.reset()
         for (b in paramEqR) b.reset()
         limStereo.reset()
+        ddcConvL.reset()
+        ddcConvR.reset()
+        ddcFill = 0
+        rta.reset()
         loudLpL.reset()
         loudLpR.reset()
         loudHpL.reset()
@@ -984,8 +1281,12 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     }
 }
 
-private fun bassBoost(amt: Double, harm: Double): Double {
-    val boost = amt * harm
+private fun bassBoost(amt: Double, harm: Double): Double = bassClamp(amt * harm)
+
+// Clamp de techo del boost de graves (puro, sin estado): se aplica con 2× de
+// sobremuestreo en [aaBassL]/[aaBassR]/[aaBassM] para que el doblado del techo
+// (una no linealidad) no pliegue armónicos en la banda media.
+private fun bassClamp(boost: Double): Double {
     val a = abs(boost)
     // Techo más permisivo que el antiguo 0.35: permite que el VirtualBass aporte
     // un bajo percibido real en bocinas chicas. Lo acompañan el SubAnchor (graves
@@ -1121,6 +1422,10 @@ private class VirtualBass {
     private val lp = BiquadFilter()
     private val smooth = BiquadFilter()
     private val hp = BiquadFilter()
+    // Rectificación |x| genera armónicos 2f, 4f... hasta el infinito. Con 2×
+    // de sobremuestreo el plegado de los armónicos queda eliminado ANTES de
+    // llegar al decimador (fuente principal de aliasing en el MaxxBass).
+    private val aaRect = Over2x { abs(it) }
     private var dynamic = true
     private var env = 0.0
     private var dynGain = 1.0
@@ -1142,7 +1447,7 @@ private class VirtualBass {
 
     fun process(x: Double): Double {
         val bass = lp.process(x)
-        val rect = smooth.process(abs(bass))
+        val rect = smooth.process(aaRect.process(bass))
         val a = abs(rect)
         env = if (a > env) env * attack + (1 - attack) * a else env * release + (1 - release) * a
         if (dynamic) {
@@ -1162,32 +1467,14 @@ private class VirtualBass {
         lp.reset()
         smooth.reset()
         hp.reset()
+        aaRect.reset()
         env = 0.0
         dynGain = 1.0
     }
 }
 
-// Wave-shaper de triodo: saturación suave y asimétrica (genera armónico par,
-// el "calor" del tubo) con companding racional (v + a·v²)/(1 + b·v²). El DC
-// generado por la asimetría se elimina con un highpass; drive=0 es bypass puro.
-private fun tubeDrive(x: Double, dc: BiquadFilter, drive: Float): Double {
-    if (drive <= 0f) return x
-    val g = 1.0 + 2.2 * drive.toDouble()
-    val a = 0.22 * drive.toDouble()
-    val b = 1.8 * drive.toDouble()
-    val v = g * x
-    val y = (v + a * v * v) / (1.0 + b * v * v)
-    val makeup = 1.0 / (1.0 + 0.35 * drive.toDouble())
-    return dc.process(y) * makeup
-}
-
-private fun excite(x: Double, lp: BiquadFilter, amt: Float): Double {
-    if (amt <= 0.0f) return x
-    val lpOut = lp.process(x)
-    val high = x - lpOut
-    val shaped = tanh(high * 4.0) * 0.4
-    return x + amt * 0.7 * shaped
-}
+// (tubeDrive y excite se aplican ahora con sobremuestreo 2× vía Over2x
+//  - aaTube* y aaExcite* - para eliminar el aliasing de sus no linealidades.)
 
 private class MonoChain {
     val eq = Array(10) { BiquadFilter() }
@@ -1195,6 +1482,11 @@ private class MonoChain {
     val exciteLp = BiquadFilter()
     var reverb = SimpleReverb(48000)
     private val tubeDc = BiquadFilter()
+    // Sobremuestreo 2× anti-aliasing de las etapas no lineales de esta cadena
+    // mono (centro/rear/binaural), análogo a aaBassL/R, aaTubeL/R, aaExciteL/R.
+    private val aaBassM = Over2x { u -> bassClamp(u) }
+    private val aaTubeM = Over2x()
+    private val aaExciteM = Over2x { u -> tanh(u * 4.0) * 0.4 }
     private var peq = Array(0) { BiquadFilter() }
     private val lim = LookaheadLimiter()
     private val loudLp = BiquadFilter()
@@ -1207,6 +1499,10 @@ private class MonoChain {
     private var compAttack = 0.0
     private var compRelease = 0.0
     private var compSmooth = 0.0
+    // Refuerzo de ambiente a volumen bajo (+0..0.6×), para que la sala de esta
+    // cadena (centro/rear/binaural) no desaparezca al bajar el volumen.
+    private var ambBias = 1.0
+    private var reverbFs = 0
 
     fun configure(
         fs: Int,
@@ -1221,7 +1517,12 @@ private class MonoChain {
         speech: Float,
         masterGain: Float
     ) {
-        reverb = SimpleReverb(fs)
+        // No recrear la reverb si el fs no cambió: se llama en cada reconfigure
+        // y realinear en el hilo de audio era churn puro.
+        if (reverbFs != fs) {
+            reverb = SimpleReverb(fs)
+            reverbFs = fs
+        }
         compAttack = Math.exp(-1.0 / (0.010 * fs))
         compRelease = Math.exp(-1.0 / (0.150 * fs))
         compSmooth = Math.exp(-1.0 / (0.025 * fs))
@@ -1235,9 +1536,9 @@ private class MonoChain {
         exciteLp.configure(BiquadFilter.Kind.LOWPASS, fs, 1400f, 0f, 0.707f)
         tubeDc.configure(BiquadFilter.Kind.HIGHPASS, fs, 25f, 0f, 0.707f)
         if (parametric.isNullOrEmpty()) {
-            peq = Array(0) { BiquadFilter() }
+            if (peq.isNotEmpty()) peq = Array(0) { BiquadFilter() }
         } else {
-            peq = Array(parametric.size) { BiquadFilter() }
+            if (peq.size != parametric.size) peq = Array(parametric.size) { BiquadFilter() }
             val maxF = 0.45f * fs
             for (i in parametric.indices) {
                 val f = minOf(parametric[i].freqHz, maxF)
@@ -1245,6 +1546,7 @@ private class MonoChain {
             }
         }
         lim.configure(fs, 2f, 100f, (0.95 / masterGain).coerceIn(0.5, 0.99))
+        ambBias = 1.0 + 0.6 * (1.0 - volume.coerceIn(0.05f, 1f))
         val loud = if (loudnessComp) (1.0f - volume.coerceIn(0f, 1f)).coerceIn(0f, 1f) else 0f
         loudLp.configure(BiquadFilter.Kind.LOWSHELF, fs, 120f, 9f * loud, 0.7f)
         loudHp.configure(BiquadFilter.Kind.HIGHSHELF, fs, 6000f, 6f * loud, 0.7f)
@@ -1253,22 +1555,31 @@ private class MonoChain {
         sc.configure(fs, speech)
     }
 
-    fun process(x: Double, params: AudioEnhanceConfig.Params): Double {
+    fun process(x: Double, params: AudioEnhanceConfig.Params, lg: Double = 1.0): Double {
         var v = x
         if (params.harmonicBass > 0f) {
             val h = vb.process(v)
-            v += bassBoost(params.harmonicBass * vb.gainFactor(), h)
+            v += aaBassM.process(params.harmonicBass * vb.gainFactor() * h)
         }
-        v = excite(v, exciteLp, params.exciterAmount)
+        if (params.exciterAmount > 0f) {
+            val eat = params.exciterAmount.toDouble()
+            v += eat * 0.7 * aaExciteM.process(v - exciteLp.process(v))
+        }
         for (b in eq) v = b.process(v)
-        if (params.tubeDrive > 0f) v = tubeDrive(v, tubeDc, params.tubeDrive)
+        if (params.tubeDrive > 0f) {
+            val d = params.tubeDrive.toDouble()
+            val g = 1.0 + 2.2 * d
+            v = tubeDc.process(aaTubeM.processTube(v * g, 0.22 * d, 1.8 * d)) * (1.0 / (1.0 + 0.35 * d))
+        }
         for (b in peq) v = b.process(v)
         v = compress(v, params.compression)
         if (params.loudnessComp) v = loudHp.process(loudLp.process(v))
         if (params.speechClarity) v = sc.process(v)
-        if (params.reverbMix > 0f) v += params.reverbMix.toDouble() * reverb.process(v) * 0.8
-        lim.setThreshold(0.97)
-        return lim.process(v * params.masterGain.toDouble())
+        if (params.reverbMix > 0f) v += params.reverbMix.toDouble() * ambBias * reverb.process(v) * 0.8
+        lim.setThreshold(0.99)
+        // lg (loudness) ANTES del limiter: el techo 0.99 debe cubrir la ganancia
+        // final completa, no solo masterGain.
+        return lim.process(v * params.masterGain.toDouble() * lg)
     }
 
     private fun compress(x: Double, strength: Float): Double {
@@ -1303,6 +1614,9 @@ private class MonoChain {
         tubeDc.reset()
         for (b in peq) b.reset()
         lim.reset()
+        aaBassM.reset()
+        aaTubeM.reset()
+        aaExciteM.reset()
         loudLp.reset()
         loudHp.reset()
         sc.reset()
@@ -1394,7 +1708,7 @@ private class LookaheadLimiter {
 
 // Variante estéreo con detección linkeada (misma ganancia para L y R, tomando
 // el pico true-peak de ambos) para no desplazar la imagen estéreo bajo limitación fuerte.
-private class LookaheadLimiterPair {
+class LookaheadLimiterPair {
     private var bufL = DoubleArray(1)
     private var bufR = DoubleArray(1)
     private var idx = 0
@@ -1488,7 +1802,9 @@ private class RingDelay {
     private var buf = DoubleArray(4)
     private var idx = 0
     fun configure(len: Int) {
-        buf = DoubleArray(len.coerceAtLeast(1))
+        val n = len.coerceAtLeast(1)
+        // No realinear si el tamaño no cambia: se llama en cada reconfigure.
+        if (buf.size != n) buf = DoubleArray(n)
         idx = 0
     }
     fun process(x: Double): Double {
@@ -1620,7 +1936,14 @@ private class VirtualSpeaker {
 }
 
 // Renderizador binaural de 5 altavoces virtuales (L, C, R, Ls, Rs) hacia 2 oídos.
+// El ITD ya NO es una mesa arbitraria: cada fuente recibe su retardo fisiológico
+// (fórmula de Woodworth: el sonido recorre el arco de la cabeza más la cuerda,
+// con cabeza de ~7,6 cm) según su azimut. Si hay un HRTF medido cargado
+// ([measured]), sus retardos/ganancias/notchs de pinna REALES reemplazan a la
+// síntesis. Esto es el pilar "HRTF medido" (loader externo + respaldo físico).
 private class VirtualSurround {
+    var measured: Hrtf? = null
+
     private var fs = 48000
 
     private class EarPath(
@@ -1653,18 +1976,23 @@ private class VirtualSurround {
     private var earsL = Array(5) { EarPath(DoubleArray(1), 0, BiquadFilter(), emptyArray(), Allpass(), 1.0) }
     private var earsR = Array(5) { EarPath(DoubleArray(1), 0, BiquadFilter(), emptyArray(), Allpass(), 1.0) }
 
-    // Config por altavoz: [delayL, lpLHz, gainL, apL, delayR, lpRHz, gainR, apR] (delay en muestras a 48k)
+    // Azimut (grados) de cada fuente virtual: L, R, C, Ls, Rs — MISMO orden
+    // que table/pinnaProfile/feeds. El orden anterior (L, C, R) desalineaba el
+    // ITD de Woodworth y la mesa de filtrado para los altavoces R y C.
+    private val azimuths = doubleArrayOf(-30.0, 30.0, 0.0, -110.0, 110.0)
+
+    // Mesa base (nivel/aire/ap por altavoz): [lpLHz, gainL(lin), apL, lpRHz, gainR(lin), apR]
     private val table = arrayOf(
-        doubleArrayOf(0.0, 20000.0, 1.00, 0.00, 7.0, 7000.0, 0.90, 0.00),  // Frente L
-        doubleArrayOf(7.0, 7000.0, 0.90, 0.00, 0.0, 20000.0, 1.00, 0.00),  // Frente R
-        doubleArrayOf(0.0, 20000.0, 0.95, 0.00, 0.0, 20000.0, 0.95, 0.00), // Centro
-        doubleArrayOf(3.0, 5500.0, 1.00, 0.35, 16.0, 3000.0, 0.75, 0.45),  // Trasero L
-        doubleArrayOf(16.0, 3000.0, 0.75, 0.45, 3.0, 5500.0, 1.00, 0.35)   // Trasero R
+        doubleArrayOf(20000.0, 1.00, 0.00, 7000.0, 0.90, 0.00),  // Frente L
+        doubleArrayOf(7000.0, 0.90, 0.00, 20000.0, 1.00, 0.00),  // Frente R
+        doubleArrayOf(20000.0, 0.95, 0.00, 20000.0, 0.95, 0.00), // Centro
+        doubleArrayOf(5500.0, 1.00, 0.35, 3000.0, 0.75, 0.45),   // Trasero L
+        doubleArrayOf(3000.0, 0.75, 0.45, 5500.0, 1.00, 0.35)    // Trasero R
     )
 
-    // Notches de pinna por altavoz: [freq Hz, gain dB, Q]. Frente con notches
-    // suaves, centro casi sin filtrado (sin ITD ni sombreado), traseros con
-    // notches profundos (fuerte coloración de pabellón = exteriorización).
+    // Notchas de pinna por altavoz (síntesis; se reemplazan con las medidas si
+    // hay HRTF medido). Frente con notches suaves, centro casi sin filtrado,
+    // traseros con notches profundos (fuerte coloración de pabellón = exteriorización).
     private fun pinnaProfile(i: Int): Array<Triple<Float, Float, Float>> = when (i) {
         2 -> arrayOf(Triple(7200f, -3f, 1.5f))
         0, 1 -> arrayOf(Triple(6200f, -4f, 1.4f), Triple(8200f, -5f, 1.6f), Triple(9800f, -3f, 1.6f))
@@ -1676,22 +2004,51 @@ private class VirtualSurround {
         )
     }
 
-    fun configure(fs: Int) {
-        this.fs = fs
-        val k = fs / 48000.0
-        earsL = Array(5) { i -> makePath(i, table[i][0], table[i][1], table[i][2], table[i][3], k, fs) }
-        earsR = Array(5) { i -> makePath(i, table[i][4], table[i][5], table[i][6], table[i][7], k, fs) }
+    // ITD de Woodworth convertido a muestras del oído contralateral. Una fuente a
+    // la izquierda retrasa el oído DERECHO en ~222 µs (@30°); la cabeza "sombrea".
+    private fun earDelayUsec(sourceAzDeg: Double, isLeftEar: Boolean): Double {
+        val mag = kotlin.math.abs(sourceAzDeg)
+        val itd = Hrtf.woodworthItdUsec(mag)
+        // Oído del lado de la fuente = 0; el opuesto recibe el ITD completo.
+        val sourceLeft = sourceAzDeg < 0
+        return if (sourceLeft == isLeftEar) 0.0 else itd
     }
 
-    private fun makePath(speaker: Int, delaySamples: Double, lpHz: Double, gain: Double, apGain: Double, k: Double, fs: Int): EarPath {
-        val len = (delaySamples * k).toInt().coerceAtLeast(1)
-        val pinna = pinnaProfile(speaker).map { (f, g, q) ->
+    fun configure(fs: Int) {
+        this.fs = fs
+        earsL = Array(5) { i -> buildPath(i, left = true, fs) }
+        earsR = Array(5) { i -> buildPath(i, left = false, fs) }
+    }
+
+    private fun buildPath(speaker: Int, left: Boolean, fs: Int): EarPath {
+        val az = azimuths[speaker]
+        val mSrc = measured?.nearest(az, 0.0)
+        val base = table[speaker]
+        val lpBase = if (left) base[0] else base[3]
+        val gainBase = if (left) base[1] else base[4]
+        val apGain = if (left) base[2] else base[5]
+
+        // Retardo: HRTF medido si hay fuente ≈; si no, Woodworth (físico).
+        val ear = if (mSrc != null) (if (left) mSrc.left else mSrc.right) else null
+        val delayUsec = ear?.delayUsec ?: earDelayUsec(az, left)
+        // Redondeo al entero más cercano (no truncado): el ITD de Woodworth es
+        // de ~10-20 samples y truncar añadía hasta −1 sample de sesgo.
+        val delaySamples = (delayUsec * 1e-6 * fs + 0.5).toInt().coerceAtLeast(1)
+
+        // Paso de banda del oído: medido o mesa.
+        val lpHz = ear?.lpHz ?: lpBase.toFloat()
+        // Ganancia: medida (dB) o mesa (lineal).
+        val gain = if (ear != null) 10.0.pow(ear.gainDb / 20.0) * 0.5 else gainBase
+        // Pinna: notchs medidos o perfil sintetizado.
+        val notches = mSrc?.notches ?: pinnaProfile(speaker)
+
+        val pinna = notches.map { (f, g, q) ->
             BiquadFilter().apply { configure(BiquadFilter.Kind.PEAKING, fs, f, g, q) }
         }.toTypedArray()
         return EarPath(
-            DoubleArray(len),
+            DoubleArray(delaySamples),
             0,
-            BiquadFilter(),
+            BiquadFilter().apply { configure(BiquadFilter.Kind.LOWPASS, fs, lpHz, 0f, 0.707f) },
             pinna,
             Allpass().apply { g = apGain },
             gain

@@ -74,6 +74,7 @@ object RestoreBoostController {
         if (upscalerOn) {
             if (upscalerMode == SuperResolutionEffect.MODE_FSR) det *= 0.55f
             if (upscalerMode == SuperResolutionEffect.MODE_ANIME4K) det *= 0.5f
+            if (upscalerMode == SuperResolutionEffect.MODE_KARIN) det *= 0.55f
         }
         return Stages(
             depixel = dep.coerceIn(0f, 1f),

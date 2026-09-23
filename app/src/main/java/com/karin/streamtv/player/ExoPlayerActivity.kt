@@ -34,6 +34,10 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     private companion object {
         const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 11; KarinFLiX TV) ExoPlayer"
+        /** Snapshot de la última configuración de video que sí reprodujo. */
+        const val LAST_GOOD_PREFS = "last_good_video_prefs"
+        /** Error de procesado de video (GPU/efectos/formato) con fallback. */
+        const val ERROR_GPU_EFFECTS = 7001
     }
 
     private var player: ExoPlayer? = null
@@ -57,6 +61,11 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var chainOmitted = mutableListOf<String>()
     private var chainMotionLabel = ""
     private var chainUpscalerLabel = ""
+    // Fallback error 7001: pasos de recuperación ya intentados en este video
+    // (0 = nada, 1 = config anterior restaurada, 2 = modo seguro) y bandera
+    // de cadena vacía (runtime: no toca los ajustes del usuario).
+    private var errorRecoverAttempt = 0
+    private var forceNoEffects = false
 
     // Cached effect instances for live slider updates
     private var restoreEffect: RestoreBoostEffect? = null
@@ -65,8 +74,12 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var colorsBoostEffect: ColorsBoostEffect? = null
     private var superResolutionEffect: SuperResolutionEffect? = null
     private var superResRcasEffect: SuperResRcasEffect? = null
+    // Lambda DRS del upscaler (outW/inW real del pase 1): la alimenta el
+    // callback GL en runtime y la lee el pase 2 KarinSharp (uScaleFactor).
+    private val karinScale = floatArrayOf(2f)
     private var motionX2Effect: MotionX2BoostEffect? = null
     private var karin3DEffect: Karin3DEffect? = null
+    private var visionEffect: VisionAssistEffect? = null
 
     private val prefs by lazy {
         getSharedPreferences(ExoPlayerSettingsHelper.PREFS_NAME, MODE_PRIVATE)
@@ -136,9 +149,19 @@ class ExoPlayerActivity : AppCompatActivity() {
             applyVideoEffects(it)
             it.addListener(object : Listener {
                 override fun onPlayerError(error: PlaybackException) {
+                    // Fallback 7001: antes de rendirse, reintenta con la
+                    // configuración anterior y luego sin efectos.
+                    if (tryRecoverFromError(error)) return
                     Log.e("ExoPlayerActivity", "Playback error: ${error.message}", error)
                     Toast.makeText(this@ExoPlayerActivity, playerErrorMessage(error), Toast.LENGTH_LONG).show()
                     finish()
+                }
+
+                override fun onRenderedFirstFrame() {
+                    // Este video sí reproduce: guarda su configuración como
+                    // última buena (para volver a ella si un video futuro
+                    // falla). En modo seguro no se guarda (no es config real).
+                    if (!forceNoEffects) snapshotEffectPrefs()
                 }
 
                 override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -199,6 +222,17 @@ class ExoPlayerActivity : AppCompatActivity() {
                     onLiveDepth = { v -> liveRoute("td_depth", v) },
                 )
             }
+        }
+        pv.findViewById<ImageButton>(R.id.btn_vision)?.setOnClickListener {
+            // Botón de anteojos: Ayuda de visión (VP a la cadena, propio del
+            // reproductor, no dentro de las Opciones Avanzadas de Video).
+            VisionAssistHelper.showVisionDialog(
+                activity = this@ExoPlayerActivity,
+                prefs = prefs,
+                player = player,
+                onEffectsChanged = { rebuildEffects(it) },
+                onLive = { cfg -> visionEffect?.update(cfg) },
+            )
         }
         pv.findViewById<ImageButton>(R.id.btn_dsp)?.setOnClickListener {
             openSoundSettings()
@@ -271,7 +305,17 @@ class ExoPlayerActivity : AppCompatActivity() {
             PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
             PlaybackException.ERROR_CODE_DECODING_FAILED ->
                 "Este video no se puede decodificar en este equipo"
-            else -> "No se pudo reproducir el video (${error.errorCode})"
+            PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED ->
+                "Error 7000 al iniciar el procesador de video (efectos o formato)"
+            ERROR_GPU_EFFECTS ->
+                "Error 7001 al procesar el video (ni la configuración anterior ni el modo seguro funcionaron)"
+            // Códigos desconocidos (p. ej. 1103): se muestra el nombre oficial
+            // de Media3 para identificar la familia exacta del fallo.
+            else -> try {
+                "No se pudo reproducir el video (${error.errorCode} · ${error.errorCodeName})"
+            } catch (_: Exception) {
+                "No se pudo reproducir el video (${error.errorCode})"
+            }
         }
     }
 
@@ -323,12 +367,6 @@ class ExoPlayerActivity : AppCompatActivity() {
                         (e as? CineBoostEffect)?.updateStrength(strength)
                     ExoPlayerSettingsHelper.SHADER_BW ->
                         (e as? BwBoostEffect)?.updateStrength(strength)
-                    ExoPlayerSettingsHelper.SHADER_PIXEL ->
-                        (e as? PixelArtBoostEffect)?.updateStrength(strength)
-                    ExoPlayerSettingsHelper.SHADER_FILM ->
-                        (e as? FilmBoostEffect)?.updateStrength(strength)
-                    ExoPlayerSettingsHelper.SHADER_RETRO ->
-                        (e as? RetroAnimeBoostEffect)?.updateStrength(strength)
                     else -> (e as? CrtBoostEffect)?.updateStrength(strength)
                 }
             }
@@ -346,7 +384,108 @@ class ExoPlayerActivity : AppCompatActivity() {
         val mode = prefs.getInt(ExoPlayerSettingsHelper.KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
         if (mode == SuperResolutionEffect.MODE_FSR) return 0.55f
         if (mode == SuperResolutionEffect.MODE_ANIME4K) return 0.5f
+        if (mode == SuperResolutionEffect.MODE_KARIN) return 0.55f
         return 1f
+    }
+
+    /**
+     * Fallback ante error de procesado (7001 y familia decodificador):
+     * paso 1 = restaura la última configuración que sí funcionó,
+     * paso 2 = modo seguro sin efectos (sin tocar ajustes del usuario).
+     * Devuelve true si reintentó (no cerrar), false si ya no hay más pasos.
+     */
+    private fun tryRecoverFromError(error: PlaybackException): Boolean {
+        val code = error.errorCode
+        // Familia "procesado/decodificación": 7001 (frames/efectos GL),
+        // 7000 (init del procesador) y 4001-4006 (decodificador). El 7001
+        // literal se conserva porque el constant no existe en Media3 viejo.
+        val effectsRelated = code == ERROR_GPU_EFFECTS ||
+            code == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED ||
+            code == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            code == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+            code == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+            code == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+            code == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+            code == PlaybackException.ERROR_CODE_DECODING_RESOURCES_RECLAIMED
+        if (!effectsRelated) return false
+        val p = player ?: return false
+        if (errorRecoverAttempt == 0) {
+            errorRecoverAttempt = 1
+            if (restoreLastGoodIfDifferent()) {
+                Log.w("ExoPlayerActivity", "Error $code: reintentando con configuración anterior")
+                Toast.makeText(this, "Error $code: volviendo a la última configuración que funcionó…", Toast.LENGTH_LONG).show()
+                retryPlayback(p)
+                return true
+            }
+            // Sin snapshot distinto: cae directo al modo seguro.
+        }
+        if (errorRecoverAttempt <= 1) {
+            errorRecoverAttempt = 2
+            forceNoEffects = true
+            Log.w("ExoPlayerActivity", "Error $code: reintentando en modo seguro (sin efectos)")
+            Toast.makeText(this, "Error $code: reintentando sin efectos (modo seguro)…", Toast.LENGTH_LONG).show()
+            retryPlayback(p)
+            return true
+        }
+        return false
+    }
+
+    /** Re-prepara conservando la posición (si el error la conservó). */
+    private fun retryPlayback(p: ExoPlayer) {
+        val pos = try { p.currentPosition.coerceAtLeast(0L) } catch (_: Exception) { 0L }
+        try {
+            applyVideoEffects(p)
+            p.seekTo(pos)
+            p.prepare()
+            p.playWhenReady = true
+        } catch (e: Exception) {
+            Log.e("ExoPlayerActivity", "Reintento fallido", e)
+            Toast.makeText(this, playerErrorMessage(PlaybackException(null, e, 0)), Toast.LENGTH_LONG).show()
+            finish()
+        }
+    }
+
+    /** Guarda la configuración actual de video como última buena. */
+    private fun snapshotEffectPrefs() {
+        try {
+            val ed = getSharedPreferences(LAST_GOOD_PREFS, MODE_PRIVATE).edit().clear()
+            for ((k, v) in prefs.all) {
+                when (v) {
+                    is Boolean -> ed.putBoolean(k, v)
+                    is Int -> ed.putInt(k, v)
+                    is Long -> ed.putLong(k, v)
+                    is Float -> ed.putFloat(k, v)
+                    is String -> ed.putString(k, v)
+                }
+            }
+            ed.apply()
+        } catch (_: Exception) { }
+    }
+
+    /**
+     * Restaura el snapshot solo si difiere del actual (si es igual,
+     * reintentar sería repetir el mismo fallo). Tus ajustes de velocidad y
+     * volumen viven en otro archivo y no se tocan.
+     */
+    private fun restoreLastGoodIfDifferent(): Boolean {
+        return try {
+            val bg = getSharedPreferences(LAST_GOOD_PREFS, MODE_PRIVATE)
+            if (bg.all.isEmpty() || bg.all == prefs.all) return false
+            val ed = prefs.edit().clear()
+            for ((k, v) in bg.all) {
+                when (v) {
+                    is Boolean -> ed.putBoolean(k, v)
+                    is Int -> ed.putInt(k, v)
+                    is Long -> ed.putLong(k, v)
+                    is Float -> ed.putFloat(k, v)
+                    is String -> ed.putString(k, v)
+                }
+            }
+            ed.apply()
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun clearCachedEffects() {
@@ -358,6 +497,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         superResRcasEffect = null
         motionX2Effect = null
         karin3DEffect = null
+        visionEffect = null
     }
 
     private fun applyVideoEffects(exoPlayer: ExoPlayer) {
@@ -380,7 +520,14 @@ class ExoPlayerActivity : AppCompatActivity() {
         val effects = mutableListOf<Effect>()
         val demoEnabled = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false)
 
-        addChainEffects(effects, demoEnabled)
+        // Modo seguro (tras error 7001): cadena vacía, sin tocar ajustes.
+        // La línea demo se conserva (es trivial y ayuda a diagnosticar).
+        if (forceNoEffects) {
+            chainActive.add("Modo seguro")
+            Log.w("ExoPlayerActivity", "Modo seguro: sin efectos de imagen")
+        } else {
+            addChainEffects(effects, demoEnabled)
+        }
 
         if (demoEnabled) {
             effects.add(DemoLineEffect())
@@ -470,10 +617,12 @@ class ExoPlayerActivity : AppCompatActivity() {
             addHeavyEffect("Light+Color", karinLightBoostEffect!!)
         }
 
-        // 4. Upscaler de calidad (FSR/Anime4K): reescala al final.
+        // 4. Upscaler de calidad (KarinSuperRes/FSR/Anime4K): reescala al final.
         // Al existir como efecto propio ocupa el presupuesto de pases; cuando
         // solo restaura la pasada half-res de Light Boost sería gratis, pero
         // hoy Light Boost corre a resolución completa y el upscaler va libre.
+        // Karin por gama: LOW = ECO (1 pase barato), MID = CRISP (1 pase
+        // completo), HIGH = 2 pases (KarinEasu limpio + KarinSharp real).
         if (upscalerOn) {
             val mode = upscalerMode
             val sharpness = prefsFloat(ExoPlayerSettingsHelper.KEY_UPSCALER_SHARP, 40)
@@ -482,10 +631,20 @@ class ExoPlayerActivity : AppCompatActivity() {
             // resultado real). Solo en gama alta: el 2do pase corre a
             // resolucion de SALIDA (hasta 1080p = 4x pixeles) y en gama
             // media/baja tumba los fps.
-            val fsrTwoPass = mode == SuperResolutionEffect.MODE_FSR && !isLowEnd && isHighEndDevice()
-            val twoPass = fsrTwoPass
+            val isHighTier = !isLowEnd && isHighEndDevice()
+            val fsrTwoPass = mode == SuperResolutionEffect.MODE_FSR && isHighTier
+            val karinTwoPass = mode == SuperResolutionEffect.MODE_KARIN && isHighTier
+            val twoPass = fsrTwoPass || karinTwoPass
+            val karinVariant =
+                if (isLowEnd) SuperResolutionEffect.KARIN_ECO else SuperResolutionEffect.KARIN_CRISP
             val upscaleLabel = when (mode) {
                 SuperResolutionEffect.MODE_ANIME4K -> "Anime4K"
+                SuperResolutionEffect.MODE_KARIN ->
+                    when {
+                        karinTwoPass -> "Karin HiRes"
+                        karinVariant == SuperResolutionEffect.KARIN_ECO -> "Karin ECO"
+                        else -> "Karin"
+                    }
                 else -> if (fsrTwoPass) "FSR+RCAS" else "FSR"
             }
             chainUpscalerLabel = upscaleLabel
@@ -500,6 +659,9 @@ class ExoPlayerActivity : AppCompatActivity() {
                     osdOutputH = outH
                     osdLabel = upscaleLabel
                 }
+                karinScale[0] = if (inW > 0) outW.toFloat() / inW else 2f
+                superResRcasEffect?.updateScale(karinScale[0])
+                Unit
             }
             val onFinal = { _: Int, _: Int, outW: Int, outH: Int ->
                 runOnUiThread {
@@ -510,11 +672,16 @@ class ExoPlayerActivity : AppCompatActivity() {
             }
             superResolutionEffect = SuperResolutionEffect(
                 mode, sharpness, restorePass = false, separateRcas = twoPass,
+                karinVariant = karinVariant,
                 onConfigured = onScaled,
             )
             addHeavyEffect("Upscaler", superResolutionEffect!!)
             if (twoPass) {
-                superResRcasEffect = SuperResRcasEffect(sharpness, demoEnabled, onFinal)
+                superResRcasEffect = if (mode == SuperResolutionEffect.MODE_KARIN) {
+                    SuperResRcasEffect(sharpness, demoEnabled, onFinal, casMode = true, upscaleRatio = karinScale[0])
+                } else {
+                    SuperResRcasEffect(sharpness, demoEnabled, onFinal)
+                }
                 // El RCAS corre a resolucion de salida (caro): entra al cupo.
                 addHeavyEffect("RCAS", superResRcasEffect!!)
             }
@@ -545,19 +712,30 @@ class ExoPlayerActivity : AppCompatActivity() {
                 shaderEffect = when (shaderType) {
                     ExoPlayerSettingsHelper.SHADER_CINE -> CineBoostEffect(shaderStrength, demoEnabled)
                     ExoPlayerSettingsHelper.SHADER_BW -> BwBoostEffect(shaderStrength, demoEnabled)
-                    ExoPlayerSettingsHelper.SHADER_PIXEL -> PixelArtBoostEffect(shaderStrength, demoEnabled)
-                    ExoPlayerSettingsHelper.SHADER_FILM -> FilmBoostEffect(shaderStrength, demoEnabled)
-                    ExoPlayerSettingsHelper.SHADER_RETRO -> RetroAnimeBoostEffect(shaderStrength, demoEnabled)
                     else -> CrtBoostEffect(shaderStrength, demoEnabled)
                 }
                 addHeavyEffect("Shader:$label", shaderEffect!!)
             }
         }
+        // 6b. Ayuda de visión (botón de anteojos): perfil de accesibilidad en
+        //     UN pase GL, va tras el Shader y antes del 3D (el 3D reformatea
+        //     la salida y no debe teñir el efecto visual).
+        //     EXENTA del presupuesto de pases: es accesibilidad (un solo pase
+        //     barato) y nunca debe quedar "omitida" al activarla el usuario.
+        run {
+            if (VisionAssistHelper.isActive(prefs)) {
+                val cfg = VisionAssistHelper.fromPrefs(prefs)
+                visionEffect = VisionAssistEffect(cfg)
+                effects.add(visionEffect!!)
+                chainActive.add("Visión")
+                Log.d("ExoPlayerActivity", "Visión activa (${VisionAssistHelper.needsLabel(cfg)}), fuera de cupo por accesibilidad")
+            }
+        }
         // 7. Tecnología 3D (botón lentes): reformatea la SALIDA al final de
         //    la cadena (tras Shader, antes de la línea Demo). 1 pase GL.
-        //    Ver Karin3DController.compatWarnings(): B/N y CRT-polarizado son
-        //    incompatibles reales; Upscaler/MotionX2/Light degradan el 3D
-        //    (el diálogo ya avisa y aquí solo se construye la cadena).
+        //    Ver Karin3DController.compatWarnings(): B/N+anaglifo y
+        //    MotionX2+Pulfrich son incompatibles reales; Upscaler/Light
+        //    degradan según modo (el diálogo ya avisa).
         run {
             if (Karin3DController.isActive(prefs)) {
                 val label = Karin3DController.chainLabel(prefs).ifBlank { "3D" }

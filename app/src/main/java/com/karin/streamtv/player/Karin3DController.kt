@@ -15,8 +15,11 @@ import android.content.SharedPreferences
  *   (SBS/TAB) la combina; si es 2D genera pseudo-3D con [depth].
  * - VR_SBS: entrada 2D -> SBS duplicado para visor Cardboard/VR.
  *   Sin seguimiento de cabeza: la misma imagen a ambos ojos.
- * - POLARIZED: entrelazado por líneas (pares=un ojo, impares=otro)
- *   para pantallas/TV polarizados pasivos, desde fuente SBS o TAB.
+ * - PULFRICH (homenaje Fabulojos 1997): la profundidad la pone un lente
+ *   OSCURO en un ojo (el ojo oscurecido procesa ~1 cuadro más lento y el
+ *   movimiento lateral se vuelve profundidad). La app solo prepara la
+ *   imagen (realce horizontal sutil); quieto no hay 3D (física, no bug).
+ *   Sin lentes se ve normal, como debe ser. Fuente 2D.
  *
  * Uso rápido:
  * ```
@@ -31,7 +34,8 @@ object Karin3DController {
     const val MODE_TAB_2D = 2
     const val MODE_ANAGLYPH = 3
     const val MODE_VR_SBS = 4
-    const val MODE_POLARIZED = 5
+    // 5 era POLARIZED (eliminado): ahora PULFRICH. Un 5 guardado migra solo.
+    const val MODE_PULFRICH = 5
     const val MODE_COUNT = 6
 
     /** Variantes de lentes anaglifo. */
@@ -53,7 +57,7 @@ object Karin3DController {
         MODE_TAB_2D -> "TAB → 2D"
         MODE_ANAGLYPH -> "Anaglifo ${anaglyphName(-1)}".trim()
         MODE_VR_SBS -> "VR (Cardboard)"
-        MODE_POLARIZED -> "Polarizado"
+        MODE_PULFRICH -> "Pulfrich"
         else -> "Off"
     }
 
@@ -80,7 +84,7 @@ object Karin3DController {
         MODE_TAB_2D -> "Video arriba-abajo (sup/inf) a 2D. Elige qué ojo ver."
         MODE_ANAGLYPH -> "Lentes bicolor (rojo-cian, rojo-azul, rojo-verde). Con video SBS/TAB mezcla ambos ojos; con 2D genera pseudo-3D."
         MODE_VR_SBS -> "Duplica el 2D a lado-a-lado para visor VR/Cardboard."
-        MODE_POLARIZED -> "Entrelazado por líneas para TV polarizada pasiva. Requiere fuente SBS o TAB."
+        MODE_PULFRICH -> "Requiere lente oscuro en un ojo (Fabulojos) + escenas con movimiento lateral."
         else -> "Sin proceso 3D."
     }
 
@@ -102,19 +106,14 @@ object Karin3DController {
      * resto usa la guardada (con migración del boolean legacy INPUT_SBS).
      */
     fun inputKind(prefs: SharedPreferences): Int {
-        when (currentMode(prefs)) {
-            MODE_SBS_2D -> return INPUT_SBS
-            MODE_TAB_2D -> return INPUT_TAB
-        }
+        // Sin TAB: todo lo TAB (modo o pref vieja) colapsa a SBS.
+        if (currentMode(prefs) == MODE_TAB_2D) return INPUT_SBS
+        if (currentMode(prefs) == MODE_SBS_2D) return INPUT_SBS
         if (prefs.contains(ExoPlayerSettingsHelper.KEY_3D_INPUT)) {
-            return prefs.getInt(ExoPlayerSettingsHelper.KEY_3D_INPUT, INPUT_2D).coerceIn(0, 2)
+            return prefs.getInt(ExoPlayerSettingsHelper.KEY_3D_INPUT, INPUT_2D).coerceIn(0, 1)
         }
         // Migración legacy: el boolean solo distinguía SBS vs 2D.
         val sbs = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_3D_INPUT_SBS, false)
-        // El polarizado sin dato previo asume SBS (lo más común en TV 3D).
-        if (currentMode(prefs) == MODE_POLARIZED && !prefs.contains(ExoPlayerSettingsHelper.KEY_3D_INPUT_SBS)) {
-            return INPUT_SBS
-        }
         return if (sbs) INPUT_SBS else INPUT_2D
     }
 
@@ -122,14 +121,14 @@ object Karin3DController {
     fun currentDepth(prefs: SharedPreferences): Float =
         (prefs.getInt(ExoPlayerSettingsHelper.KEY_3D_DEPTH, DEFAULT_DEPTH) / 100f).coerceIn(0f, 1f)
 
-    /** true = ojo derecho / imagen inferior / líneas impares; false = contrario. */
+    /** true = ojo derecho; false = contrario. (En Pulfrich el swap no aplica.) */
     fun isSwapEye(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(ExoPlayerSettingsHelper.KEY_3D_SWAP, false)
 
     /** true si la fuente es SBS/TAB (hay que muestrear mitades). */
     fun isStereoInput(prefs: SharedPreferences): Boolean {
         val m = currentMode(prefs)
-        return m == MODE_SBS_2D || m == MODE_TAB_2D || m == MODE_POLARIZED ||
+        return m == MODE_SBS_2D || m == MODE_TAB_2D ||
             ((m == MODE_ANAGLYPH) && inputKind(prefs) != INPUT_2D)
     }
 
@@ -170,11 +169,11 @@ object Karin3DController {
         if (!isActive(prefs)) return ""
         val m = currentMode(prefs)
         var label = "3D:${modeName(m, prefs)}"
-        if (m == MODE_ANAGLYPH || m == MODE_POLARIZED) {
+        if (m == MODE_ANAGLYPH) {
             label += "[${inputName(inputKind(prefs))}]"
         }
         if (isSwapEye(prefs) &&
-            (m == MODE_SBS_2D || m == MODE_TAB_2D || m == MODE_POLARIZED)
+            (m == MODE_SBS_2D || m == MODE_TAB_2D)
         ) label += "(swap)"
         return label
     }
@@ -190,9 +189,11 @@ object Karin3DController {
      *
      * - B/N + anaglifo = MUERTO: el anaglifo codifica la disparidad en los
      *   canales de color (R vs GB/B/G). Sin color no hay separación.
-     * - CRT(curvatura) + polarizado = MUERTO: la distorsión barril mueve las
-     *   filas y las líneas pares/impares ya no coinciden con el filtro
-     *   polarizador del TV (diafonía total). Con SBS→2D es tolerable.
+     * - MotionX2(BLEND/HYBRID) + PULFRICH = MUERTO: la mezcla temporal
+     *   destruye el retardo entre ojos del que vive el efecto (lo aplana
+     *   a 2D). DOUBLING es no-op (seguro).
+     * - PULFRICH necesita lente oscuro en un ojo + movimiento lateral;
+     *   quieto no hay 3D (física). Funciona en B/N y le sienta bien Light.
      * - Upscaler + fuente SBS/TAB = COSTURA CONTAMINADA: el FSR/Anime4K
      *   reescala el cuadro SBS completo y su kernel mezcla píxeles de ambos
      *   ojos en la columna central (halo + fuga entre ojos).
@@ -201,7 +202,8 @@ object Karin3DController {
      *   DOUBLING es no-op (seguro).
      * - Light/Color(saturación) + anaglifo = DIAFONÍA DE COLOR: cambia el
      *   balance R vs GB y los lentes filtran mal (fantasma rojo/cian).
-     *   Con SBS→2D / polarizado / VR es inocuo (misma curva en ambos ojos).
+     *   Con SBS→2D / Pulfrich / VR es inocuo (misma curva en ambos ojos
+     *   o imagen única).
      * - Cine(grano) + anaglifo = leve: el grano es igual en ambos ojos
      *   (se genera antes del 3D), solo suma un poco de ruido al filtrar.
      */
@@ -210,7 +212,7 @@ object Karin3DController {
         val out = mutableListOf<String>()
         val mode = currentMode(prefs)
         val input = inputKind(prefs)
-        val stereoSource = mode == MODE_SBS_2D || mode == MODE_TAB_2D || mode == MODE_POLARIZED ||
+        val stereoSource = mode == MODE_SBS_2D || mode == MODE_TAB_2D ||
             (mode == MODE_ANAGLYPH && input != INPUT_2D)
         val (shaderType, _) = try {
             ExoPlayerSettingsHelper.shaderSelection(prefs)
@@ -225,8 +227,11 @@ object Karin3DController {
         if (mode == MODE_ANAGLYPH && shaderType == ExoPlayerSettingsHelper.SHADER_BW) {
             out += "⛔ B/N + anaglifo incompatible: el blanco y negro destruye los canales de color que separan los ojos. Apaga el Shader B/N."
         }
-        if (mode == MODE_POLARIZED && shaderType == ExoPlayerSettingsHelper.SHADER_CRT) {
-            out += "⛔ CRT + polarizado incompatible: la curvatura desalinea las líneas entrelazadas del TV polarizado. Apaga el Shader CRT."
+        if (mode == MODE_PULFRICH && motionOn) {
+            val mMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
+            if (mMode != 1) {
+                out += "⛔ MotionX2 + Pulfrich incompatible: la mezcla temporal destruye el retardo entre ojos (lo deja en 2D). Apaga MotionX2 o usa Doubling."
+            }
         }
         if (stereoSource && upscalerOn) {
             out += "⚠ Upscaler + fuente ${inputName(input)}: el reescalado mezcla ambas mitades en la costura central (halo y fuga entre ojos). Apaga el Upscaler para 3D limpio."
@@ -244,8 +249,8 @@ object Karin3DController {
         if (mode == MODE_VR_SBS && shaderType == ExoPlayerSettingsHelper.SHADER_CRT) {
             out += "⚠ CRT + VR: la curvatura se aplica al cuadro completo, no por ojo. Mejor apaga el Shader CRT."
         }
-        if (mode == MODE_POLARIZED && input == INPUT_2D) {
-            out += "ℹ Polarizado con fuente 2D: no hay segunda vista real; se genera paralaje sintético leve. Para 3D real usa fuente SBS o TAB."
+        if (mode == MODE_PULFRICH) {
+            out += "ℹ Pulfrich: ponte un lente oscuro en un ojo (Fabulojos/gafa de sol) y busca escenas con movimiento lateral. Quieto no hay 3D."
         }
         return out
     }

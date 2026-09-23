@@ -1270,7 +1270,8 @@ class EmbedWebViewActivity : AppCompatActivity() {
             clipChildren = false
             visibility = View.INVISIBLE
         }
-        webView = WebView(this).apply {
+        try {
+            webView = WebView(this).apply {
             setLayerType(View.LAYER_TYPE_SOFTWARE, null)
             visibility = View.INVISIBLE
             alpha = 0f
@@ -1278,6 +1279,15 @@ class EmbedWebViewActivity : AppCompatActivity() {
             isVerticalScrollBarEnabled = false
             setOnTouchListener { _, _ -> true }
             layoutParams = FrameLayout.LayoutParams(720, 1280)
+            }
+        } catch (_: Throwable) {
+            android.util.Log.w(TAG, "WebView roto al crear, fallback a navegador")
+            val fallbackUrl = intent.getStringExtra("embed_url") ?: ""
+            if (fallbackUrl.isNotBlank()) {
+                com.karin.streamtv.util.WebViewSupport.openExternal(this, fallbackUrl)
+            }
+            finish()
+            return
         }
         hiddenContainer!!.addView(webView)
         val rootView = findViewById<FrameLayout>(android.R.id.content)

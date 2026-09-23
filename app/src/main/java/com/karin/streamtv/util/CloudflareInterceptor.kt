@@ -143,7 +143,8 @@ object CloudflareInterceptor {
                         alpha = 0f
                     }
 
-                    webViewRef = WebView(webContext).apply {
+                    try {
+                        webViewRef = WebView(webContext).apply {
                         layoutParams = android.view.ViewGroup.LayoutParams(720, 1280)
                         setBackgroundColor(0x00000000)
                         visibility = android.view.View.INVISIBLE
@@ -198,6 +199,12 @@ object CloudflareInterceptor {
                             cookieManager.flush()
                             if (latch.count > 0) latch.countDown()
                         }, 20000)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "WebView roto en challenge, fallback HTTP: ${e.message}")
+                        webViewRef = null
+                        if (latch.count > 0) latch.countDown()
+                        return@Runnable
                     }
 
                     val webView = webViewRef

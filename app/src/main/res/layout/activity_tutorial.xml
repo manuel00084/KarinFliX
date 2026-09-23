@@ -201,7 +201,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="• Escala (el que agranda el video): este NO cambia la resolución que se descarga, solo estira la imagen a pantalla completa y la hace más nítida. Es distinto a Calidad: aquí no cambias la resolución real.\n  ➜ Apagado: deja que el televisor lo estire (recomendado en cajas débiles).\n  ➜ FSR: reescala con calidad gastando poco (default, el más equilibrado).\n  ➜ Anime4K DoG: hace el anime muy nítido, pero es pesado."
+                    android:text="• Escala (el que agranda el video): este NO cambia la resolución que se descarga, solo estira la imagen a pantalla completa y la hace más nítida. Es distinto a Calidad: aquí no cambias la resolución real.\n  ➜ Apagado: deja que el televisor lo estire (recomendado en cajas débiles).\n  ➜ KarinSuperRes: nítido sin halos ni ruido, con variante por gama (Experimental).\n  ➜ FSR: reescala con calidad gastando poco (default, el más equilibrado).\n  ➜ Anime4K DoG: hace el anime muy nítido, pero es pesado."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"

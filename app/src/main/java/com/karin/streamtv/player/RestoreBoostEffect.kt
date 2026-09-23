@@ -136,9 +136,7 @@ class RestoreBoostShaderProgram(
         """
 
         private const val FRAGMENT_SHADER = """
-            #ifdef GL_ES
             precision highp float;
-            #endif
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
             uniform vec2 uTexelSize;
@@ -351,6 +349,22 @@ class RestoreBoostShaderProgram(
                         float dv = lc - (lU + lD) * 0.5;
                         float dh = lc - (lL + lR) * 0.5;
                         float dirDetail = dv * dirW + dh * (1.0 - dirW);
+                        // HQ DIAGONAL (rejilla rotada): si el borde va en
+                        // diagonal, afilar A LO LARGO del trazo en vez de
+                        // cruzarlo (no remarca el diente). La diagonal con
+                        // MENOR gradiente corre a lo largo del borde: el
+                        // centro se reconstruye desde ella. Si las diagonales
+                        // no se pidieron (valen 0), diagDom da 0: no-op.
+                        float gD1 = abs(lNW - lSE);
+                        float gD2 = abs(lNE - lSW);
+                        float gAxis = max(gx, gy);
+                        float gDiag = max(gD1, gD2);
+                        float diagDom = smoothstep(0.10, 0.45,
+                            (gDiag - gAxis) / max(gDiag + gAxis, 0.0001));
+                        float alongEdge = (gD1 > gD2)
+                            ? (lNE + lSW) * 0.5
+                            : (lNW + lSE) * 0.5;
+                        float diagDetail = mix(dirDetail, lc - alongEdge, diagDom);
                         float rmg = outc.r - outc.g;
                         float rmb = outc.r - outc.b;
                         float skin = smoothstep(0.02, 0.1, rmg) * smoothstep(0.01, 0.08, rmb);
@@ -364,9 +378,9 @@ class RestoreBoostShaderProgram(
                             minK = min(minK, min(min(lNW, lNE), min(lSW, lSE)));
                             maxK = max(maxK, max(max(lNW, lNE), max(lSW, lSE)));
                             float lap = 8.0 * lc - (lL + lR + lU + lD + lNW + lNE + lSW + lSE);
-                            detailAmt = (dirDetail * 1.5 + lap * 0.06) * adapt * mix(1.0, 0.25, skin);
+                            detailAmt = (diagDetail * 1.5 + lap * 0.06) * adapt * mix(1.0, 0.25, skin);
                         } else {
-                            detailAmt = dirDetail * adapt * mix(1.0, 0.3, skin);
+                            detailAmt = diagDetail * adapt * mix(1.0, 0.3, skin);
                         }
                         float sharpK = 1.0 - 0.65 * clamp(smoothK, 0.0, 1.0);
                         float over = range4 * 0.25 * uDetail;

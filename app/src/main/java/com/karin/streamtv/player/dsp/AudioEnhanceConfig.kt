@@ -1,10 +1,14 @@
 package com.karin.streamtv.player.dsp
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 import kotlin.text.lowercase
 
@@ -25,7 +29,8 @@ object AudioEnhanceConfig {
         ROOM("Sala"),
         HALL("Cine / Sala grande"),
         CROSSFEED("Binaural (auriculares)"),
-        SPEAKER_CAB("Cabina de bocina")
+        SPEAKER_CAB("Cabina de bocina"),
+        STUDIO("Estudio / Sala húmeda")
     }
 
     data class ParamBand(
@@ -64,7 +69,12 @@ object AudioEnhanceConfig {
         val beatBoost: Float = 0f,       // 0..1: realce del golpe percuativo del bajo (kick distinto del muro)
         val transientPunch: Float = 0f,  // 0..1: resalte de ataques (cada instrumento emerge)
         val spectralClarity: Float = 0f, // 0..1: de-enmascarador dinámico (levantar lo tapado/domar lo que tapa)
-        val explosionDucking: Float = 0f // 0..1: despeja 150-700 Hz cuando golpea un sub (explosión/kick)
+        val explosionDucking: Float = 0f, // 0..1: despeja 150-700 Hz cuando golpea un sub (explosión/kick)
+        val loudnessNorm: Float = 0.5f,  // 0..1: nivelación EBU R128 (volumen nivelado entre contenidos)
+        val ddc: Boolean = false,        // corrección por medición del altavoz (DRC por IR)
+        val useHrtf: Boolean = false,    // HRTF medido/real para binaural (loader + ITD Woodworth)
+        val rearDelayMs: Float = 20f,    // 0..30: retardo de canal trasero (alineación/espaciado de ambiente)
+        val rearPhaseInvert: Boolean = false // invierte la fase de los canales traseros/laterales
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -97,7 +107,12 @@ object AudioEnhanceConfig {
                 beatBoost == other.beatBoost &&
                 transientPunch == other.transientPunch &&
                 spectralClarity == other.spectralClarity &&
-                explosionDucking == other.explosionDucking
+                explosionDucking == other.explosionDucking &&
+                loudnessNorm == other.loudnessNorm &&
+                ddc == other.ddc &&
+                useHrtf == other.useHrtf &&
+                rearDelayMs == other.rearDelayMs &&
+                rearPhaseInvert == other.rearPhaseInvert
         }
 
         override fun hashCode(): Int {
@@ -130,6 +145,11 @@ object AudioEnhanceConfig {
             h = 31 * h + transientPunch.hashCode()
             h = 31 * h + spectralClarity.hashCode()
             h = 31 * h + explosionDucking.hashCode()
+            h = 31 * h + loudnessNorm.hashCode()
+            h = 31 * h + ddc.hashCode()
+            h = 31 * h + useHrtf.hashCode()
+            h = 31 * h + rearDelayMs.hashCode()
+            h = 31 * h + rearPhaseInvert.hashCode()
             return h
         }
         fun withPreset(p: Preset): Params = when (p) {
@@ -399,8 +419,17 @@ object AudioEnhanceConfig {
     private const val KEY_DYNBASS = "dsp_dynbass"
     private const val KEY_LOUDNESS = "dsp_loudness"
     private const val KEY_SURFACE = "dsp_surface"
-    private const val KEY_SPEECH = "dsp_speech"
-    private const val KEY_PARAMETRIC = "dsp_parametric"
+private const val KEY_SPEECH = "dsp_speech"
+private const val KEY_PARAMETRIC = "dsp_parametric"
+// Nivelación de sonoridad EBU R128 (0..1; 0 = fuera)
+private const val KEY_LOUDNESS_NORM = "dsp_loudness_norm"
+// Corrección por medición del altavoz (DRC / DDC por IR)
+private const val KEY_DDC = "dsp_ddc"
+// HRTF medido/real para el renderizado binaural
+private const val KEY_HRTF = "dsp_hrtf"
+// Retardo de canal trasero (ms) e inversión de fase trasera
+private const val KEY_REAR_DELAY = "dsp_rear_delay"
+private const val KEY_REAR_PHASE = "dsp_rear_phase"
     // Capa de usuario "Ajuste rápido": deltas sobre el preset base (no se pierden
     // al cambiar de perfil).
     private const val KEY_QA_BASS = "dsp_qa_bass"
@@ -445,8 +474,28 @@ object AudioEnhanceConfig {
     @Volatile
     private var cachedParams: Params? = null
 
+    // Generación del caché: sube en cada invalidación. params() solo escribe
+    // el caché si nadie lo invalidó mientras construía (evita la carrera
+    // listener vs hilo de audio de dos hilos escribiendo params distintos).
+    private val cacheGen = AtomicLong(0)
+
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        cacheGen.incrementAndGet()
         cachedParams = null
+    }
+
+    // El volumen del mando de la TV cambia fuera de params(); sin esto
+    // playbackVolume se quedaba con el valor del arranque hasta que alguien
+    // tocara el volumen de la app. (Las constantes son @hide en el SDK, pero
+    // los valores string son estables desde hace años.)
+    private val volumeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "android.media.VOLUME_CHANGED_ACTION" &&
+                intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1) == AudioManager.STREAM_MUSIC
+            ) {
+                refreshPlaybackVolume()
+            }
+        }
     }
 
     fun init(context: Context) {
@@ -456,6 +505,11 @@ object AudioEnhanceConfig {
         }
         cachedParams = null
         refreshPlaybackVolume()
+        try {
+            appContext?.registerReceiver(volumeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"))
+        } catch (t: Throwable) {
+            // Algunos ROM restringen receivers: el fallback sigue siendo setAppVolume().
+        }
     }
 
     fun isEnabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, true) ?: true
@@ -588,8 +642,20 @@ object AudioEnhanceConfig {
     fun getSurfaceResonance(): Boolean = prefs?.getBoolean(KEY_SURFACE, true) ?: true
     fun setSurfaceResonance(v: Boolean) { prefs?.edit()?.putBoolean(KEY_SURFACE, v)?.apply() }
 
-    fun getSpeechClarity(): Boolean = prefs?.getBoolean(KEY_SPEECH, true) ?: true
-    fun setSpeechClarity(v: Boolean) { prefs?.edit()?.putBoolean(KEY_SPEECH, v)?.apply() }
+fun getSpeechClarity(): Boolean = prefs?.getBoolean(KEY_SPEECH, true) ?: true
+fun setSpeechClarity(v: Boolean) { prefs?.edit()?.putBoolean(KEY_SPEECH, v)?.apply() }
+
+/** Fuerza de nivelación de sonoridad EBU R128 (0 = desactivada). */
+fun getLoudnessNorm(): Float = prefs?.getFloat(KEY_LOUDNESS_NORM, 0.5f) ?: 0.5f
+fun setLoudnessNorm(v: Float) { prefs?.edit()?.putFloat(KEY_LOUDNESS_NORM, v.coerceIn(0f, 1f))?.apply() }
+fun getDdc(): Boolean = prefs?.getBoolean(KEY_DDC, false) ?: false
+fun setDdc(v: Boolean) { prefs?.edit()?.putBoolean(KEY_DDC, v)?.apply() }
+fun getUseHrtf(): Boolean = prefs?.getBoolean(KEY_HRTF, false) ?: false
+fun setUseHrtf(v: Boolean) { prefs?.edit()?.putBoolean(KEY_HRTF, v)?.apply() }
+fun getRearDelayMs(): Float = prefs?.getFloat(KEY_REAR_DELAY, 20f) ?: 20f
+fun setRearDelayMs(v: Float) { prefs?.edit()?.putFloat(KEY_REAR_DELAY, v.coerceIn(0f, 30f))?.apply() }
+fun getRearPhaseInvert(): Boolean = prefs?.getBoolean(KEY_REAR_PHASE, false) ?: false
+fun setRearPhaseInvert(v: Boolean) { prefs?.edit()?.putBoolean(KEY_REAR_PHASE, v)?.apply() }
 
     fun getParametric(): List<ParamBand>? {
         val s = prefs?.getString(KEY_PARAMETRIC, null) ?: return null
@@ -630,6 +696,7 @@ object AudioEnhanceConfig {
 
     fun params(): Params {
         cachedParams?.let { return it }
+        val g = cacheGen.get()
         val p = Params(
             preset = preset(),
             enabled = isEnabled(),
@@ -654,20 +721,37 @@ object AudioEnhanceConfig {
             surfaceResonance = getSurfaceResonance(),
             speechClarity = getSpeechClarity(),
             parametricEq = getParametric(),
-            eq10 = getEq10()
+            eq10 = getEq10(),
+            loudnessNorm = getLoudnessNorm(),
+            ddc = getDdc(),
+            useHrtf = getUseHrtf(),
+            rearDelayMs = getRearDelayMs(),
+            rearPhaseInvert = getRearPhaseInvert()
+        )
+        // Los FX del preset (subAnchor/beatBoost/transientPunch/spectralClarity/
+        // explosionDucking) solo viven en withPreset(): sin este overlay
+        // params() los dejaba siempre en 0 y el DSP no recibía la mejora.
+        val fx = Params().withPreset(p.preset)
+        val p0 = p.copy(
+            subAnchor = fx.subAnchor,
+            beatBoost = fx.beatBoost,
+            transientPunch = fx.transientPunch,
+            spectralClarity = fx.spectralClarity,
+            explosionDucking = fx.explosionDucking
         )
         // Perfil AutoEQ medido: la curva paramétrica real reemplaza banda gráfica y
         // el preamp (headroom contra el clip) se aplica atenuando la ganancia master.
         val auto = autoEqProfile()
-        cachedParams = if (auto != null) {
+        val built = if (auto != null) {
             val lin = 10f.pow(auto.preampDb / 20f)
-            p.copy(
+            p0.copy(
                 parametricEq = auto.bands,
                 eq10 = null,
-                masterGain = (p.masterGain * lin).coerceIn(0.15f, 2f)
+                masterGain = (p0.masterGain * lin).coerceIn(0.15f, 2f)
             )
-        } else p
-        return cachedParams!!
+        } else p0
+        if (cacheGen.get() == g) cachedParams = built
+        return built
     }
 
     fun applyParams(p: Params) {
@@ -691,6 +775,11 @@ object AudioEnhanceConfig {
         setLoudnessComp(p.loudnessComp)
         setSurfaceResonance(p.surfaceResonance)
         setSpeechClarity(p.speechClarity)
+        setLoudnessNorm(p.loudnessNorm)
+        setDdc(p.ddc)
+        setUseHrtf(p.useHrtf)
+        setRearDelayMs(p.rearDelayMs)
+        setRearPhaseInvert(p.rearPhaseInvert)
         setAutoDevice(p.autoDevice)
         // Con un perfil AutoEQ medido activo, master y bandas se derivan del catálogo
         // (no se persisten para que no se acumulen al recalcular en params()).

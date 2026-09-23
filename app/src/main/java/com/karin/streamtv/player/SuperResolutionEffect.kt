@@ -45,6 +45,7 @@ class SuperResolutionEffect(
     private val sharpness: Float = 0.2f,
     private val restorePass: Boolean = false,
     private val separateRcas: Boolean = false,
+    private val karinVariant: Int = KARIN_CRISP,
     /** Reporta en runtime los tamaños REALES de entrada/salida del pase GL
      *  (lo que Media3 configuró), para el OSD y el diálogo de stats. */
     private val onConfigured: ((inW: Int, inH: Int, outW: Int, outH: Int) -> Unit)? = null,
@@ -53,7 +54,7 @@ class SuperResolutionEffect(
     private var program: SuperResProgram? = null
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return SuperResProgram(context, useHdr, mode, sharpness, restorePass, separateRcas, onConfigured).also {
+        return SuperResProgram(context, useHdr, mode, sharpness, restorePass, separateRcas, onConfigured, karinVariant).also {
             program = it
         }
     }
@@ -71,6 +72,9 @@ class SuperResolutionEffect(
     companion object {
         const val MODE_FSR = 0
         const val MODE_ANIME4K = 2
+        const val MODE_KARIN = 3
+        const val KARIN_ECO = 0
+        const val KARIN_CRISP = 1
 
         /** Tope de re-escala de calidad 2x (efecto independiente). */
         const val MAX_UPSCALE_HEIGHT = 1080
@@ -105,6 +109,7 @@ class SuperResProgram(
     private val restorePass: Boolean,
     private val separateRcas: Boolean = false,
     private val onConfigured: ((inW: Int, inH: Int, outW: Int, outH: Int) -> Unit)? = null,
+    private val karinVariant: Int = SuperResolutionEffect.KARIN_CRISP,
 ) : BaseGlShaderProgram(useHdr, 1) {
 
     private val glProgram: GlProgram
@@ -114,6 +119,10 @@ class SuperResProgram(
     init {
         val fragment = when (mode) {
             SuperResolutionEffect.MODE_ANIME4K -> FRAGMENT_ANIME4K
+            SuperResolutionEffect.MODE_KARIN ->
+                if (separateRcas) FRAGMENT_KARIN_EASU
+                else if (karinVariant == SuperResolutionEffect.KARIN_ECO) FRAGMENT_KARIN_ECO
+                else FRAGMENT_KARIN
             else -> if (separateRcas) FRAGMENT_FSR_EASU else FRAGMENT_FSR
         }
         try {
@@ -151,6 +160,13 @@ class SuperResProgram(
         when (mode) {
             SuperResolutionEffect.MODE_ANIME4K ->
                 glProgram.setFloatsUniform("uOutputTexelSize", floatArrayOf(1f / outputWidth, 1f / outputHeight))
+            SuperResolutionEffect.MODE_KARIN -> {
+                glProgram.setFloatsUniform("uTexelSize", floatArrayOf(1f / inputWidth, 1f / inputHeight))
+                glProgram.setFloatsUniform("uInputSize", floatArrayOf(inputWidth.toFloat(), inputHeight.toFloat()))
+                glProgram.setFloatUniform("uSharpness", sharpness)
+                val karinScale = if (inputWidth > 0) outputWidth.toFloat() / inputWidth else 2f
+                glProgram.setFloatUniform("uScaleFactor", karinScale)
+            }
             else -> {
                 glProgram.setFloatsUniform("uTexelSize", floatArrayOf(1f / inputWidth, 1f / inputHeight))
                 glProgram.setFloatsUniform("uInputSize", floatArrayOf(inputWidth.toFloat(), inputHeight.toFloat()))
@@ -169,6 +185,8 @@ class SuperResProgram(
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             when (mode) {
                 SuperResolutionEffect.MODE_ANIME4K ->
+                    glProgram.setFloatUniform("uSharpness", sharpness)
+                SuperResolutionEffect.MODE_KARIN ->
                     glProgram.setFloatUniform("uSharpness", sharpness)
                 SuperResolutionEffect.MODE_FSR ->
                     if (!separateRcas) glProgram.setFloatUniform("uSharpness", (1f - sharpness) * 0.35f)
@@ -210,6 +228,12 @@ class SuperResProgram(
          * no amplificar ruido en zonas lisas ni extremos de luminancia.
          */
         private val FRAGMENT_ANIME4K = ShaderBlobs.superresAnime4k
+
+        private val FRAGMENT_KARIN_ECO = ShaderBlobs.superresKarinEco
+
+        private val FRAGMENT_KARIN = ShaderBlobs.superresKarin
+
+        private val FRAGMENT_KARIN_EASU = ShaderBlobs.superresKarinEasu
 
     }
 }

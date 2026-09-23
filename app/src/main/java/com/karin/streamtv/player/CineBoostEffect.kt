@@ -105,9 +105,7 @@ class CineBoostShaderProgram(
         """
 
         private const val FRAGMENT_SHADER = """
-            #ifdef GL_ES
             precision highp float;
-            #endif
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
             uniform float uStrength;

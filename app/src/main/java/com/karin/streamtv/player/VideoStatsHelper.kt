@@ -376,6 +376,7 @@ object VideoStatsHelper {
     private fun upscalerModeLabel(prefs: SharedPreferences): String {
         return when (prefs.getInt(ExoPlayerSettingsHelper.KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)) {
             SuperResolutionEffect.MODE_ANIME4K -> "Anime4K"
+            SuperResolutionEffect.MODE_KARIN -> "Karin"
             else -> "FSR"
         }
     }

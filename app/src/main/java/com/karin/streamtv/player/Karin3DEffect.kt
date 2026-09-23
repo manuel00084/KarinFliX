@@ -19,9 +19,9 @@ import androidx.media3.effect.GlShaderProgram
  *   Con [inputKind]=SBS/TAB mezcla ambos ojos reales; con 2D genera
  *   pseudo-3D por paralaje de luma ([depth]).
  * - VR_SBS: duplica el cuadro 2D en ambas mitades para Cardboard.
- * - POLARIZED: entrelazado por líneas (pares=un ojo, impares=otro) para
- *   TV polarizados pasivos, desde fuente SBS o TAB (con 2D cae a
- *   paralaje sintético leve).
+ * - PULFRICH (Fabulojos 1997): prepara imagen 2D para lente oscuro en un
+ *   ojo (realce horizontal sutil que refuerza bordes en movimiento).
+ *   Sin lentes se ve normal. Fuente 2D; quieto no hay 3D.
  *
  * Va AL FINAL de la cadena (tras Shader, antes de la línea Demo) porque
  * reformatea la imagen de salida: ver Karin3DController.compatWarnings()
@@ -45,8 +45,7 @@ class Karin3DEffect(
         return when (mode) {
             Karin3DController.MODE_SBS_2D -> Karin3DController.INPUT_SBS
             Karin3DController.MODE_TAB_2D -> Karin3DController.INPUT_TAB
-            Karin3DController.MODE_POLARIZED ->
-                if (stereoInput) Karin3DController.INPUT_SBS else Karin3DController.INPUT_SBS
+            Karin3DController.MODE_PULFRICH -> Karin3DController.INPUT_2D
             Karin3DController.MODE_ANAGLYPH ->
                 if (stereoInput) Karin3DController.INPUT_SBS else Karin3DController.INPUT_2D
             else -> Karin3DController.INPUT_2D
@@ -123,8 +122,8 @@ class Karin3DShaderProgram(
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         // El 3D no cambia la resolución del buffer: reformatea dentro del
-        // mismo cuadro. Se guarda la resolución para el entrelazado
-        // polarizado (líneas pares/impares sobre la FUENTE, no el panel).
+        // mismo cuadro. Se guarda la resolución para taps de 1px
+        // (Pulfrich) sobre la FUENTE, no el panel.
         srcW = inputWidth.toFloat()
         srcH = inputHeight.toFloat()
         try {
@@ -184,12 +183,10 @@ class Karin3DShaderProgram(
         """
 
         private const val FRAGMENT_SHADER = """
-            #ifdef GL_ES
             precision highp float;
-            #endif
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
-            uniform int uMode;      // 1=SBS2D 2=TAB2D 3=ANAGLYPH 4=VR_SBS 5=POLARIZED
+            uniform int uMode;      // 1=SBS2D 2=TAB2D 3=ANAGLYPH 4=VR_SBS 5=PULFRICH
             uniform float uDepth;   // paralaje (fracción del ancho)
             uniform int uSwap;      // 1=ojo derecho/inferior/líneas impares
             uniform int uInput;     // 0=2D 1=SBS 2=TAB (fuente estéreo)
@@ -273,28 +270,23 @@ class Karin3DShaderProgram(
                     float half = step(0.5, uv.x);
                     outc = texture2D(uTexSampler, vec2(uv.x * 2.0 - half, uv.y)).rgb;
                 } else if (uMode == 5) {
-                    // POLARIZADO: entrelazado por líneas de la FUENTE.
-                    // Pares = un ojo, impares = otro (swap invierte).
-                    float h = max(uResolution.y, 1.0);
-                    float lineIdx = floor(uv.y * h);
-                    float oddL = mod(lineIdx, 2.0);
-                    if (uSwap == 1) { oddL = 1.0 - oddL; }
-                    if (uInput == 2) {
-                        // TAB: línea par = mitad sup estirada, impar = inf.
-                        vec3 topFull = texture2D(uTexSampler, vec2(uv.x, uv.y * 0.5)).rgb;
-                        vec3 botFull = texture2D(uTexSampler, vec2(uv.x, uv.y * 0.5 + 0.5)).rgb;
-                        outc = (oddL < 0.5) ? topFull : botFull;
-                    } else if (uInput == 0) {
-                        // 2D -> paralaje sintético leve entre líneas.
-                        float luma = dot(outc, vec3(0.299, 0.587, 0.114));
-                        float shift = (luma - 0.5) * uDepth * 2.0 * ((oddL < 0.5) ? -1.0 : 1.0);
-                        outc = texture2D(uTexSampler, vec2(clamp(uv.x + shift, 0.0, 1.0), uv.y)).rgb;
-                    } else {
-                        // SBS: línea par = mitad izq estirada, impar = der.
-                        vec3 leftFull = texture2D(uTexSampler, vec2(uv.x * 0.5, uv.y)).rgb;
-                        vec3 rightFull = texture2D(uTexSampler, vec2(uv.x * 0.5 + 0.5, uv.y)).rgb;
-                        outc = (oddL < 0.5) ? leftFull : rightFull;
-                    }
+                    // PULFRICH (Fabulojos 1997): la profundidad la pone un
+                    // lente OSCURO en un ojo (el ojo oscurecido procesa ~1
+                    // cuadro más lento y el movimiento lateral se vuelve
+                    // profundidad). Sin lentes se ve normal, como debe ser.
+                    // La app solo refuerza bordes horizontales en movimiento
+                    // (más señal para el efecto) preservando tono.
+                    vec2 hpx = vec2(1.0 / max(uResolution.x, 1.0), 0.0);
+                    vec3 lh = texture2D(uTexSampler, uv - hpx).rgb;
+                    vec3 rh = texture2D(uTexSampler, uv + hpx).rgb;
+                    vec3 KL = vec3(0.299, 0.587, 0.114);
+                    float lc0 = dot(outc, KL);
+                    float lh0 = dot(lh, KL);
+                    float rh0 = dot(rh, KL);
+                    float edge = clamp((abs(lc0 - lh0) + abs(lc0 - rh0)) * 3.0, 0.0, 1.0);
+                    float amt = clamp(uDepth * 20.0, 0.0, 0.5) * edge;
+                    float nl = clamp(lc0 + (lc0 - (lh0 + rh0) * 0.5) * amt, 0.0, 1.5);
+                    outc = clamp(outc * (nl / max(lc0, 0.0001)), 0.0, 1.0);
                 }
 
                 if (uDemoSplit == 1 && vTexCoord.x < 0.5) {

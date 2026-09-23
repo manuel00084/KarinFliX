@@ -179,6 +179,12 @@ class FileExplorerActivity : AppCompatActivity() {
         checkPermissionsAndLoad()
     }
 
+    // En Smart TV la pantalla de "Acceso total" puede no existir o no
+    // otorgarse: no insistir en loop. Tras 1 intento (o si no hay pantalla
+    // de ajustes) se cae al modo medios (MediaStore), que en TV lee USB y
+    // videos indexados sin All Files Access.
+    private var manageStorageAttempts = 0
+
     private fun checkPermissionsAndLoad() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
             !Environment.isExternalStorageManager()
@@ -187,17 +193,40 @@ class FileExplorerActivity : AppCompatActivity() {
                 android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                 android.net.Uri.parse("package:${packageName}")
             )
+            val resolvable = try {
+                intent.resolveActivity(packageManager) != null
+            } catch (_: Exception) {
+                false
+            }
+            if (manageStorageAttempts >= 1 || !resolvable) {
+                android.util.Log.w(
+                    "FileExplorer",
+                    "Sin acceso total (TV?): modo medios via MediaStore",
+                )
+                requestMediaOnlyAndLoad()
+                return
+            }
+            manageStorageAttempts++
             try {
                 startActivityForResult(intent, REQUEST_MANAGE_STORAGE)
             } catch (e: Exception) {
-                startActivityForResult(
-                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
-                    REQUEST_MANAGE_STORAGE
-                )
+                try {
+                    startActivityForResult(
+                        android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                        REQUEST_MANAGE_STORAGE
+                    )
+                } catch (_: Exception) {
+                    requestMediaOnlyAndLoad()
+                }
             }
             return
         }
 
+        requestMediaOnlyAndLoad()
+    }
+
+    /** Ruta sin All Files: permiso de medios + listado MediaStore. */
+    private fun requestMediaOnlyAndLoad() {
         val permission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             Manifest.permission.READ_MEDIA_VIDEO
         } else {
@@ -214,7 +243,16 @@ class FileExplorerActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_MANAGE_STORAGE) {
-            checkPermissionsAndLoad()
+            // Vuelva concedido o no: una sola pasada más y al modo medios.
+            // (Antes esto reabría Ajustes en loop en TVs sin esa pantalla.)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                Environment.isExternalStorageManager()
+            ) {
+                requestMediaOnlyAndLoad()
+            } else {
+                manageStorageAttempts++
+                checkPermissionsAndLoad()
+            }
         }
     }
 
@@ -293,7 +331,12 @@ class FileExplorerActivity : AppCompatActivity() {
             if (allVideos.isEmpty()) {
                 hideLoading()
                 tvEmptyContainer.visibility = View.VISIBLE
-                tvEmpty.text = "No se encontraron videos en el dispositivo"
+                tvEmpty.text = if (isTvDevice) {
+                    "No se encontraron videos. En Smart TV conecta un USB con videos " +
+                        "y concede acceso a fotos y videos cuando se pida."
+                } else {
+                    "No se encontraron videos en el dispositivo"
+                }
                 return@launch
             }
 

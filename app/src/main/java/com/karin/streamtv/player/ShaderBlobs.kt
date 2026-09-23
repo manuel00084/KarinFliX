@@ -27,21 +27,227 @@ object ShaderBlobs {
 
     val motionx2Vertex: String = "\r\n            attribute vec4 aFramePosition;\r\n            uniform mat4 uTransformationMatrix;\r\n            uniform mat4 uTexTransformationMatrix;\r\n            varying vec2 vTexCoord;\r\n            void main() {\r\n                gl_Position = uTransformationMatrix * aFramePosition;\r\n                vec4 tp = vec4(aFramePosition.x * 0.5 + 0.5, aFramePosition.y * 0.5 + 0.5, 0.0, 1.0);\r\n                vTexCoord = (uTexTransformationMatrix * tp).xy;\r\n            }\r\n        "
 
-    val motionx2CopyFragment: String = "\r\n            #ifdef GL_ES\r\n            precision mediump float;\r\n            #endif\r\n            varying vec2 vTexCoord;\r\n            uniform sampler2D uTexSampler;\r\n            void main() {\r\n                gl_FragColor = texture2D(uTexSampler, vTexCoord);\r\n            }\r\n        "
+    val motionx2CopyFragment: String = "\n            precision mediump float;\n            varying vec2 vTexCoord;\n            uniform sampler2D uTexSampler;\n            void main() {\n                gl_FragColor = texture2D(uTexSampler, vTexCoord);\n            }\n        "
 
-    val motionx2Fragment: String = "\r\n            #ifdef GL_ES\r\n            precision highp float;\r\n            #endif\r\n            varying vec2 vTexCoord;\r\n            uniform sampler2D uTexSampler;\r\n            uniform sampler2D uPrevFrame;\r\n            uniform float uStrength;\r\n            uniform int uMode; // 0=HYBRID, 1=DOUBLING, 2=BLEND\r\n            uniform int uFirstFrame;\r\n            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta\r\n            void main() {\r\n                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;\r\n                if (uMode == 1 || uFirstFrame == 1 || uStrength <= 0.0) {\r\n                    // DOUBLING: cada cuadro nÃ­tido tal cual (la repeticiÃ³n la hace el panel).\r\n                    gl_FragColor = vec4(c, 1.0);\r\n                    return;\r\n                }\r\n                vec3 p = texture2D(uPrevFrame, vTexCoord).rgb;\r\n                float mot = length(c - p);\r\n                float m = smoothstep(0.03, 0.20, mot);\r\n                // HYBRID = micro-mezcla (25%), BLEND = mezcla completa (50%).\r\n                float micro = (uMode == 0) ? 0.25 : 0.5;\r\n                float k = clamp(m * uStrength, 0.0, 1.0) * micro;\r\n                vec3 demoRgb = mix(c, p, k);\r\n                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }\r\n                gl_FragColor = vec4(demoRgb, 1.0);\r\n            }\r\n        "
+    val motionx2Fragment: String = "\n            precision highp float;\n            varying vec2 vTexCoord;\n            uniform sampler2D uTexSampler;\n            uniform sampler2D uPrevFrame;\n            uniform float uStrength;\n            uniform int uMode; // 0=HYBRID, 1=DOUBLING, 2=BLEND\n            uniform int uFirstFrame;\n            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta\n            void main() {\n                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;\n                if (uMode == 1 || uFirstFrame == 1 || uStrength <= 0.0) {\n                    // DOUBLING: cada cuadro nÃ­tido tal cual (la repeticiÃ³n la hace el panel).\n                    gl_FragColor = vec4(c, 1.0);\n                    return;\n                }\n                vec3 p = texture2D(uPrevFrame, vTexCoord).rgb;\n                float mot = length(c - p);\n                float m = smoothstep(0.03, 0.20, mot);\n                // HYBRID = micro-mezcla (25%), BLEND = mezcla completa (50%).\n                float micro = (uMode == 0) ? 0.25 : 0.5;\n                float k = clamp(m * uStrength, 0.0, 1.0) * micro;\n                vec3 demoRgb = mix(c, p, k);\n                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }\n                gl_FragColor = vec4(demoRgb, 1.0);\n            }\n        "
 
-    val motionx2InterpFragment: String = "\r\n            #ifdef GL_ES\r\n            precision highp float;\r\n            #endif\r\n            varying vec2 vTexCoord;\r\n            uniform sampler2D uTexSampler;\r\n            uniform sampler2D uPrevFrame;\r\n            uniform float uFactor; // 0..1: progreso entre anterior y actual\r\n            uniform int uDemoSplit;\r\n            void main() {\r\n                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;\r\n                vec3 p = texture2D(uPrevFrame, vTexCoord).rgb;\r\n                float f = clamp(uFactor, 0.0, 1.0);\r\n                float mot = length(c - p);\r\n                float m = smoothstep(0.03, 0.20, mot);\r\n                float k = clamp(m * f, 0.0, 1.0);\r\n                vec3 rgb = mix(c, p, k);\r\n                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { rgb = c; }\r\n                gl_FragColor = vec4(rgb, 1.0);\r\n            }\r\n        "
+    val motionx2InterpFragment: String = "\n            precision highp float;\n            varying vec2 vTexCoord;\n            uniform sampler2D uTexSampler;\n            uniform sampler2D uPrevFrame;\n            uniform float uFactor; // 0..1: progreso entre anterior y actual\n            uniform int uDemoSplit;\n            void main() {\n                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;\n                vec3 p = texture2D(uPrevFrame, vTexCoord).rgb;\n                float f = clamp(uFactor, 0.0, 1.0);\n                float mot = length(c - p);\n                float m = smoothstep(0.03, 0.20, mot);\n                float k = clamp(m * f, 0.0, 1.0);\n                vec3 rgb = mix(c, p, k);\n                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { rgb = c; }\n                gl_FragColor = vec4(rgb, 1.0);\n            }\n        "
 
     val colorsVertex: String = "\r\n            attribute vec4 aFramePosition;\r\n            uniform mat4 uTransformationMatrix;\r\n            uniform mat4 uTexTransformationMatrix;\r\n            varying vec2 vTexCoord;\r\n            void main() {\r\n                gl_Position = uTransformationMatrix * aFramePosition;\r\n                vec4 tp = vec4(aFramePosition.x * 0.5 + 0.5, aFramePosition.y * 0.5 + 0.5, 0.0, 1.0);\r\n                vTexCoord = (uTexTransformationMatrix * tp).xy;\r\n            }\r\n        "
 
-    val colorsFragment: String = "\r\n            #ifdef GL_ES\r\n            precision highp float;\r\n            #endif\r\n            varying vec2 vTexCoord;\r\n            uniform sampler2D uTexSampler;\r\n            uniform float uStrength; // 0..1\r\n            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta\r\n\r\n            float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\r\n\r\n            void main() {\r\n                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;\r\n                if (uStrength <= 0.0) {\r\n                    gl_FragColor = vec4(c, 1.0);\r\n                    return;\r\n                }\r\n                float l0 = luma(c);\r\n                float mx0 = max(c.r, max(c.g, c.b));\r\n                float mn0 = min(c.r, min(c.g, c.b));\r\n                // Mascara de piel sobre el original (deteccion estable).\r\n                float skin = smoothstep(0.02, 0.1, c.r - c.g) * smoothstep(0.01, 0.08, c.r - c.b);\r\n                skin *= smoothstep(0.25, 0.45, c.r) * (1.0 - smoothstep(0.7, 0.85, c.r));\r\n                skin = clamp(skin, 0.0, 1.0);\r\n                // Adaptativo: lo apagado pide mas, lo vivido casi nada.\r\n                float satDeficit = 1.0 - clamp((mx0 - mn0) * 2.0, 0.0, 1.0);\r\n                // ...cuidando sombras (ruido) y blancos (clipping).\r\n                float toneW = smoothstep(0.02, 0.18, l0) * (1.0 - smoothstep(0.75, 0.98, l0));\r\n                float drive = clamp(satDeficit * (0.35 + 0.65 * toneW), 0.0, 1.0);\r\n                drive *= 1.0 - skin * 0.85;\r\n                // 1) Saturacion adaptativa.\r\n                vec3 outc = mix(vec3(l0), c, 1.0 + uStrength * (0.25 + 1.0 * drive));\r\n                // 2) Vibrance de remate, tambien adaptativa.\r\n                float mx = max(outc.r, max(outc.g, outc.b));\r\n                float mn = min(outc.r, min(outc.g, outc.b));\r\n                float vib = 0.35 * uStrength * drive * (1.0 - clamp((mx - mn) * 1.5, 0.0, 1.0));\r\n                outc = mix(vec3(luma(outc)), outc, 1.0 + vib);\r\n                vec3 demoRgb = clamp(outc, 0.0, 1.0);\r\n                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }\r\n                gl_FragColor = vec4(demoRgb, 1.0);\r\n            }\r\n        "
+    val colorsFragment: String = "\n            precision highp float;\n            varying vec2 vTexCoord;\n            uniform sampler2D uTexSampler;\n            uniform float uStrength; // 0..1\n            uniform int uDemoSplit; // 1 = demo: mitad izquierda intacta\n\n            float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\n\n            void main() {\n                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;\n                if (uStrength <= 0.0) {\n                    gl_FragColor = vec4(c, 1.0);\n                    return;\n                }\n                float l0 = luma(c);\n                float mx0 = max(c.r, max(c.g, c.b));\n                float mn0 = min(c.r, min(c.g, c.b));\n                // Mascara de piel sobre el original (deteccion estable).\n                float skin = smoothstep(0.02, 0.1, c.r - c.g) * smoothstep(0.01, 0.08, c.r - c.b);\n                skin *= smoothstep(0.25, 0.45, c.r) * (1.0 - smoothstep(0.7, 0.85, c.r));\n                skin = clamp(skin, 0.0, 1.0);\r\n                // Adaptativo: lo apagado pide mas, lo vivido casi nada.\r\n                float satDeficit = 1.0 - clamp((mx0 - mn0) * 2.0, 0.0, 1.0);\r\n                // ...cuidando sombras (ruido) y blancos (clipping).\r\n                float toneW = smoothstep(0.02, 0.18, l0) * (1.0 - smoothstep(0.75, 0.98, l0));\r\n                float drive = clamp(satDeficit * (0.35 + 0.65 * toneW), 0.0, 1.0);\r\n                drive *= 1.0 - skin * 0.85;\r\n                // 1) Saturacion adaptativa.\r\n                vec3 outc = mix(vec3(l0), c, 1.0 + uStrength * (0.25 + 1.0 * drive));\r\n                // 2) Vibrance de remate, tambien adaptativa.\r\n                float mx = max(outc.r, max(outc.g, outc.b));\r\n                float mn = min(outc.r, min(outc.g, outc.b));\r\n                float vib = 0.35 * uStrength * drive * (1.0 - clamp((mx - mn) * 1.5, 0.0, 1.0));\r\n                outc = mix(vec3(luma(outc)), outc, 1.0 + vib);\r\n                vec3 demoRgb = clamp(outc, 0.0, 1.0);\r\n                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { demoRgb = texture2D(uTexSampler, vTexCoord).rgb; }\r\n                gl_FragColor = vec4(demoRgb, 1.0);\r\n            }\r\n        "
 
 
+
+    /**
+     * KarinSuperRes ECO (~9 taps, gama baja): bilineal + DoG luma-only con
+     * puerta por contraste + detector de bordes por gradiente + dering
+     * adaptativo. Barato y sin halos ni deriva de color: solo afila luma
+     * donde hay borde real.
+     * Uniforms: uTexelSize + uInputSize (ambos alimentan el paso de texel),
+     * uSharpness (ganancia), uScaleFactor (DRS-aware: menos fuerza si el
+     * re-escalado real es menor a 2x). GLES2 (GLSL ES 1.00).
+     */
+    val superresKarinEco: String = """
+            precision highp float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexSampler;
+            uniform vec2 uTexelSize;
+            uniform vec2 uInputSize;
+            uniform float uSharpness;
+            uniform float uScaleFactor;
+            void main() {
+                vec2 tx = (uTexelSize + vec2(1.0) / uInputSize) * 0.5;
+                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
+                vec3 n = texture2D(uTexSampler, vTexCoord + tx * vec2(0.0, -1.0)).rgb;
+                vec3 s = texture2D(uTexSampler, vTexCoord + tx * vec2(0.0, 1.0)).rgb;
+                vec3 e = texture2D(uTexSampler, vTexCoord + tx * vec2(1.0, 0.0)).rgb;
+                vec3 w = texture2D(uTexSampler, vTexCoord + tx * vec2(-1.0, 0.0)).rgb;
+                vec3 n2 = texture2D(uTexSampler, vTexCoord + tx * vec2(0.0, -2.0)).rgb;
+                vec3 s2 = texture2D(uTexSampler, vTexCoord + tx * vec2(0.0, 2.0)).rgb;
+                vec3 e2 = texture2D(uTexSampler, vTexCoord + tx * vec2(2.0, 0.0)).rgb;
+                vec3 w2 = texture2D(uTexSampler, vTexCoord + tx * vec2(-2.0, 0.0)).rgb;
+                vec3 small = (c * 4.0 + n + s + e + w) * 0.125;
+                vec3 wide = (c * 2.0 + n2 + s2 + e2 + w2) * 0.1666667;
+                vec3 dog = small - wide;
+                vec3 mx = max(max(n, s), max(e, w));
+                vec3 mn = min(min(n, s), min(e, w));
+                float contrast = clamp((mx.g - mn.g) * 4.0 + (mx.r - mn.r + mx.b - mn.b) * 2.0, 0.0, 1.0);
+                float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                float nL = dot(n, vec3(0.2126, 0.7152, 0.0722));
+                float sL = dot(s, vec3(0.2126, 0.7152, 0.0722));
+                float eL = dot(e, vec3(0.2126, 0.7152, 0.0722));
+                float wL = dot(w, vec3(0.2126, 0.7152, 0.0722));
+                vec2 gg = vec2(eL - wL, sL - nL);
+                float edge = clamp(length(gg) * 2.0, 0.0, 1.0);
+                float gate = max(contrast, edge * 0.7);
+                float tone = 0.35 + 0.65 * (1.0 - abs(luma - 0.5) * 2.0);
+                float scaleW = clamp(uScaleFactor - 1.0, 0.25, 1.0);
+                float dogL = dot(dog, vec3(0.2126, 0.7152, 0.0722));
+                vec3 outc = c + vec3(dogL) * (uSharpness * 1.5 * gate * tone * scaleW);
+                float ringEps = mix(0.03, 0.006, gate);
+                outc = clamp(outc, mn - vec3(ringEps), mx + vec3(ringEps));
+                gl_FragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);
+            }
+        """
+
+    /**
+     * KarinSuperRes CRISP (~9 taps + hash, gama media, un solo pase):
+     * gradiente sobre 3x3 + orientacion diagonal, direccion de borde,
+     * remate direccional en lineas, CAS luma-only de contraste adaptativo
+     * sobre el vecindario de salida, puerta de ruido + mascara de grano,
+     * DRS-aware y dering adaptativo. Mismos uniforms que ECO.
+     */
+    val superresKarin: String = """
+            precision highp float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexSampler;
+            uniform vec2 uTexelSize;
+            uniform vec2 uInputSize;
+            uniform float uSharpness;
+            uniform float uScaleFactor;
+            float karinLuma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+            void main() {
+                vec2 tx = (uTexelSize + vec2(1.0) / uInputSize) * 0.5;
+                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
+                vec3 n = texture2D(uTexSampler, vTexCoord + tx * vec2(0.0, -1.0)).rgb;
+                vec3 s = texture2D(uTexSampler, vTexCoord + tx * vec2(0.0, 1.0)).rgb;
+                vec3 e = texture2D(uTexSampler, vTexCoord + tx * vec2(1.0, 0.0)).rgb;
+                vec3 w = texture2D(uTexSampler, vTexCoord + tx * vec2(-1.0, 0.0)).rgb;
+                vec3 nw = texture2D(uTexSampler, vTexCoord + tx * vec2(-1.0, -1.0)).rgb;
+                vec3 ne = texture2D(uTexSampler, vTexCoord + tx * vec2(1.0, -1.0)).rgb;
+                vec3 sw = texture2D(uTexSampler, vTexCoord + tx * vec2(-1.0, 1.0)).rgb;
+                vec3 se = texture2D(uTexSampler, vTexCoord + tx * vec2(1.0, 1.0)).rgb;
+                float cL = karinLuma(c);
+                float nL = karinLuma(n);
+                float sL = karinLuma(s);
+                float eL = karinLuma(e);
+                float wL = karinLuma(w);
+                float nwL = karinLuma(nw);
+                float neL = karinLuma(ne);
+                float swL = karinLuma(sw);
+                float seL = karinLuma(se);
+                vec2 g = vec2((eL + neL + seL) - (wL + nwL + swL), (sL + swL + seL) - (nL + nwL + neL));
+                float glen = length(g) + 0.0001;
+                float edgeMag = clamp(glen * 2.0, 0.0, 1.0);
+                float d1 = abs((neL + swL) * 0.5 - cL);
+                float d2 = abs((nwL + seL) * 0.5 - cL);
+                float orient = clamp(abs(d1 - d2) * 6.0, 0.0, 1.0);
+                vec3 lap = (n + s + e + w) * 0.25 - c;
+                float dirBoost = 0.6 + 0.9 * max(edgeMag, orient);
+                vec3 detail = -lap * dirBoost;
+                float detL = dot(detail, vec3(0.2126, 0.7152, 0.0722));
+                vec3 crossMin = min(min(n, s), min(e, w));
+                vec3 crossMax = max(max(n, s), max(e, w));
+                vec3 diagMin = min(min(nw, ne), min(sw, se));
+                vec3 diagMax = max(max(nw, ne), max(sw, se));
+                vec3 mn = min(crossMin, diagMin);
+                vec3 mx = max(crossMax, diagMax);
+                float range = max(karinLuma(mx) - karinLuma(mn), 0.0001);
+                float gate = clamp((range - 0.008) * 24.0, 0.0, 1.0);
+                vec2 gcell = floor(vTexCoord * uInputSize);
+                float hash = fract(sin(dot(gcell, vec2(12.9898, 78.233))) * 43758.5453);
+                float grain = clamp(abs(hash - 0.5) * 2.0, 0.0, 1.0);
+                float grainMask = mix(1.0, grain, clamp((0.03 - range) * 20.0, 0.0, 1.0) * 0.7);
+                float scaleW = clamp(uScaleFactor - 1.0, 0.2, 1.0);
+                float tone = 0.4 + 0.6 * (1.0 - abs(cL - 0.5) * 2.0);
+                float k = uSharpness * 1.6 * gate * grainMask * scaleW * tone;
+                vec3 outc = c + vec3(detL) * k;
+                float ringEps = mix(0.025, 0.005, edgeMag);
+                outc = clamp(outc, mn - vec3(ringEps), mx + vec3(ringEps));
+                gl_FragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);
+            }
+        """
+
+    /**
+     * KarinSuperRes EASU (4 taps, pase 1 de HiRes en gama alta): re-escalado
+     * 2x limpio, sin afilado dentro. El afilado lo pone el pase 2 sobre la
+     * salida real. uSharpness solo modula un micro-dering para que el uniform
+     * siga vivo (Media3 hace NPE si se setea un uniform que el compilador
+     * elimino por no usarse).
+     */
+    val superresKarinEasu: String = """
+            precision highp float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexSampler;
+            uniform vec2 uTexelSize;
+            uniform vec2 uInputSize;
+            uniform float uSharpness;
+            uniform float uScaleFactor;
+            void main() {
+                vec2 tx = (uTexelSize + vec2(1.0) / uInputSize) * 0.5;
+                vec2 p = vTexCoord * uInputSize - vec2(0.5);
+                vec2 fp = floor(p);
+                vec2 fr = p - fp;
+                vec2 base = (fp + vec2(0.5)) * tx;
+                vec3 a = texture2D(uTexSampler, base).rgb;
+                vec3 b = texture2D(uTexSampler, base + tx * vec2(1.0, 0.0)).rgb;
+                vec3 c2 = texture2D(uTexSampler, base + tx * vec2(0.0, 1.0)).rgb;
+                vec3 d = texture2D(uTexSampler, base + tx * vec2(1.0, 1.0)).rgb;
+                vec3 outc = mix(mix(a, b, fr.x), mix(c2, d, fr.x), fr.y);
+                vec3 mn = min(min(a, b), min(c2, d));
+                vec3 mx = max(max(a, b), max(c2, d));
+                float dk = uSharpness * 0.15 * clamp(uScaleFactor - 1.0, 0.0, 1.0);
+                outc = mix(outc, clamp(outc, mn, mx), dk);
+                gl_FragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);
+            }
+        """
+
+    /**
+     * KarinSharp (5 taps, pase 2 de HiRes): CAS luma-only sobre pixeles YA
+     * escalados + mascara de grano + DRS-aware (uScaleFactor = lambda
+     * outW/inW del pase 1) + dering adaptativo + demo split. Lo compone
+     * SuperResRcasEffect con casMode=true.
+     */
+    val karinSharpenFragment: String = """
+            precision highp float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexSampler;
+            uniform vec2 uTexelSize;
+            uniform float uSharpness;
+            uniform float uScaleFactor;
+            uniform int uDemoSplit;
+            void main() {
+                vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
+                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { gl_FragColor = vec4(c, 1.0); return; }
+                vec3 n = texture2D(uTexSampler, vTexCoord + uTexelSize * vec2(0.0, -1.0)).rgb;
+                vec3 s = texture2D(uTexSampler, vTexCoord + uTexelSize * vec2(0.0, 1.0)).rgb;
+                vec3 e = texture2D(uTexSampler, vTexCoord + uTexelSize * vec2(1.0, 0.0)).rgb;
+                vec3 w = texture2D(uTexSampler, vTexCoord + uTexelSize * vec2(-1.0, 0.0)).rgb;
+                vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+                float cL = dot(c, LUMA);
+                float nL = dot(n, LUMA);
+                float sL = dot(s, LUMA);
+                float eL = dot(e, LUMA);
+                float wL = dot(w, LUMA);
+                float mnL = min(min(nL, sL), min(eL, wL));
+                float mxL = max(max(nL, sL), max(eL, wL));
+                float range = max(mxL - mnL, 0.0001);
+                float hitMin = min(mnL, cL) / (4.0 * mxL + 0.0001);
+                float hitMax = (1.0 - max(mxL, cL)) / (4.0 * (1.0 - mnL) + 0.0001);
+                float lobe = clamp(max(-hitMin, hitMax), -0.25, 0.0);
+                float lambda = clamp(uScaleFactor - 1.0, 0.0, 1.0);
+                float k = uSharpness * (0.35 + 0.65 * lambda);
+                vec3 sharp = (lobe * k * (n + s + e + w) + c) / (4.0 * lobe * k + 1.0);
+                vec2 gcell = floor(vTexCoord / uTexelSize);
+                float hash = fract(sin(dot(gcell, vec2(12.9898, 78.233))) * 43758.5453);
+                float gate = clamp((range - 0.006) * 30.0, 0.0, 1.0);
+                gate *= mix(1.0, clamp(abs(hash - 0.5) * 2.0, 0.0, 1.0), 0.6);
+                float sharpL = dot(sharp, LUMA);
+                float blend = clamp(gate * (0.4 + 0.6 * k), 0.0, 1.0);
+                vec3 outc = c + vec3(sharpL - cL) * blend;
+                vec3 mn = min(min(n, s), min(e, w));
+                vec3 mx = max(max(n, s), max(e, w));
+                float edgeMag2 = clamp(range * 3.0, 0.0, 1.0);
+                float ringEps = mix(0.02, 0.005, edgeMag2);
+                outc = clamp(outc, mn - vec3(ringEps), mx + vec3(ringEps));
+                gl_FragColor = vec4(clamp(outc, 0.0, 1.0), 1.0);
+            }
+        """
 
     val demoSplitVertex: String = "\n            attribute vec4 aFramePosition;\n            uniform mat4 uTransformationMatrix;\n            uniform mat4 uTexTransformationMatrix;\n            varying vec2 vTexCoord;\n            void main() {\n                gl_Position = uTransformationMatrix * aFramePosition;\n                vec4 tp = vec4(aFramePosition.x * 0.5 + 0.5, aFramePosition.y * 0.5 + 0.5, 0.0, 1.0);\n                vTexCoord = (uTexTransformationMatrix * tp).xy;\n            }\n        "
 
-    val demoSplitFragment: String = "\n            #ifdef GL_ES\n            precision mediump float;\n            #endif\n            varying vec2 vTexCoord;\n            uniform sampler2D uTexSampler;\n            void main() {\n                vec3 rgb = texture2D(uTexSampler, vTexCoord).rgb;\n                if (abs(vTexCoord.x - 0.5) < 0.001) {\n                    rgb = vec3(1.0);\n                }\n                gl_FragColor = vec4(rgb, 1.0);\n            }\n        "
+    val demoSplitFragment: String = "\n            precision mediump float;\n            varying vec2 vTexCoord;\n            uniform sampler2D uTexSampler;\n            void main() {\n                vec3 rgb = texture2D(uTexSampler, vTexCoord).rgb;\n                if (abs(vTexCoord.x - 0.5) < 0.001) {\n                    rgb = vec3(1.0);\n                }\n                gl_FragColor = vec4(rgb, 1.0);\n            }\n        "
 
 
 
