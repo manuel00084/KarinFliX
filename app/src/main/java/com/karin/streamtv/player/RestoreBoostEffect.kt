@@ -103,9 +103,6 @@ class RestoreBoostShaderProgram(
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
             glProgram.use()
-            if (presentationTimeUs < 500_000L) {
-                android.util.Log.d("RestoreBoost", "TMP stages dep=$depixel retro=$retro det=$detail low=$lowPower")
-            }
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             glProgram.setFloatsUniform("uTexelSize", floatArrayOf(1f / inputWidth, 1f / inputHeight))
             glProgram.setFloatUniform("uDepixel", depixel)
