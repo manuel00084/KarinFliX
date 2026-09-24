@@ -95,9 +95,6 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
     private var ringIdx = 0
     private val frames = ArrayDeque<Frame>()
     private var lastDecoderTsNs = -1L
-    // Estado ECO60: par único (prev half-res copiado, curr vivo en el OES).
-    private var ecoPrevTsUs = -1L
-    private var ecoLastTsUs = -1L
     // Mapeo reloj uptime->media: los buffers que entrega MediaCodec a un
     // SurfaceTexture llevan el RENDER timestamp (uptime, para pautar el latch),
     // no el pts de media. El offset (ts - posición) es constante por sesión y
@@ -187,7 +184,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         try {
             ensureCurrent()
             updatePoolDims()
-            if (mode == MotionX2Mode.ECO60) {
+            if (mode == MotionX2Mode.ECO60 || mode == MotionX2Mode.DOUBLING) {
                 if (progEco == null) {
                     progEco = MiniProg(VERTEX_SHADER, ECO_FRAGMENT_SHADER).apply {
                         if (!build()) throw IllegalStateException("progEco")
@@ -211,11 +208,14 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         }
     }
 
-    private val ecoMode: Boolean
-        get() = interpMode == MotionX2Mode.ECO60
+    // Camino ECO (ECO60 y DOUBLING 2x): historial half-res + curr full-res
+    // directo del OES + shader de mezcla liviana. La selección de slots difiere
+    // (ECO60: grid fijo 60Hz; DOUBLING: nativo/medio en cadencia 2x real).
+    private val ecoPath: Boolean
+        get() = interpMode == MotionX2Mode.ECO60 || interpMode == MotionX2Mode.DOUBLING
 
     private fun updatePoolDims() {
-        if (ecoMode) {
+        if (ecoPath) {
             poolW = (videoW / 2).coerceAtLeast(2)
             poolH = (videoH / 2).coerceAtLeast(2)
         } else {
@@ -242,8 +242,6 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         lastDecoderTsNs = -1L
         clockOffsetUs = null
         lastArrivalUpMs = 0L
-        ecoPrevTsUs = -1L
-        ecoLastTsUs = -1L
     }
 
     // ------------------------------------------------------- SurfaceView (salida)
@@ -277,10 +275,6 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         if (!eglReady || released) return
         try {
             ensureCurrent()
-            if (ecoMode) {
-                onFrameAvailableEco(st)
-                return
-            }
             st.updateTexImage()
             val ts = st.timestamp
             if (ts == lastDecoderTsNs) return
@@ -308,48 +302,6 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
             }
         } catch (e: Exception) {
             Log.w(TAG, "onFrameAvailable: ${e.message}")
-        }
-    }
-
-    /**
-     * Entrada ECO60: el contenido OES actual es el cuadro PREVIO (aún no se
-     * hizo update) → se copia a half-res como prev, y luego se trae el actual
-     * con updateTexImage. Solo 1 copia chica por cuadro decodificado.
-     */
-    private fun onFrameAvailableEco(st: SurfaceTexture) {
-        try {
-            val prevSlot = pool.firstOrNull()
-            if (ecoLastTsUs >= 0 && prevSlot != null) {
-                copyOesToSlot(prevSlot)
-                ecoPrevTsUs = ecoLastTsUs
-            }
-            st.updateTexImage()
-            val ts = st.timestamp
-            if (ts == lastDecoderTsNs && ecoLastTsUs >= 0) return
-            lastDecoderTsNs = ts
-            st.getTransformMatrix(stTransform)
-            val tsUs = ts / 1000L
-            if (clockOffsetUs == null) {
-                var posUs = -1L
-                try {
-                    val pos = playerRef?.currentPosition ?: -1L
-                    if (pos >= 0) posUs = pos * 1000L
-                } catch (_: Exception) {
-                }
-                if (posUs >= 0) {
-                    clockOffsetUs = tsUs - posUs
-                    Log.d(TAG, "clockOffsetUs=$clockOffsetUs (ts=$tsUs pos=$posUs)")
-                }
-            }
-            ecoLastTsUs = tsUs
-            if (ecoPrevTsUs < 0 && prevSlot != null) {
-                // Primer cuadro: prev = curr (el factor dibuja ~el actual).
-                copyOesToSlot(prevSlot)
-                ecoPrevTsUs = tsUs
-            }
-            lastArrivalUpMs = SystemClock.uptimeMillis()
-        } catch (e: Exception) {
-            Log.w(TAG, "onFrameAvailableEco: ${e.message}")
         }
     }
 
@@ -400,14 +352,8 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         // offset quedaría con fase constante. Se corrige para que el cuadro más
         // nuevo lidere al slot ~1 cuadro (just-in-time). Solo con cuadros
         // frescos: si el decodificador está parado no se toca el offset.
-        // En ECO60 el "más nuevo" es el curr vivo en el OES.
-        val servoNewestUs: Long? = if (ecoMode) {
-            if (ecoLastTsUs >= 0 && clockOffsetUs != null) {
-                ecoLastTsUs - (clockOffsetUs ?: 0L)
-            } else null
-        } else {
+        val servoNewestUs: Long? =
             if (frames.size >= 2 && clockOffsetUs != null) ptsOf(frames.last()) else null
-        }
         if (slotT >= 0 && servoNewestUs != null &&
             SystemClock.uptimeMillis() - lastArrivalUpMs <= 250
         ) {
@@ -431,7 +377,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         var histN0 = -1L
         var histN1 = -1L
         var histSize = 0
-        if (ecoMode) {
+        if (ecoPath) {
             GLES20.glViewport(vp[0], vp[1], vp[2], vp[3])
             val t0 = System.nanoTime()
             val r = drawEcoFrame(slotT)
@@ -439,12 +385,6 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
             drawnSlot = r.first
             drawnPrev = r.second
             drawnF = r.third
-            val off = clockOffsetUs ?: 0L
-            if (ecoLastTsUs >= 0) {
-                histN1 = ecoLastTsUs - off
-                histN0 = if (ecoPrevTsUs >= 0) ecoPrevTsUs - off else histN1
-                histSize = if (ecoPrevTsUs >= 0) 2 else 1
-            }
         } else {
             if (frames.isEmpty()) {
                 EGL14.eglSwapBuffers(display, windowSurface)
@@ -497,11 +437,11 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
                 }
             }
         }
-            histN0 = oldestPts
-            histN1 = newestPts
-            histSize = frames.size
             drawNsAcc += System.nanoTime() - t0
         }
+        histN0 = frames.firstOrNull()?.let { ptsOf(it) } ?: -1L
+        histN1 = frames.lastOrNull()?.let { ptsOf(it) } ?: -1L
+        histSize = frames.size
 
         EGL14.eglSwapBuffers(display, windowSurface)
         drawCount++
@@ -521,25 +461,77 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
     }
 
     /**
-     * Cuadro ECO60: curr full-res directo del OES + prev half-res del pool.
-     * Devuelve (slotDibujado, prevUsado, factor). 1 solo pase fullscreen.
+     * Cuadro ECO60 / DOUBLING 2x: curr full-res directo del OES + prev del pool.
+     * El par (prev,curr) se busca en el deque (como REAL60); el curr OES solo se
+     * usa cuando el par es el más nuevo (si no, el OES ya avanzó y se dibuja el
+     * nativo del par desde su copia). Devuelve (slot, prev, factor).
      */
     private fun drawEcoFrame(slotT: Long): Triple<Long, Long, Float> {
-        val off = clockOffsetUs ?: 0L
-        val prevSlot = pool.firstOrNull()
-        if (ecoLastTsUs < 0 || prevSlot == null) {
+        if (frames.isEmpty()) {
             return Triple(-1L, -1L, -1f)
         }
-        val currPts = ecoLastTsUs - off
-        val prevPts = if (ecoPrevTsUs >= 0) ecoPrevTsUs - off else currPts
-        val gap = currPts - prevPts
-        if (slotT < 0 || slotT >= currPts || gap <= STEP_US + STEP_TOL_US || gap > MAX_GAP_US || gap <= 0) {
+        val newest = frames.last()
+        val oldest = frames.first()
+        val newestPts = ptsOf(newest)
+        val oldestPts = ptsOf(oldest)
+        if (slotT < 0 || slotT >= newestPts) {
+            // curr hold: el OES contiene el cuadro más nuevo.
             drawOesWindow()
-            return Triple(currPts, -1L, -1f)
+            return Triple(newestPts, -1L, -1f)
         }
-        val f = ((slotT - prevPts).toFloat() / gap.toFloat()).coerceIn(0f, 1f)
-        drawEco(prevSlot, f)
-        return Triple(slotT, prevPts, f)
+        if (slotT <= oldestPts) {
+            drawCopy(oldest.slot)
+            return Triple(oldestPts, -1L, -1f)
+        }
+        val pair = findPair(slotT)
+            ?: run { drawCopy(oldest.slot); return Triple(oldestPts, -1L, -1f) }
+        val (a, b) = pair
+        val aPts = ptsOf(a)
+        val bPts = ptsOf(b)
+        val gap = bPts - aPts
+        val isNewestPair = (b === newest)
+        if (interpMode == MotionX2Mode.DOUBLING) {
+            // Cadencia 2x real de la fuente: nativo del par que toca o
+            // intermedio f=0.5. Fuente ya a 60+: passthrough sin duplicar.
+            if (gap <= STEP_US + STEP_TOL_US || gap <= 0 || gap > MAX_GAP_US) {
+                if (isNewestPair) drawOesWindow() else drawCopy(b.slot)
+                return Triple(bPts, -1L, -1f)
+            }
+            val mid = (aPts + bPts) / 2
+            if (slotT >= mid) {
+                if (isNewestPair) {
+                    drawEco(a.slot, 0.5f)
+                    return Triple(mid, aPts, 0.5f)
+                }
+                drawCopy(b.slot)
+                return Triple(bPts, -1L, -1f)
+            }
+            drawCopy(a.slot)
+            return Triple(aPts, -1L, -1f)
+        }
+        if (gap <= STEP_US + STEP_TOL_US || gap > MAX_GAP_US || gap <= 0) {
+            drawCopy(b.slot)
+            return Triple(bPts, -1L, -1f)
+        }
+        if (!isNewestPair) {
+            drawCopy(b.slot)
+            return Triple(bPts, -1L, -1f)
+        }
+        val f = ((slotT - aPts).toFloat() / gap.toFloat()).coerceIn(0f, 1f)
+        drawEco(a.slot, f)
+        return Triple(slotT, aPts, f)
+    }
+
+    /** Par (prev,curr) del deque que contiene a slotT, o null si está fuera. */
+    private fun findPair(slotT: Long): Pair<Frame, Frame>? {
+        for (i in frames.size - 1 downTo 1) {
+            val cur = frames[i]
+            val prv = frames[i - 1]
+            val curPts = ptsOf(cur)
+            val prvPts = ptsOf(prv)
+            if (prvPts <= slotT && slotT <= curPts) return Pair(prv, cur)
+        }
+        return null
     }
 
     /** Passthrough ECO: el curr full-res del OES directo a ventana. */
@@ -727,7 +719,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         }
         // En modo ECO el programa principal es progEco; progInterp se compila
         // bajo demanda si luego se cambia a REAL60/INTERP en vivo (setMode).
-        if (!ecoMode) {
+        if (!ecoPath) {
             progInterp = MiniProg(VERTEX_SHADER, interpFs).apply {
                 if (!build()) throw IllegalStateException("progInterp")
             }
@@ -990,11 +982,16 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         private const val STEP_TOL_US = 4_000L
         private const val MAX_GAP_US = 400_000L
         private const val POOL_CAPACITY = 6
-        private const val MAX_HISTORY = 8
+        // El deque nunca excede al pool: con round-robin, reutilizar un slot
+        // coincide con soltar su referencia (si fuera más largo, dibujaría
+        // pares con contenido ya sobrescrito).
+        private const val MAX_HISTORY = 6
         private const val DRAW_LOG_EVERY = 120L
-        // El cuadro recién decodificado debe liderar al slot actual ~1 cuadro
-        // de 25 fps (just-in-time): el servo de fase lo mantiene ahí.
-        private const val SERVO_LEAD_US = 40_000L
+        // El cuadro recién decodificado debe liderar al slot actual una fracción
+        // de cuadro (just-in-time): el servo de fase lo mantiene ahí. 20ms < gap
+        // mínimo real (~33ms a 30fps): con 40ms el slot quedaba clavado en el
+        // borde inferior del par y el X2 nunca enganchaba el intermedio.
+        private const val SERVO_LEAD_US = 20_000L
 
         private val IDENTITY = floatArrayOf(
             1f, 0f, 0f, 0f,

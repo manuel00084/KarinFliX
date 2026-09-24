@@ -35,9 +35,10 @@ enum class MotionX2Mode(val label: String) {
     ECO60("ECO60 (60fps liviano · bajo consumo)");
 
     companion object {
-        /** True si el ordinal guardado en prefs emite cuadros intermedios (~60 fps reales). */
+        /** True si el ordinal guardado en prefs emite cuadros intermedios (fps reales extra). */
         fun isRealFps(ordinal: Int): Boolean =
-            ordinal == INTERP.ordinal || ordinal == REAL60.ordinal || ordinal == ECO60.ordinal
+            ordinal == INTERP.ordinal || ordinal == REAL60.ordinal ||
+                ordinal == ECO60.ordinal || ordinal == DOUBLING.ordinal
 
         /**
          * Resuelve el ordinal guardado en prefs al modo efectivo. El modo
@@ -53,9 +54,10 @@ enum class MotionX2Mode(val label: String) {
     }
 }
 
-/** True si el modo emite cuadros intermedios (~60 fps reales). */
+/** True si el modo emite cuadros intermedios (fps reales extra). */
 fun MotionX2Mode.isRealFps(): Boolean =
-    this == MotionX2Mode.INTERP || this == MotionX2Mode.REAL60 || this == MotionX2Mode.ECO60
+    this == MotionX2Mode.INTERP || this == MotionX2Mode.REAL60 ||
+        this == MotionX2Mode.ECO60 || this == MotionX2Mode.DOUBLING
 
 class MotionX2BoostEffect(
     private var mode: MotionX2Mode = MotionX2Mode.HYBRID,

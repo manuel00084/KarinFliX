@@ -13,8 +13,9 @@ import android.content.SharedPreferences
  * - ANAGLYPH: lentes bicolor con 3 variantes ([ANAG_RED_CYAN],
  *   [ANAG_RED_BLUE], [ANAG_RED_GREEN]). Si la entrada ya es estéreo
  *   (SBS/TAB) la combina; si es 2D genera pseudo-3D con [depth].
- * - VR_SBS: entrada 2D -> SBS duplicado para visor Cardboard/VR.
- *   Sin seguimiento de cabeza: la misma imagen a ambos ojos.
+ * - VR_SBS: con fuente 2D la duplica para visor Cardboard/VR; con
+ *   fuente SBS la pasa tal cual (ya es SBS). Sin seguimiento de cabeza:
+ *   la misma imagen a ambos ojos.
  * - PULFRICH (homenaje Fabulojos 1997): la profundidad la pone un lente
  *   OSCURO en un ojo (el ojo oscurecido procesa ~1 cuadro más lento y el
  *   movimiento lateral se vuelve profundidad). La app solo prepara la
@@ -144,9 +145,11 @@ object Karin3DController {
         if (m == MODE_ANAGLYPH) {
             label += "[${inputName(inputKind(prefs))}]"
         }
-        if (isSwapEye(prefs) &&
-            (m == MODE_SBS_2D || m == MODE_TAB_2D)
-        ) label += "(swap)"
+        // El swap invierte ojos en SBS→2D, TAB→2D y en anaglifo con
+        // fuente estéreo (fetchStereo lo usa); en VR/Pulfrich no aplica.
+        val swapApplies = m == MODE_SBS_2D || m == MODE_TAB_2D ||
+            (m == MODE_ANAGLYPH && inputKind(prefs) != INPUT_2D)
+        if (isSwapEye(prefs) && swapApplies) label += "(swap)"
         return label
     }
 
@@ -204,20 +207,17 @@ object Karin3DController {
             out += "⚠ Cine + anaglifo: el grano de película añade ruido al filtrado de los lentes (leve)."
         }
         if (mode == MODE_PULFRICH && motionOn) {
-            val mMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
-            if (mMode != 1) {
-                out += "⛔ MotionX2 + Pulfrich incompatible: la mezcla temporal destruye el retardo entre ojos (lo deja en 2D). Apaga MotionX2 o usa Doubling."
-            }
+            // Todos los modos MotionX2 mezclan temporalmente (Doubling ahora
+            // interpola x2 real): ninguno es seguro con Pulfrich.
+            out += "⛔ MotionX2 + Pulfrich incompatible: la mezcla temporal destruye el retardo entre ojos (lo deja en 2D). Apaga MotionX2."
         }
         if (stereoSource && upscalerOn) {
             out += "⚠ Upscaler + fuente ${inputName(input)}: el reescalado mezcla ambas mitades en la costura central (halo y fuga entre ojos). Apaga el Upscaler para 3D limpio."
         }
         if (stereoSource && motionOn) {
-            val mMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
-            // 1 = DOUBLING legacy (no-op, seguro). El resto mezcla temporal.
-            if (mMode != 1) {
-                out += "⚠ MotionX2 + 3D estéreo: la mezcla temporal crea disparidad falsa en movimiento (fantasma). Usa Apagado o Doubling."
-            }
+            // Todos los modos MotionX2 mezclan temporalmente (Doubling ahora
+            // interpola x2 real): ninguno es seguro con 3D estéreo.
+            out += "⚠ MotionX2 + 3D estéreo: la mezcla temporal crea disparidad falsa en movimiento (fantasma). Apaga MotionX2."
         }
         if (mode == MODE_ANAGLYPH && lightOn) {
             out += "⚠ Light/Color + anaglifo: la saturación y el contraste alteran el balance rojo↔cian/azul/verde y dan fantasma. Baja la intensidad o apágalo."

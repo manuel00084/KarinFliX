@@ -594,7 +594,8 @@ class ExoPlayerActivity : AppCompatActivity() {
             val modeIdx = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
             val mxMode = MotionX2Mode.resolveStored(modeIdx)
             chainMotionLabel = mxMode.label
-            chainActive.add("MotionX2 ${mxMode.label} (render propio 60fps)")
+            val ownKind = if (mxMode == MotionX2Mode.DOUBLING) "x2 real" else "60fps"
+            chainActive.add("MotionX2 ${mxMode.label} (render propio $ownKind)")
             chainOmitted.add("Filtros de imagen (en pausa en este modo)")
             Log.d("ExoPlayerActivity", "Render propio GLES2 activo: $mxMode, grafo vacío")
             return

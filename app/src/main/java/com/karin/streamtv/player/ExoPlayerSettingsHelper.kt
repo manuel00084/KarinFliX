@@ -1304,7 +1304,7 @@ object ExoPlayerSettingsHelper {
         )
         val descs = mutableListOf(
             "No hace nada. Video original.",
-            "Repite cada cuadro. Muy liviano, sin fantasmas.",
+            "Nativo + intermedio: doble fps real. Liviano.",
             "Mezcla cuadros. Suave, puede dar fantasma.",
             "Cuadro nítido + mezcla leve. El balance.",
             "60 fps con mezcla liviana e historial a mitad de resolución. Para equipos modestos.",

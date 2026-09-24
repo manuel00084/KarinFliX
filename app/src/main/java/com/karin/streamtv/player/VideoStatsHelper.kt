@@ -99,14 +99,17 @@ object VideoStatsHelper {
         val motionLabel = shortMotion(
             chainMotionLabel?.takeIf { it.isNotBlank() } ?: motionLegacyLabel(motionLegacy),
         )
-        // Realidad del pipeline: solo INTERP/REAL60 emiten cuadros extra (~60 fps).
-        // HYBRID/BLEND/DOUBLING son 1:1 (misma cadencia + suavizado).
-        // Se usa la etiqueta REAL de la cadena (gama baja fuerza HYBRID
-        // aunque prefs pida INTERP); si no hay cadena aún, se usa prefs.
-        val isInterpReal = motionLabel.contains("60", ignoreCase = true) ||
+        // Realidad del pipeline: INTERP/REAL60/ECO60/DOUBLING emiten cuadros
+        // extra (60 fps o x2). HYBRID/BLEND son 1:1 (misma cadencia + suavizado).
+        // Se usa la etiqueta REAL de la cadena; si no hay cadena aún, prefs.
+        val isDoubling =
+            motionLabel.contains("DOUBLING", ignoreCase = true) ||
+                (chainMotionLabel.isNullOrBlank() && motionLegacy == 1)
+        val isInterpReal = motionLabel.contains("60", ignoreCase = true) || isDoubling ||
             (chainMotionLabel.isNullOrBlank() && MotionX2Mode.isRealFps(motionLegacy))
         val finalFps = when {
             !motionReqOn -> vFps
+            isDoubling -> if (srcFps > 0) "%.2f → ~%.2f".format(srcFps, srcFps * 2) else "~x2 fps"
             isInterpReal -> if (srcFps > 0) "%.2f → ~60".format(srcFps) else "~60 fps"
             else -> if (vFps == "—") "Suavizado" else "$vFps + suav."
         }
@@ -770,11 +773,16 @@ object VideoStatsHelper {
             out += line
         }
         if (motionOn) {
+            val isDoubling = motionMode.contains("DOUBLING", ignoreCase = true)
             val isInterp = motionMode.contains("INTERP", ignoreCase = true) ||
                 motionMode.contains("GRID", ignoreCase = true) ||
-                motionMode.contains("60 fps", ignoreCase = true)
-            out += if (isInterp) "MotionX2 $motionMode (~60 fps)"
-                else "MotionX2 $motionMode (suavizado)"
+                motionMode.contains("60 fps", ignoreCase = true) ||
+                motionMode.contains("ECO", ignoreCase = true)
+            out += when {
+                isDoubling -> "MotionX2 $motionMode (~x2 fps)"
+                isInterp -> "MotionX2 $motionMode (~60 fps)"
+                else -> "MotionX2 $motionMode (suavizado)"
+            }
         }
         run {
             val (t, s) = ExoPlayerSettingsHelper.shaderSelection(prefs)
