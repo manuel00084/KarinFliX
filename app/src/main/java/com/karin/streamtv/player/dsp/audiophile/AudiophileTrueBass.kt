@@ -59,9 +59,9 @@ class AudiophileTrueBass {
         val highL = l - loL
         val highR = r - loR
 
-        // 2) Boost de graves reales + síntesis.
-        val boost = lo * (1.0 + 0.9 * level)
-        val harm = lo * abs(lo) * (0.55 * level)
+    // 2) Boost de graves reales + síntesis.
+    val boost = lo * (1.0 + 1.15 * level)
+    val harm = lo * abs(lo) * (0.7 * level)
         val a = abs(lo)
         env = if (a > env) env + (a - env) * aAtk else env + (a - env) * aRel
         val thump = thumpLp.process(env) * (0.5 * level)
