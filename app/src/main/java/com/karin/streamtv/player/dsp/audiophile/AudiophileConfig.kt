@@ -185,21 +185,21 @@ object AudiophileConfig {
     @Volatile private var cached: Params? = null
     @Volatile private var cachedGen = -1L
     @Volatile private var abBypass = false
-    @Volatile private var engine = Engine.CURRENT
+    @Volatile private var engine = Engine.AUDIOPHILE
 
     fun init(context: Context) {
         if (prefs != null) return
         val p = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         prefs = p
-        engine = runCatching { Engine.valueOf(p.getString(KEY_ENGINE, Engine.CURRENT.name)!!) }
-            .getOrDefault(Engine.CURRENT)
+        engine = runCatching { Engine.valueOf(p.getString(KEY_ENGINE, Engine.AUDIOPHILE.name)!!) }
+            .getOrDefault(Engine.AUDIOPHILE)
         abBypass = p.getBoolean(KEY_AB_BYPASS, false)
         p.registerOnSharedPreferenceChangeListener { _, key ->
             if (key != null) {
                 cacheGen.incrementAndGet()
                 if (key == KEY_ENGINE) {
-                    engine = runCatching { Engine.valueOf(p.getString(KEY_ENGINE, Engine.CURRENT.name)!!) }
-                        .getOrDefault(Engine.CURRENT)
+                    engine = runCatching { Engine.valueOf(p.getString(KEY_ENGINE, Engine.AUDIOPHILE.name)!!) }
+                        .getOrDefault(Engine.AUDIOPHILE)
                 }
                 if (key == KEY_AB_BYPASS) abBypass = p.getBoolean(KEY_AB_BYPASS, false)
             }
