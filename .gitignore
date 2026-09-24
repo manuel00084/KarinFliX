@@ -64,3 +64,11 @@ docs/*.txt
 # screen_main.png
 # screen_wizard.png
 # screen_check*.png
+
+# Artefactos de debug de sesion (logs JVM/bytescode)
+/build_*.txt
+/R.txt
+/classes.jar
+/annotations.zip
+/karin_link.db
+

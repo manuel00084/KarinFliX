@@ -73,6 +73,16 @@ class BiquadFilter {
                 a1 = (-2.0 * cw) / a0
                 a2 = (1.0 - alpha) / a0
             }
+            Kind.NOTCH -> {
+                // Band-stop RBJ: anula f0 con ancho 1/Q (gainDb ignorado).
+                val alpha = sw / (2.0 * q)
+                val a0 = 1.0 + alpha
+                b0 = 1.0 / a0
+                b1 = (-2.0 * cw) / a0
+                b2 = 1.0 / a0
+                a1 = (-2.0 * cw) / a0
+                a2 = (1.0 - alpha) / a0
+            }
         }
     }
 
@@ -95,5 +105,5 @@ class BiquadFilter {
         y2 = 0.0
     }
 
-    enum class Kind { PEAKING, LOWSHELF, HIGHSHELF, LOWPASS, HIGHPASS }
+    enum class Kind { PEAKING, LOWSHELF, HIGHSHELF, LOWPASS, HIGHPASS, NOTCH }
 }

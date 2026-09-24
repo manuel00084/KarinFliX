@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.SharedPreferences
 import android.view.Gravity
 import android.view.View
+import android.widget.Button
 import android.widget.CheckBox
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -11,10 +12,12 @@ import android.widget.RadioButton
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import com.karin.streamtv.R
 import androidx.appcompat.app.AlertDialog
 import androidx.media3.exoplayer.ExoPlayer
 import com.karin.streamtv.player.dsp.AudioEnhanceConfig
+import com.karin.streamtv.player.dsp.audiophile.AudiophileConfig
 
 /**
  * KARINFLIX VISION ASSIST: prefs + diálogo del botón de anteojos.
@@ -249,6 +252,47 @@ object VisionAssistHelper {
         onLive: (VisionAssistSettings) -> Unit = { _ -> },
     ) {
         var cfg = fromPrefs(prefs)
+        // Valores de audición al abrir: si el usuario cancela tras mover los
+        // sliders en vivo, se restauran (el vivo escribe al DSP en directo).
+        val initAudSpeech = cfg.audSpeech
+        val initAudLoss = cfg.audLoss
+        // Snapshot de TODAS las claves de visión para revertir en Cancelar
+        // (el diálogo ahora aplica en vivo: marcar ya monta el efecto).
+        val visionSnapshot: Map<String, Any?> =
+            prefs.all.filterKeys { it.startsWith("vision_") }
+        // Render propio MotionX2 60fps: la cadena GL no existe y la visión
+        // queda en pausa (misma condición que ExoPlayerActivity).
+        val ownRenderNow: Boolean = try {
+            prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false) &&
+                MotionX2Mode.resolveStored(
+                    prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0),
+                ).isRealFps()
+        } catch (_: Exception) {
+            false
+        }
+        val initialMounted = cfg.isActive && cfg.hasVision && !ownRenderNow
+        var mountedVision = initialMounted
+        // Demo split (Comparar) al abrir: también se revierte en Cancelar.
+        val initDemo = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false)
+        // true cuando el usuario ya confirmó o usó un botón de arreglo (que
+        // gestiona su propio estado): evita que onCancel revierta de más.
+        var confirmed = false
+        fun restoreSnapshot() {
+            val ed = prefs.edit()
+            for (k in prefs.all.keys.filter { it.startsWith("vision_") }) ed.remove(k)
+            for ((k, v) in visionSnapshot) {
+                when (v) {
+                    is Boolean -> ed.putBoolean(k, v)
+                    is Int -> ed.putInt(k, v)
+                    is Long -> ed.putLong(k, v)
+                    is Float -> ed.putFloat(k, v)
+                    is String -> ed.putString(k, v)
+                }
+            }
+            ed.apply()
+            AudioEnhanceConfig.setAudSpeech(initAudSpeech)
+            AudioEnhanceConfig.setAudLoss(initAudLoss)
+        }
 
         fun pct(v: Float) = "Intensidad: ${(v * 100).toInt()}%"
 
@@ -256,18 +300,28 @@ object VisionAssistHelper {
 
         // ---- Daltonismo: subtipo ----
         var daltonType = cfg.daltonType
+        // ---- Vista cansada: modo (los radios se crean más abajo) ----
+        var strainMode = cfg.strainMode
         val daltonRadios = mutableListOf<RadioButton>()
         fun syncDalton() {
             daltonRadios.forEachIndexed { i, r -> r.isChecked = i == daltonType }
         }
         val daltonNames = arrayOf("Protan (rojo)", "Deutan (verde)", "Tritan (azul)", "Monocromático")
         val daltonRow = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        // pushLive/saveVision se definen más abajo (tras updateSubVisibility);
+        // estas lambdas se rellenan entonces para que el subtipo previsualice
+        // y guarde en vivo.
+        var pushLiveFn: () -> Unit = {}
+        var saveVisionFn: () -> Unit = {}
         daltonNames.forEachIndexed { i, name ->
             val rb = RadioButton(activity).apply { text = name }
             daltonRadios.add(rb)
             rb.setOnClickListener {
                 daltonType = i
+                cfg = cfg.copy(daltonType = i)
                 syncDalton()
+                saveVisionFn()
+                pushLiveFn()
             }
             daltonRow.addView(rb)
         }
@@ -499,14 +553,22 @@ object VisionAssistHelper {
             "Pérdida de audición (agudos)",
         )
         val needDescs = arrayOf(
-            "Facilita distinguir rojo/verde/azul en tonos muy parecidos. Elige el tipo de corrección abajo.",
-            "Realza bordes y detalle fino, mejora el contraste local y levanta sombras con suavidad, sin quemar altas luces.",
-            "Separa sombras, medios tonos y luces con una curva suave: sin negros rotos ni blancos quemados; conserva el detalle.",
-            "Reduce el deslumbramiento: atenúa progresivamente las zonas más brillantes sin apagar la imagen. El tinte cálido es opcional (modo noche). Filtro de confort, no médico.",
-            "Reduce la componente azul de la imagen y desplaza los colores hacia un tono más cálido, con intensidad y temperatura configurables. Solo modifica el color mostrado.",
-            "Hace la imagen menos agresiva: suaviza extremos de contraste, controla altas luces, modera la saturación y tibia muy ligeramente. No desenfoca (conserva la nitidez). Modificación visual, no es tratamiento médico.",
-            "Realza la voz con el DSP sobre música y efectos: presencia, compresión, despeje de FX y nivelación. Asistencia; no sustituye un aparato auditivo.",
-            "Recupera los agudos que se desvanecen con la edad: presencia, armónicos y volumen con protección true-peak. Asistencia; no es tratamiento médico.",
+            "Facilita distinguir rojo/verde/azul en tonos muy parecidos. Elige el tipo de corrección abajo. " +
+                "🔎 Qué buscar: con el modo Comparar, los colores de la derecha cambian claramente (p. ej. verdes y rojos se separan).",
+            "Realza bordes y detalle fino, mejora el contraste local y levanta sombras con suavidad, sin quemar altas luces. " +
+                "🔎 Qué buscar: letras y bordes más nítidos a la derecha; las zonas oscuras se aclaran un poco sin volverse grises.",
+            "Separa sombras, medios tonos y luces con una curva suave: sin negros rotos ni blancos quemados; conserva el detalle. " +
+                "🔎 Qué buscar: la imagen gana 'pegada' (más diferencia entre claro y oscuro) sin perder detalle en sombras ni quemar el cielo.",
+            "Reduce el deslumbramiento: atenúa progresivamente las zonas más brillantes sin apagar la imagen. El tinte cálido es opcional (modo noche). Filtro de confort, no médico. " +
+                "🔎 Qué buscar: mira explosiones, nieve o focos: a la derecha brillan menos y molestan menos; el resto casi igual.",
+            "Reduce la componente azul de la imagen y desplaza los colores hacia un tono más cálido, con intensidad y temperatura configurables. Solo modifica el color mostrado. " +
+                "🔎 Qué buscar: sube Temperatura hacia 'Muy cálido' y compara: los blancos de la derecha se vuelven amarillentos. Con valores bajos el cambio es sutil a propósito.",
+            "Hace la imagen menos agresiva: suaviza extremos de contraste, controla altas luces, modera la saturación y tibia muy ligeramente. No desenfoca (conserva la nitidez). Modificación visual, no es tratamiento médico. " +
+                "🔎 Qué buscar: es el más sutil; compara cielos y piel: a la derecha los blancos bajan un poco y los colores se ven menos 'chillones'.",
+            "Realza la voz con el DSP sobre música y efectos: presencia, compresión, despeje de FX y nivelación. Asistencia; no sustituye un aparato auditivo. " +
+                "🔎 Qué buscar: se escucha al momento (sin comparar): la voz se adelanta a la música.",
+            "Recupera los agudos que se desvanecen con la edad: presencia, armónicos y volumen con protección true-peak. Asistencia; no es tratamiento médico. " +
+                "🔎 Qué buscar: se escucha al momento: más brillo en voces y platillos, un poco más de volumen.",
         )
         val needFlag = intArrayOf(
             VisionAssistSettings.FLAG_DALTONISM,
@@ -540,9 +602,40 @@ object VisionAssistHelper {
         fun pushLive() {
             onLive(cfg)
         }
+        pushLiveFn = { pushLive() }
+        // Guarda el estado actual del diálogo en prefs (para que el rebuild
+        // lea lo mismo que previsualiza).
+        fun saveVision() {
+            saveInto(
+                prefs,
+                cfg.copy(
+                    mask = pendingMask,
+                    daltonType = daltonType,
+                    strainMode = strainMode,
+                ),
+            )
+        }
+        fun wantMounted(): Boolean =
+            cfg.isActive && cfg.hasVision && !ownRenderNow
+        // Sincroniza el montaje del efecto con lo marcado: si la presencia
+        // de visión cambió, guarda y reconstruye la cadena (así la primera
+        // activación ya se VE sin esperar a Aplicar); si no, previsualiza.
+        // refreshWarnings se rellena al crear el aviso (más abajo).
+        var refreshWarningsFn: () -> Unit = {}
+        fun syncMount() {
+            refreshWarningsFn()
+            if (wantMounted() != mountedVision) {
+                saveVision()
+                mountedVision = wantMounted()
+                val p = player
+                if (p != null) onEffectsChanged(p) else pushLive()
+            } else {
+                pushLive()
+            }
+        }
+        saveVisionFn = { saveVision() }
 
         // ---- Vista cansada: modo Suave/Confort (se crea tras pushLive) ----
-        var strainMode = cfg.strainMode
         val strainModeRadios = mutableListOf<RadioButton>()
         fun syncStrainMode() {
             strainModeRadios.forEachIndexed { idx, rb -> rb.isChecked = idx == strainMode }
@@ -555,6 +648,7 @@ object VisionAssistHelper {
                 cfg = cfg.copy(strainMode = idx)
                 syncStrainMode()
                 strainLabel()
+                saveVision()
                 pushLive()
             }
             strainModeRow.addView(rb)
@@ -601,10 +695,11 @@ object VisionAssistHelper {
                 cfg = cfg.with(needFlag[i], isChecked)
                 pendingMask = cfg.mask
                 // Configura automáticamente: si ahora hay mejoras y la intensidad
-                // está en cero, se sugiere un valor cómodo de arranque.
+                // está en cero, se sugiere un valor de arranque BIEN VISIBLE
+                // (70%): con 45% varias ayudas quedaban imperceptibles.
                 if (pendingMask != 0 && cfg.intensity <= 0f) {
-                    cfg = cfg.copy(intensity = 0.45f)
-                    intensitySeek.progress = 45
+                    cfg = cfg.copy(intensity = 0.70f)
+                    intensitySeek.progress = 70
                     intensityLabel.text = pct(cfg.intensity)
                 }
                 // Audición: al marcar, sugiere una intensidad de arranque.
@@ -618,8 +713,18 @@ object VisionAssistHelper {
                     audLossSeek.progress = 60
                     audLossLabelFn()
                 }
+                // Audición en vivo: el DSP lo lee del hilo de audio en el
+                // siguiente buffer (~ms). Al desmarcar se apaga en vivo.
+                if (needFlag[i] == VisionAssistSettings.FLAG_SPEECH) {
+                    AudioEnhanceConfig.setAudSpeech(if (isChecked) cfg.audSpeech else 0f)
+                }
+                if (needFlag[i] == VisionAssistSettings.FLAG_HEARING_LOSS) {
+                    AudioEnhanceConfig.setAudLoss(if (isChecked) cfg.audLoss else 0f)
+                }
                 updateSubVisibility()
-                pushLive()
+                // Monta/desmonta el efecto al momento: la primera activación
+                // ya se ve sin esperar a Aplicar (con OSD de confirmación).
+                syncMount()
             }
             row.setOnClickListener { cb.isChecked = !cb.isChecked }
             needBox.addView(row)
@@ -635,7 +740,10 @@ object VisionAssistHelper {
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                // La maestra en 0 desmonta el efecto (isActive=false).
+                syncMount()
+            }
         })
         lowSharpSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
@@ -796,6 +904,9 @@ object VisionAssistHelper {
                 if (!fromUser) return
                 cfg = cfg.copy(audSpeech = progress / 100f)
                 audSpeechLabelFn()
+                // En vivo al DSP (se guarda definitivo al confirmar).
+                AudioEnhanceConfig.setAudSpeech(cfg.audSpeech)
+                refreshWarningsFn()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
@@ -806,11 +917,106 @@ object VisionAssistHelper {
                 if (!fromUser) return
                 cfg = cfg.copy(audLoss = progress / 100f)
                 audLossLabelFn()
+                // En vivo al DSP (se guarda definitivo al confirmar).
+                AudioEnhanceConfig.setAudLoss(cfg.audLoss)
+                refreshWarningsFn()
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar) {}
             override fun onStopTrackingTouch(seekBar: SeekBar) {}
         })
+
+        // ---- Avisos con arreglo en un toque ----
+        // ¿La audición pedida suena de verdad? (mismo criterio que el OSD de
+        // ExoPlayerActivity: motor CURRENT + DSP habilitado + preset no OFF).
+        fun hearingProblem(): String? {
+            val wantsHearing =
+                (pendingMask and VisionAssistSettings.FLAG_SPEECH != 0 && cfg.audSpeech > 0f) ||
+                    (pendingMask and VisionAssistSettings.FLAG_HEARING_LOSS != 0 && cfg.audLoss > 0f)
+            if (!wantsHearing) return null
+            val eng = try { AudiophileConfig.engine() } catch (_: Exception) {
+                AudiophileConfig.Engine.CURRENT
+            }
+            if (eng == AudiophileConfig.Engine.OFF) return "motor de sonido en OFF"
+            if (eng == AudiophileConfig.Engine.AUDIOPHILE) {
+                return "motor Audiophile experimental (no aplica esta asistencia)"
+            }
+            if (!AudioEnhanceConfig.isEnabled() ||
+                AudioEnhanceConfig.preset() == AudioEnhanceConfig.Preset.OFF
+            ) {
+                return "DSP apagado (perfil Apagado)"
+            }
+            return null
+        }
+        val warnBox = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(0, 0, 0, 12)
+        }
+        val motionWarn = TextView(activity).apply { textSize = 13f }
+        val dspWarn = TextView(activity).apply { textSize = 13f }
+        warnBox.addView(motionWarn)
+        if (ownRenderNow) {
+            motionWarn.text = "⚠ Estás en MotionX2 60fps (render propio): la ayuda " +
+                "VISUAL está en pausa aquí. La audición sí funciona."
+            motionWarn.visibility = View.VISIBLE
+        } else {
+            motionWarn.visibility = View.GONE
+        }
+        warnBox.addView(dspWarn)
+        val btnFixDsp = Button(activity).apply {
+            text = "Activar DSP actual (para la audición)"
+            visibility = View.GONE
+            setOnClickListener {
+                AudiophileConfig.setEngine(AudiophileConfig.Engine.CURRENT)
+                AudioEnhanceConfig.setEnabled(true)
+                if (AudioEnhanceConfig.preset() == AudioEnhanceConfig.Preset.OFF) {
+                    AudioEnhanceConfig.applyPreset(AudioEnhanceConfig.Preset.ANIME)
+                }
+                refreshWarningsFn()
+                Toast.makeText(activity, "DSP actual activado: la audición ya suena", Toast.LENGTH_SHORT).show()
+            }
+        }
+        warnBox.addView(btnFixDsp)
+        // Salir del render propio requiere recrear la actividad: se guarda,
+        // se cierra el diálogo y se reconstruye (el OSD lo confirma).
+        var dismissFn: () -> Unit = {}
+        if (ownRenderNow) {
+            val btnFixMotion = Button(activity).apply {
+                text = "Salir de MotionX2 60fps (activa la visión)"
+                setOnClickListener {
+                    confirmed = true
+                    saveVision()
+                    prefs.edit().putBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false).apply()
+                    Toast.makeText(
+                        activity,
+                        "MotionX2 60fps desactivado: la visión ya funciona",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    dismissFn()
+                    player?.let { onEffectsChanged(it) }
+                }
+            }
+            warnBox.addView(btnFixMotion)
+        }
+        // Se declara aquí (tras warnBox) y se usa desde syncMount().
+        refreshWarningsFn = {
+            val problem = hearingProblem()
+            if (problem != null) {
+                dspWarn.text = "⚠ Audición sin efecto: $problem."
+                dspWarn.visibility = View.VISIBLE
+                btnFixDsp.visibility = View.VISIBLE
+            } else {
+                dspWarn.visibility = View.GONE
+                btnFixDsp.visibility = View.GONE
+            }
+            warnBox.visibility =
+                if (motionWarn.visibility == View.VISIBLE || dspWarn.visibility == View.VISIBLE) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
+        }
 
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -828,6 +1034,29 @@ object VisionAssistHelper {
                     setPadding(0, 0, 0, 12)
                 },
             )
+            addView(warnBox)
+            // Comparar: mitad izquierda original / mitad derecha con ayuda
+            // (reusa el demo split de la cadena: cada efecto conserva la
+            // izquierda intacta). Es la forma más rápida de VER la diferencia.
+            addView(
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(0, 0, 0, 12)
+                    addView(CheckBox(activity).apply {
+                        text = "Comparar: izquierda original / derecha con ayuda"
+                        isChecked = initDemo
+                        setOnCheckedChangeListener { _, isChecked ->
+                            prefs.edit().putBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, isChecked).apply()
+                            player?.let { onEffectsChanged(it) }
+                        }
+                    })
+                    addView(TextView(activity).apply {
+                        text = "Divide la pantalla: si la ayuda funciona, las dos mitades se ven distintas."
+                        textSize = 12f
+                        setPadding(52, 0, 0, 0)
+                    })
+                },
+            )
             addView(needBox)
             addView(daltonSub)
             addView(lowVisionGroup)
@@ -841,18 +1070,41 @@ object VisionAssistHelper {
             addView(intensitySeek)
             addView(
                 TextView(activity).apply {
-                    text = "Se aplica al confirmar; los cambios previsualizan en vivo. " +
-                        "Si dejas todo sin marcar, la ayuda queda desactivada."
+                    text = "Los cambios se ven al momento: marcar ya monta el efecto " +
+                        "y los sliders previsualizan en vivo. Aplicar confirma; " +
+                        "Cancelar revierte todo lo movido."
                     textSize = 12f
                     setPadding(0, 16, 0, 8)
                 },
             )
         }
 
-        AlertDialog.Builder(activity)
+        // Revierte lo movido en vivo y, si el montaje cambió, reconstruye.
+        fun cancelAndRestore() {
+            if (confirmed) return
+            confirmed = true
+            restoreSnapshot()
+            cfg = fromPrefs(prefs)
+            pendingMask = cfg.mask
+            daltonType = cfg.daltonType
+            strainMode = cfg.strainMode
+            var needsRebuild = mountedVision != initialMounted
+            if (prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false) != initDemo) {
+                prefs.edit().putBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, initDemo).apply()
+                needsRebuild = true
+            }
+            if (needsRebuild) {
+                mountedVision = initialMounted
+                player?.let { onEffectsChanged(it) }
+            }
+        }
+
+        refreshWarningsFn()
+        val dlg = AlertDialog.Builder(activity)
             .setTitle("Asistencia: Visión y Audición")
             .setView(ScrollView(activity).apply { addView(layout) })
             .setPositiveButton("Aplicar") { _, _ ->
+                confirmed = true
                 // Si la necesidad de audición está desmarcada, su intensidad se
                 // cera: el DSP solo se enciende con valor > 0.
                 val finalCfg = cfg.copy(
@@ -863,13 +1115,23 @@ object VisionAssistHelper {
                     audLoss = if (pendingMask and VisionAssistSettings.FLAG_HEARING_LOSS != 0) cfg.audLoss else 0f,
                 )
                 saveInto(prefs, finalCfg)
-                // Audición → DSP de audio (params() la superpone al preset activo
-                // y el hilo de audio reconfigura solo al detectar el cambio).
+                // Audición → DSP de audio (effectiveParams() la superpone al
+                // preset activo y el hilo de audio reconfigura al detectar el
+                // cambio). El OSD confirma la cadena real al reconstruir.
                 AudioEnhanceConfig.setAudSpeech(finalCfg.audSpeech)
                 AudioEnhanceConfig.setAudLoss(finalCfg.audLoss)
+                mountedVision = finalCfg.isActive && finalCfg.hasVision && !ownRenderNow
                 player?.let { onEffectsChanged(it) }
             }
-            .setNegativeButton("Cancelar", null)
-            .show()
+            .setNegativeButton("Cancelar") { _, _ ->
+                cancelAndRestore()
+            }
+            .setOnCancelListener {
+                // Atrás o toque fuera = cancelar.
+                cancelAndRestore()
+            }
+            .create()
+        dismissFn = { dlg.dismiss() }
+        dlg.show()
     }
 }

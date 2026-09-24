@@ -17,8 +17,9 @@ import androidx.media3.effect.GlShaderProgram
  * - TAB_2D: muestrea la mitad sup/inf y la estira.
  * - ANAGLYPH ([anaglyph] 0=rojo-cian Dubois, 1=rojo-azul, 2=rojo-verde).
  *   Con [inputKind]=SBS/TAB mezcla ambos ojos reales; con 2D genera
- *   pseudo-3D por paralaje de luma ([depth]).
- * - VR_SBS: duplica el cuadro 2D en ambas mitades para Cardboard.
+ *   pseudo-3D por paralaje de luma ([depth] = intensidad: 0 intacto).
+ * - VR_SBS: con fuente 2D duplica el cuadro en ambas mitades para
+ *   Cardboard; con fuente SBS la pasa tal cual (ya es SBS).
  * - PULFRICH (Fabulojos 1997): prepara imagen 2D para lente oscuro en un
  *   ojo (realce horizontal sutil que refuerza bordes en movimiento).
  *   Sin lentes se ve normal. Fuente 2D; quieto no hay 3D.
@@ -212,24 +213,34 @@ class Karin3DShaderProgram(
                         }
                     } else {
                         // Pseudo-3D desde 2D: paralaje horizontal por luma.
+                        // La INTENSIDAD la manda uDepth: 0 = imagen intacta,
+                        // 1 = efecto completo. (Antes mezclaba un mínimo
+                        // fijo y teñía incluso al 0%.)
                         outc = texture2D(uTexSampler, uv).rgb;
                         float luma = dot(outc, vec3(0.299, 0.587, 0.114));
                         float shift = (luma - 0.5) * uDepth * 2.0;
                         vec3 cl = texture2D(uTexSampler, vec2(clamp(uv.x - shift, 0.0, 1.0), uv.y)).rgb;
                         vec3 cr = texture2D(uTexSampler, vec2(clamp(uv.x + shift, 0.0, 1.0), uv.y)).rgb;
+                        // uDepth llega escalado (0..0.03): x33 lo devuelve a 0..1.
+                        float amt = clamp(uDepth * 33.0, 0.0, 1.0);
                         if (uAnaglyph == 0) {
                             float r = dot(cl, vec3(0.299, 0.587, 0.114));
-                            float g = dot(cr, vec3(0.587, 0.114, 0.299));
-                            float b = dot(cr, vec3(0.114, 0.299, 0.587));
-                            outc = mix(outc, vec3(r, g, b), clamp(uDepth * 25.0, 0.35, 1.0));
+                            float lcr = dot(cr, vec3(0.299, 0.587, 0.114));
+                            outc = mix(outc, vec3(r, lcr, lcr), amt);
                         } else {
-                            outc = anaglyphMix(cl, cr);
+                            outc = mix(outc, anaglyphMix(cl, cr), amt);
                         }
                     }
                 } else if (uMode == 4) {
-                    // 2D -> SBS para Cardboard: misma imagen en ambas mitades.
-                    float right = step(0.5, uv.x);
-                    outc = texture2D(uTexSampler, vec2(uv.x * 2.0 - right, uv.y)).rgb;
+                    // VR Cardboard: con fuente 2D se duplica el cuadro en
+                    // ambas mitades; con fuente SBS ya es SBS y se pasa tal
+                    // cual (duplicarla daría 4 ojos rotos).
+                    if (uInput == 1) {
+                        outc = texture2D(uTexSampler, uv).rgb;
+                    } else {
+                        float right = step(0.5, uv.x);
+                        outc = texture2D(uTexSampler, vec2(uv.x * 2.0 - right, uv.y)).rgb;
+                    }
                 } else if (uMode == 5) {
                     // PULFRICH (Fabulojos 1997): la profundidad la pone un
                     // lente OSCURO en un ojo (el ojo oscurecido procesa ~1

@@ -791,10 +791,11 @@ fun setAudLoss(v: Float) { prefs?.edit()?.putInt(KEY_AUD_LOSS, (v.coerceIn(0f, 1
                 masterGain = (p0.masterGain * lin).coerceIn(0.15f, 4f)
             )
         } else p0
-        // Asistencia de audición: va la ÚLTIMA para que gane sobre preset/AutoEQ.
-        val sp = getAudSpeech()
-        val lo = getAudLoss()
-        val built = if (sp > 0f || lo > 0f) hearingAssist(built0, sp, lo) else built0
+        // Asistencia de audición: NO se hornea aquí. La aplica al final
+        // AudioEnhanceProcessor.effectiveParams() (tras el tuning por
+        // dispositivo), para que no se pierda cuando Auto cambia de preset
+        // base. Para mostrar el valor efectivo usa withHearingAssist().
+        val built = built0
         if (cacheGen.get() == g) cachedParams = built
         return built
     }
@@ -806,8 +807,13 @@ fun setAudLoss(v: Float) { prefs?.edit()?.putInt(KEY_AUD_LOSS, (v.coerceIn(0f, 1
      * - Pérdida de agudos / presbicia (loss): realce de treble/presencia y
      *   armónicos, más volumen extra (el limiter true-peak evita el recorte).
      * Asistencia práctica; no sustituye aparato auditivo.
+     *
+     * Pública para que el procesador la aplique DESPUÉS del tuning por
+     * dispositivo (si se horneara en params(), el modo Auto la perdería al
+     * cambiar de preset base) y para que el diálogo de estadísticas muestre
+     * el valor efectivo real.
      */
-    private fun hearingAssist(p: Params, speech: Float, loss: Float): Params {
+    fun withHearingAssist(p: Params, speech: Float, loss: Float): Params {
         var presence = p.presenceGain
         var treble = p.trebleGain
         var bass = p.bassGain
@@ -843,6 +849,10 @@ fun setAudLoss(v: Float) { prefs?.edit()?.putInt(KEY_AUD_LOSS, (v.coerceIn(0f, 1
             masterGain = master.coerceIn(0.15f, 4f),
         )
     }
+
+    /** Valor efectivo real (preset + tuning + asistencia de audición). */
+    fun effectiveParamsForDisplay(p: Params): Params =
+        withHearingAssist(p, getAudSpeech(), getAudLoss())
 
     fun applyParams(p: Params) {
         setPreset(p.preset)

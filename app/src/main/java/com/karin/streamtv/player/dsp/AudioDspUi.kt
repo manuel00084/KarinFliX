@@ -17,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.media3.exoplayer.ExoPlayer
+import com.karin.streamtv.player.dsp.audiophile.AudiophileUi
 import com.karin.streamtv.util.AppPreferences
 
 object AudioDspUi {
@@ -220,6 +221,9 @@ object AudioDspUi {
             setTextColor(0xFF90A4AE.toInt())
             setPadding(0, 4, 0, 6)
         })
+
+        // ── Audio Engine: OFF / Current / Audiophile (experimental) ──
+        AudiophileUi.addEngineSection(container, context, onChanged)
 
         // ── Perfil de sonido ─────────────────────────────────────
         header("1 · Perfil de sonido")

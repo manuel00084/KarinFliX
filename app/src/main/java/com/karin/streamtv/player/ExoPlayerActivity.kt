@@ -28,6 +28,7 @@ import com.karin.streamtv.enhancer.gpu.KarinLightBoostEffect
 import com.karin.streamtv.player.dsp.AudioDspUi
 import com.karin.streamtv.player.dsp.AudioEnhanceConfig
 import com.karin.streamtv.player.dsp.AudioEnhanceProcessor
+import com.karin.streamtv.player.dsp.audiophile.AudiophileConfig
 import com.karin.streamtv.player.sixty.MotionX2GlesRenderer
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.DeviceProfile
@@ -597,6 +598,18 @@ class ExoPlayerActivity : AppCompatActivity() {
             val ownKind = if (mxMode == MotionX2Mode.DOUBLING) "x2 real" else "60fps"
             chainActive.add("MotionX2 ${mxMode.label} (render propio $ownKind)")
             chainOmitted.add("Filtros de imagen (en pausa en este modo)")
+            // La ayuda VISUAL va en la cadena GL y queda en pausa aquí; la
+            // AUDITIVA corre en el DSP de audio y sigue funcionando.
+            run {
+                val cfg = VisionAssistHelper.fromPrefs(prefs)
+                if (cfg.isActive && cfg.hasVision) {
+                    chainOmitted.add("Visión (en pausa en este modo: MotionX2 60fps usa render propio)")
+                    Log.w("ExoPlayerActivity", "Visión pedida pero en pausa (render propio MotionX2)")
+                }
+                if (cfg.hasAudSpeech || cfg.hasAudLoss) {
+                    chainActive.add("Audición")
+                }
+            }
             Log.d("ExoPlayerActivity", "Render propio GLES2 activo: $mxMode, grafo vacío")
             return
         }
@@ -609,6 +622,15 @@ class ExoPlayerActivity : AppCompatActivity() {
         // La línea demo se conserva (es trivial y ayuda a diagnosticar).
         if (forceNoEffects) {
             chainActive.add("Modo seguro")
+            // La visión no puede montarse sin cadena GL; se avisa en el OSD
+            // en vez de quedar en silencio.
+            run {
+                val cfg = VisionAssistHelper.fromPrefs(prefs)
+                if (cfg.isActive && cfg.hasVision) {
+                    chainOmitted.add("Visión (no disponible en modo seguro)")
+                    Log.w("ExoPlayerActivity", "Visión pedida pero no disponible en modo seguro")
+                }
+            }
             Log.w("ExoPlayerActivity", "Modo seguro: sin efectos de imagen")
         } else {
             addChainEffects(effects, demoEnabled)
@@ -817,8 +839,33 @@ class ExoPlayerActivity : AppCompatActivity() {
                 Log.d("ExoPlayerActivity", "Visión activa (${VisionAssistHelper.needsLabel(cfg)}), fuera de cupo por accesibilidad")
             }
             if (cfg.hasAudSpeech || cfg.hasAudLoss) {
-                chainActive.add("Audición")
-                Log.d("ExoPlayerActivity", "Asistencia de audición activa (voz=${cfg.hasAudSpeech}, agudos=${cfg.hasAudLoss})")
+                // La asistencia corre en el DSP actual: con el motor OFF, el
+                // DSP apagado o el motor Audiophile experimental no suena y
+                // antes se reportaba como "Audición" activa en silencio.
+                val eng = try { AudiophileConfig.engine() } catch (_: Exception) {
+                    AudiophileConfig.Engine.CURRENT
+                }
+                val dspAudible = eng == AudiophileConfig.Engine.CURRENT &&
+                    AudioEnhanceConfig.isEnabled() &&
+                    AudioEnhanceConfig.preset() != AudioEnhanceConfig.Preset.OFF
+                if (dspAudible) {
+                    chainActive.add("Audición")
+                    Log.d("ExoPlayerActivity", "Asistencia de audición activa (voz=${cfg.hasAudSpeech}, agudos=${cfg.hasAudLoss})")
+                } else {
+                    val reason = when {
+                        eng == AudiophileConfig.Engine.OFF -> "motor de sonido en OFF"
+                        eng == AudiophileConfig.Engine.AUDIOPHILE ->
+                            "motor Audiophile experimental (no aplica esta asistencia)"
+                        else -> "DSP apagado (perfil Apagado)"
+                    }
+                    chainOmitted.add("Audición ($reason)")
+                    Log.w("ExoPlayerActivity", "Audición pedida pero sin efecto: $reason")
+                    Toast.makeText(
+                        this@ExoPlayerActivity,
+                        "Audición sin efecto: $reason",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
             }
         }
         // 7. Tecnología 3D (botón lentes): reformatea la SALIDA al final de

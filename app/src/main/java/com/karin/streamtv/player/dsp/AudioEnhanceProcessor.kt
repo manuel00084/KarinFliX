@@ -8,6 +8,8 @@ import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
+import com.karin.streamtv.player.dsp.audiophile.AudiophileConfig
+import com.karin.streamtv.player.dsp.audiophile.KarinAudiophileDSP
 import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.log10
@@ -88,6 +90,11 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         )
 
     private fun effectiveParams(raw: AudioEnhanceConfig.Params): AudioEnhanceConfig.Params {
+        // Asistencia de audición: se aplica la ÚLTIMA (tras el tuning por
+        // dispositivo) para que gane sobre preset/AutoEQ y no se pierda
+        // cuando Auto cambia de preset base.
+        val sp = AudioEnhanceConfig.getAudSpeech()
+        val lo = AudioEnhanceConfig.getAudLoss()
         if (raw.autoDevice && raw.enabled && raw.preset != AudioEnhanceConfig.Preset.OFF) {
             val device = detectedDevice
             activeDevice = device
@@ -98,7 +105,8 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             val base = if (override != null && override != raw.preset)
                 withFineTunings(AudioEnhanceConfig.Params().withPreset(override), raw)
             else raw
-            val eff = AudioEnhanceConfig.applyDeviceTuning(base, device)
+            val tuned = AudioEnhanceConfig.applyDeviceTuning(base, device)
+            val eff = if (sp > 0f || lo > 0f) AudioEnhanceConfig.withHearingAssist(tuned, sp, lo) else tuned
             effRaw = raw
             effDevice = device
             effOverride = override
@@ -106,7 +114,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             return eff
         }
         activeDevice = deviceKindForPreset(raw.preset)
-        return raw
+        return if (sp > 0f || lo > 0f) AudioEnhanceConfig.withHearingAssist(raw, sp, lo) else raw
     }
 
     private var eqL = Array(10) { BiquadFilter() }
@@ -172,6 +180,15 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
 
     // RTA en vivo (medidor de espectro + LUFS) que el UI dibuja.
     private val rta = LiveRta()
+
+    // Karin Audiophile DSP (experimental): pipeline secundario. Solo corre
+    // cuando AudioEngine = AUDIOPHILE (exclusión mutua en queueInput).
+    private val audiophile = KarinAudiophileDSP()
+    private var apEngaged = false
+    private var lastEngine: AudiophileConfig.Engine? = null
+
+    // Scratch para canales extra (>2) en la ruta audiophile (evita alloc).
+    private val audioFileExtra = DoubleArray(8)
 
     // Scratch estéreo reutilizado: las funciones del camino caliente que antes
     // devolvían Pair<Double,Double> por muestra generaban ~9 MB/s de basura GC
@@ -414,6 +431,12 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         lfeLp.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 120f, 0f, 0.707f)
         centerLp.configure(BiquadFilter.Kind.LOWPASS, sampleRate, 600f, 0f, 0.707f)
         rta.configure(sampleRate)
+        // Preconfigurar el pipeline audiophile (inofensivo si no está activo).
+        try {
+            audiophile.configure(sampleRate, channels, AudiophileConfig.params())
+        } catch (t: Throwable) {
+            Log.w("AudioEnhance", "audiophile configure: ${t.message}")
+        }
         Log.i("AudioEnhance", "config fs=$sampleRate ch=$channels out=$outChannels ruta=$route enc=$encoding")
         return AudioProcessor.AudioFormat(sampleRate, outChannels, encoding)
     }
@@ -423,6 +446,35 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
             encoding != C.ENCODING_PCM_32BIT && encoding != C.ENCODING_PCM_FLOAT
         ) {
             bypass(inputBuffer)
+            return
+        }
+        // ── Audio Engine: exclusión mutua entre OFF / CURRENT / AUDIOPHILE ──
+        val engine = AudiophileConfig.engine()
+        if (lastEngine != engine) {
+            val wasAp = apEngaged
+            val nowAp = engine == AudiophileConfig.Engine.AUDIOPHILE
+            if (nowAp && !wasAp) {
+                audiophile.setEngaged(true)
+                apEngaged = true
+                Log.i("AudioEnhance", "engine → AUDIOPHILE (experimental)")
+            } else if (!nowAp && wasAp) {
+                audiophile.setEngaged(false)
+                // El crossfade de salida lo completa audiophile.isFading();
+                // mientras dura, seguimos en la ruta audiophile hasta mix=0.
+                Log.i("AudioEnhance", "engine → $engine (saliendo de audiophile)")
+            }
+            lastEngine = engine
+        }
+        if (engine == AudiophileConfig.Engine.OFF) {
+            bypass(inputBuffer)
+            return
+        }
+        if (engine == AudiophileConfig.Engine.AUDIOPHILE || (apEngaged && audiophile.isFading())) {
+            processAudiophile(inputBuffer)
+            if (!audiophile.isFading() && !apEngagedReady()) {
+                // Terminó el fade de salida: liberar la ruta.
+                apEngaged = false
+            }
             return
         }
         if (!AudioEnhanceConfig.isEnabled() || AudioEnhanceConfig.preset() == AudioEnhanceConfig.Preset.OFF) {
@@ -848,6 +900,77 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
         res[1] = or
     }
 
+    private fun apEngagedReady(): Boolean =
+        AudiophileConfig.engine() == AudiophileConfig.Engine.AUDIOPHILE
+
+    /**
+     * Ruta del Karin Audiophile DSP (experimental). Lee params/A-B de
+     * AudiophileConfig (cacheado por buffer, no por muestra). Mantiene el
+     * mismo formato de salida que onConfigure prometió (outChannels).
+     * L/R pasan por el pipeline estéreo; canales extra se copian sin colorar
+     * (transparencia multicanal). Mapeo de canales al estilo bypass().
+     */
+    private fun processAudiophile(inputBuffer: ByteBuffer) {
+        val bytesPerSample = bytesPerSample()
+        val frames = inputBuffer.remaining() / (bytesPerSample * channels)
+        if (frames <= 0) return
+        val out = replaceOutputBuffer(frames * bytesPerSample * outChannels)
+        try {
+            audiophile.updateIfChanged(AudiophileConfig.params(), AudiophileConfig.isAbBypass())
+            val t0 = System.nanoTime()
+            val scratch = scratch2
+            val extra = audioFileExtra
+            for (f in 0 until frames) {
+                val inL: Double
+                val inR: Double
+                if (channels == 1) {
+                    val x = readSample(inputBuffer).toDouble()
+                    inL = x; inR = x
+                } else {
+                    inL = readSample(inputBuffer).toDouble()
+                    inR = readSample(inputBuffer).toDouble()
+                    val extra = audioFileExtra
+                    var c = 2
+                    while (c < channels && c < extra.size) {
+                        extra[c] = readSample(inputBuffer).toDouble()
+                        c++
+                    }
+                    while (c < channels) {
+                        readSample(inputBuffer); c++
+                    }
+                }
+                audiophile.processFrame(inL, inR, scratch)
+                when {
+                    outChannels == 1 -> writeSample(out, (scratch[0] + scratch[1]) * 0.5)
+                    channels == 1 -> {
+                        writeSample(out, scratch[0]); writeSample(out, scratch[1])
+                        for (c in 2 until outChannels) writeSample(out, 0.0)
+                    }
+                    channels == 2 && outChannels >= 6 -> {
+                        writeSample(out, scratch[0]); writeSample(out, scratch[1])
+                        writeSample(out, (scratch[0] + scratch[1]) * 0.5)
+                        writeSample(out, 0.0); writeSample(out, 0.0); writeSample(out, 0.0)
+                        for (c in 6 until outChannels) writeSample(out, 0.0)
+                    }
+                    else -> {
+                        // outChannels == channels (>=2): L/R procesados, resto original.
+                        writeSample(out, scratch[0])
+                        writeSample(out, scratch[1])
+                        var c = 2
+                        while (c < outChannels) {
+                            writeSample(out, if (c < extra.size) extra[c] else 0.0)
+                            c++
+                        }
+                    }
+                }
+            }
+            audiophile.reportBlockTime(System.nanoTime() - t0, frames)
+        } catch (t: Throwable) {
+            Log.w("AudioEnhance", "audiophile error: ${t.message}")
+        }
+        out.flip()
+    }
+
     private fun bypass(inputBuffer: ByteBuffer) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
@@ -1216,6 +1339,7 @@ class AudioEnhanceProcessor(context: Context) : BaseAudioProcessor() {
     override fun onFlush() {
         ditherState = 0xC0FFEE17L
         ditherNs.reset()
+        audiophile.reset()
         aaBassL.reset()
         aaBassR.reset()
         aaTubeL.reset()

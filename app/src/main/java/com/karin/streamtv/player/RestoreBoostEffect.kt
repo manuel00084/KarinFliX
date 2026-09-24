@@ -103,6 +103,9 @@ class RestoreBoostShaderProgram(
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
             glProgram.use()
+            if (presentationTimeUs < 500_000L) {
+                android.util.Log.d("RestoreBoost", "TMP stages dep=$depixel retro=$retro det=$detail low=$lowPower")
+            }
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             glProgram.setFloatsUniform("uTexelSize", floatArrayOf(1f / inputWidth, 1f / inputHeight))
             glProgram.setFloatUniform("uDepixel", depixel)
@@ -382,6 +385,20 @@ class RestoreBoostShaderProgram(
                         } else {
                             detailAmt = diagDetail * adapt * mix(1.0, 0.3, skin);
                         }
+                        // CAS (contrast-adaptive): mordida extra proporcional al
+                        // contraste local de la cruz. Más filo justo en bordes
+                        // reales, nada en plano (puerta por pico). Sin fetches
+                        // nuevos (reusa lL/lR/lU/lD/lc) y ~8 ALU: cabe en el
+                        // mismo pase, tiempo real intacto. Las máscaras (zona,
+                        // piel, vgate, sharpK) y el clamp anti-halo de abajo
+                        // aplican igual: solo sube el techo, no el riesgo.
+                        float casMn = min(min(lL, lR), min(lU, lD));
+                        float casMx = max(max(lL, lR), max(lU, lD));
+                        float casPeak = max(casMx - lc, lc - casMn);
+                        float casGate = smoothstep(0.004, 0.03, casPeak);
+                        float casAmt = (lc - (casMx + casMn) * 0.5) *
+                            (1.5 + 2.0 * clamp(casPeak * 8.0, 0.0, 1.0));
+                        detailAmt += casAmt * casGate * mix(1.0, 0.25, skin);
                         float sharpK = 1.0 - 0.65 * clamp(smoothK, 0.0, 1.0);
                         float over = range4 * 0.25 * uDetail;
                         float newLuma = clamp(lCcur + detailAmt * uDetail * 1.5 * vgate * zone * sharpK,

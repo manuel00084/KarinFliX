@@ -313,7 +313,11 @@ object VideoStatsHelper {
         separator()
 
         section("Sonido · DSP activo")
-        val acfg = AudioEnhanceConfig.params()
+        // Valor efectivo real (preset + tuning por dispositivo + asistencia
+        // de audición): es lo que de verdad suena, no solo el preset base.
+        val acfg = AudioEnhanceConfig.effectiveParamsForDisplay(AudioEnhanceConfig.params())
+        val audSp = AudioEnhanceConfig.getAudSpeech()
+        val audLo = AudioEnhanceConfig.getAudLoss()
         fun tech(
             label: String,
             detail: String,
@@ -337,6 +341,12 @@ object VideoStatsHelper {
             acfg.loudnessComp)
         tech("Compresor", "Nivelación dinámica",
             acfg.compression > 0f)
+        if (audSp > 0f || audLo > 0f) {
+            val parts = mutableListOf<String>()
+            if (audSp > 0f) parts.add("diálogos ${(audSp * 100).toInt()}%")
+            if (audLo > 0f) parts.add("agudos ${(audLo * 100).toInt()}%")
+            tech("Asistencia audición", parts.joinToString(" + "), true)
+        }
         note("Perfil: ${acfg.preset.label} · Master ${"%.2f".format(acfg.masterGain)}x · " +
             "Auto ${if (acfg.autoDevice) "ON" else "OFF"}")
         separator()

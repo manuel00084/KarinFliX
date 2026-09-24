@@ -19,6 +19,7 @@ class SplashActivity : AppCompatActivity() {
 
     private lateinit var progressBar: ProgressBar
     private lateinit var tvProgress: TextView
+    private lateinit var tvLoadingStatus: TextView
     private var timer: CountDownTimer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,17 +38,21 @@ class SplashActivity : AppCompatActivity() {
 
             progressBar = findViewById(R.id.progress_splash)
             tvProgress = findViewById(R.id.tv_progress)
+            tvLoadingStatus = findViewById(R.id.tv_loading_status)
 
-            timer = object : CountDownTimer(1500, 50) {
+            timer = object : CountDownTimer(2800, 50) {
                 override fun onTick(millisUntilFinished: Long) {
-                    val progress = ((1500 - millisUntilFinished) * 100 / 1500).toInt()
+                    val progress = ((2800 - millisUntilFinished) * 100 / 2800).toInt()
                     progressBar.progress = progress
                     tvProgress.text = "$progress%"
+                    tvLoadingStatus.text = loadingMessageFor(progress)
                 }
 
                 override fun onFinish() {
                     try {
                         progressBar.progress = 100
+                        tvProgress.text = "100%"
+                        tvLoadingStatus.text = "¡Listo! 🌸"
                         CrashLogger.log(this@SplashActivity, "Splash", "navigating")
                         val next = if (AppPreferences.isFirstRun()) {
                             OnboardingActivity::class.java
@@ -74,5 +79,14 @@ class SplashActivity : AppCompatActivity() {
         timer?.cancel()
         timer = null
         super.onDestroy()
+    }
+
+    private fun loadingMessageFor(progress: Int): String = when {
+        progress < 15 -> "Cargando recursos..."
+        progress < 35 -> "Cargando catálogo..."
+        progress < 55 -> "Conectando sitios..."
+        progress < 75 -> "Sincronizando historial..."
+        progress < 90 -> "Preparando interfaz..."
+        else -> "Finalizando..."
     }
 }
