@@ -395,6 +395,24 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     /** Reconstruye la cadena + OSD. Lo usan ajustes, lentes y diálogos. */
     private fun rebuildEffects(p: ExoPlayer) {
+        // Si el cambio de modo cruza grafo<->render propio, el layout es otro:
+        // se recrea la actividad (mismo intent/video) para cablear limpio.
+        // Dentro del mismo camino, el render propio cambia de modo en vivo.
+        val wantOwn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false) &&
+            MotionX2Mode.resolveStored(
+                prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0),
+            ).isRealFps()
+        if (wantOwn != ownRenderActive) {
+            recreate()
+            return
+        }
+        if (wantOwn) {
+            glesRenderer?.setMode(
+                MotionX2Mode.resolveStored(
+                    prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0),
+                ),
+            )
+        }
         applyVideoEffects(p)
         showChainOsd()
     }
@@ -803,7 +821,11 @@ class ExoPlayerActivity : AppCompatActivity() {
             }
         }
         // 7. Tecnología 3D (botón lentes): reformatea la SALIDA al final de
-        //    la cadena (tras Shader, antes de la línea Demo). 1 pase GL.
+        //    la cadena (tras Shader/Visión, antes de la línea Demo). 1 pase
+        //    GL barato. EXENTO del presupuesto igual que Visión: es el
+        //    reformateo final que el usuario pidió explícito y, al ir
+        //    último, antes era el primero en caer en silencio ("lo activo
+        //    y no pasa nada").
         //    Ver Karin3DController.compatWarnings(): B/N+anaglifo y
         //    MotionX2+Pulfrich son incompatibles reales; Upscaler/Light
         //    degradan según modo (el diálogo ya avisa).
@@ -817,7 +839,8 @@ class ExoPlayerActivity : AppCompatActivity() {
                     anaglyph = Karin3DController.anaglyphType(prefs),
                     inputKind = Karin3DController.inputKind(prefs),
                 )
-                addHeavyEffect(Karin3DController.chainLabel(prefs), karin3DEffect!!)
+                effects.add(karin3DEffect!!)
+                chainActive.add(Karin3DController.chainLabel(prefs))
                 // Los avisos ⛔/⚠ se muestran en el diálogo 3D y al aplicar;
                 // además se dejan en log para diagnóstico.
                 Karin3DController.compatWarnings(prefs).forEach {

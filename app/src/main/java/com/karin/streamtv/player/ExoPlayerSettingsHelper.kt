@@ -1013,9 +1013,10 @@ object ExoPlayerSettingsHelper {
      * TECNOLOGÍA 3D: diálogo del botón lentes (btn_3d) de la barra del
      * reproductor. Modos visibles: Anaglifo (3 variantes de lente),
      * VR Cardboard y Pulfrich, con profundidad (pseudo-3D / realce
-     * Pulfrich), ojo intercambiable y fuente estéreo (2D/SBS) para el
-     * anaglifo. La profundidad previsualiza en vivo si el 3D ya está
-     * activo; el modo se aplica al confirmar.
+     * Pulfrich), ojo intercambiable (anaglifo estéreo) y fuente
+     * estéreo (2D/SBS) para el anaglifo y el VR. Cada modo muestra
+     * solo sus controles. La profundidad previsualiza en vivo si el
+     * 3D ya está activo; el modo se aplica al confirmar.
      */
     fun show3DDialog(
         activity: Activity,
@@ -1067,7 +1068,7 @@ object ExoPlayerSettingsHelper {
         )
         val descs = arrayOf(
             "Con SBS mezcla ambos ojos; con 2D genera pseudo-3D. Elige tus lentes abajo.",
-            "Duplica el 2D para visor VR. Sin seguimiento de cabeza.",
+            "Con 2D lo duplica para el visor; con SBS lo deja tal cual. Sin seguimiento de cabeza.",
             "Homenaje Fabulojos: ponte un lente oscuro en un ojo y busca movimiento lateral. Sin lentes se ve normal.",
         )
         val radios = mutableListOf<RadioButton>()
@@ -1096,12 +1097,17 @@ object ExoPlayerSettingsHelper {
             }
             anagBox.addView(rb)
         }
+        // Se asigna tras crear fuente/swap/profundidad: muestra solo lo
+        // que el modo pendiente usa (VR ignora profundidad y swap;
+        // Pulfrich ignora fuente, lentes y swap).
+        var refreshModeExtras: (() -> Unit)? = null
         fun syncRadios() {
             radios.forEachIndexed { i, r -> r.isChecked = i == pending }
             // Las 3 opciones de lentes solo se ven con Anaglifo elegido.
             anagBox.visibility =
                 if (modeValues[pending.coerceIn(modeValues.indices)] == Karin3DController.MODE_ANAGLYPH) android.view.View.VISIBLE
                 else android.view.View.GONE
+            refreshModeExtras?.invoke()
         }
         val listBox = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -1137,7 +1143,7 @@ object ExoPlayerSettingsHelper {
         }
         syncRadios()
 
-        // Fuente estéreo (aplica a Anaglifo).
+        // Fuente estéreo (aplica a Anaglifo; en VR evita duplicar un SBS).
         val inputTitle = TextView(activity).apply {
             text = "Fuente del video 3D:"
             textSize = 13f
@@ -1183,10 +1189,27 @@ object ExoPlayerSettingsHelper {
         })
 
         val swapBox = Switch(activity).apply {
-            text = "Swap: ojo derecho (no aplica en Pulfrich ni VR)"
+            text = "Swap: ojo derecho (solo anaglifo con fuente estéreo)"
             isChecked = swapEye
             setOnCheckedChangeListener { _, isChecked -> swapEye = isChecked }
         }
+
+        // Solo se muestra lo que el modo pendiente usa: la fuente aplica
+        // a Anaglifo (y a VR para no duplicar un SBS); la profundidad a
+        // Anaglifo 2D y Pulfrich; el swap solo al anaglifo estéreo.
+        refreshModeExtras = {
+            val m = modeValues[pending.coerceIn(modeValues.indices)]
+            val isAnag = m == Karin3DController.MODE_ANAGLYPH
+            val isVr = m == Karin3DController.MODE_VR_SBS
+            val showInput = if (isAnag || isVr) android.view.View.VISIBLE else android.view.View.GONE
+            inputTitle.visibility = showInput
+            inputBox.visibility = showInput
+            val showDepth = if (isVr) android.view.View.GONE else android.view.View.VISIBLE
+            depthLabel.visibility = showDepth
+            depthSeek.visibility = showDepth
+            swapBox.visibility = if (isAnag) android.view.View.VISIBLE else android.view.View.GONE
+        }
+        refreshModeExtras?.invoke()
 
         // Avisos de compatibilidad con los shaders/filtros activos.
         // compatWarnings() corta por !isActive: con el 3D apagado la lista
@@ -1277,12 +1300,14 @@ object ExoPlayerSettingsHelper {
             "DOUBLING (Frame x2)",
             "BLEND (Suavizado)",
             "HYBRID (Doubling + Micro-Blend)",
+            "ECO60 (60fps liviano)",
         )
         val descs = mutableListOf(
             "No hace nada. Video original.",
             "Repite cada cuadro. Muy liviano, sin fantasmas.",
             "Mezcla cuadros. Suave, puede dar fantasma.",
             "Cuadro nítido + mezcla leve. El balance.",
+            "60 fps con mezcla liviana e historial a mitad de resolución. Para equipos modestos.",
         )
         if (highEnd) {
             titles.add("60 fps reales (GRID · experimental)")
@@ -1292,17 +1317,13 @@ object ExoPlayerSettingsHelper {
             )
         }
         // Fila -> ordinal MotionX2Mode legacy (el 3/SPIKE ya no se ofrece).
-        val dialogToLegacy = mutableListOf(-1, 1, 2, 0)
+        val dialogToLegacy = mutableListOf(-1, 1, 2, 0, MotionX2Mode.ECO60.ordinal)
         if (highEnd) dialogToLegacy.add(MotionX2Mode.REAL60.ordinal)
         // Ordinal MotionX2Mode -> fila. El 3 (INTERP/SPIKE eliminado) se muestra
         // como REAL60 en gama alta o HYBRID si no; en ejecución resolveStored lo
         // migra a REAL60 de todos modos.
-        val legacyToDialog = if (highEnd) intArrayOf(3, 1, 2, 4, 4) else intArrayOf(3, 1, 2, 3)
-        val maxStored = if (highEnd) {
-            MotionX2Mode.REAL60.ordinal
-        } else {
-            MotionX2Mode.INTERP.ordinal
-        }
+        val legacyToDialog = if (highEnd) intArrayOf(3, 1, 2, 5, 5, 4) else intArrayOf(3, 1, 2, 3, 3, 4)
+        val maxStored = MotionX2Mode.ECO60.ordinal
         val checkedIndex = if (prefs.getBoolean(KEY_MOTIONX2_EN, false)) {
             legacyToDialog[prefs.getInt(KEY_MOTIONX2_MODE, 0).coerceIn(0, maxStored)]
         } else {

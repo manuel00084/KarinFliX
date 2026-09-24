@@ -31,12 +31,13 @@ enum class MotionX2Mode(val label: String) {
     BLEND("BLEND (Suavizado)"),
     @Deprecated("SPIKE eliminado: se migra a REAL60")
     INTERP("Interpolación 60 (SPIKE)"),
-    REAL60("60 fps reales (GRID anti-ghost · experimental)");
+    REAL60("60 fps reales (GRID anti-ghost · experimental)"),
+    ECO60("ECO60 (60fps liviano · bajo consumo)");
 
     companion object {
         /** True si el ordinal guardado en prefs emite cuadros intermedios (~60 fps reales). */
         fun isRealFps(ordinal: Int): Boolean =
-            ordinal == INTERP.ordinal || ordinal == REAL60.ordinal
+            ordinal == INTERP.ordinal || ordinal == REAL60.ordinal || ordinal == ECO60.ordinal
 
         /**
          * Resuelve el ordinal guardado en prefs al modo efectivo. El modo
@@ -54,7 +55,7 @@ enum class MotionX2Mode(val label: String) {
 
 /** True si el modo emite cuadros intermedios (~60 fps reales). */
 fun MotionX2Mode.isRealFps(): Boolean =
-    this == MotionX2Mode.INTERP || this == MotionX2Mode.REAL60
+    this == MotionX2Mode.INTERP || this == MotionX2Mode.REAL60 || this == MotionX2Mode.ECO60
 
 class MotionX2BoostEffect(
     private var mode: MotionX2Mode = MotionX2Mode.HYBRID,

@@ -95,7 +95,7 @@ object VideoStatsHelper {
 
         // ---------- Salida (tras la cadena de efectos) ----------
         val motionReqOn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false)
-        val motionLegacy = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0).coerceIn(0, 4)
+        val motionLegacy = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0).coerceIn(0, 5)
         val motionLabel = shortMotion(
             chainMotionLabel?.takeIf { it.isNotBlank() } ?: motionLegacyLabel(motionLegacy),
         )
@@ -352,12 +352,13 @@ object VideoStatsHelper {
 
     // ---------- Etiquetas de modos (coherentes con Opciones avanzadas) ----------
 
-    /** Legacy guardado en prefs: 0=HYBRID, 1=DOUBLING, 2=BLEND, 3=INTERP(migrado a REAL60), 4=REAL60. Corto para tabla. */
+    /** Legacy guardado en prefs: 0=HYBRID, 1=DOUBLING, 2=BLEND, 3=INTERP(migrado a REAL60), 4=REAL60, 5=ECO60. Corto para tabla. */
     fun motionLegacyLabel(legacy: Int): String {
-        return when (legacy.coerceIn(0, 4)) {
+        return when (legacy.coerceIn(0, 5)) {
             1 -> "DOUBLING x2"
             2 -> "BLEND"
             3, 4 -> "REAL60"
+            5 -> "ECO60"
             else -> "HYBRID"
         }
     }
@@ -366,6 +367,7 @@ object VideoStatsHelper {
     private fun shortMotion(label: String): String {
         val l = label.uppercase()
         return when {
+            l.contains("ECO") -> "ECO60"
             l.contains("GRID") || l.contains("60 FPS") || l.contains("REAL60") || l.contains("INTERP") -> "REAL60"
             l.contains("DOUBLING") || l.contains("X2 CUADROS") -> "DOUBLING x2"
             l.contains("BLEND") && !l.contains("HYBRID") -> "BLEND"
