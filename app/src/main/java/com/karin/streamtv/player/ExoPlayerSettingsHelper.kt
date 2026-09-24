@@ -1279,21 +1279,14 @@ object ExoPlayerSettingsHelper {
     }
 
     // Ventana "Modo MotionX2": Apagado + modos legacy (1:1) + 60 fps reales.
-    // La fila "60 fps reales (GRID)" es EXPERIMENTAL y solo se ofrece en gama
-    // alta (Tier HIGH): emite cuadros intermedios en un grid absoluto de 60 Hz
-    // con anti-fantasma (2 pases GL + historial propio). La antigua ruta óptica
-    // daba temblor/distorsión y se desactivó; este camino es el reemplazo.
+    // Todos los modos se ofrecen siempre: el render propio (sin grafo de
+    // Media3) eliminó el riesgo de Error 7001 que motivaba el gate de gama.
     private fun showMotionX2Dialog(
         activity: Activity,
         prefs: SharedPreferences,
         player: ExoPlayer?,
         onEffectsChanged: (ExoPlayer) -> Unit,
     ) {
-        val highEnd = try {
-            DeviceProfile.get(activity).tier == DeviceProfile.Tier.HIGH
-        } catch (_: Throwable) {
-            false
-        }
         // Ordenados de menor a mayor consumo, cada uno con su explicación simple.
         val titles = mutableListOf(
             "⏻ Apagado",
@@ -1301,6 +1294,7 @@ object ExoPlayerSettingsHelper {
             "BLEND (Suavizado)",
             "HYBRID (Doubling + Micro-Blend)",
             "ECO60 (60fps liviano)",
+            "60 fps reales (GRID)",
         )
         val descs = mutableListOf(
             "No hace nada. Video original.",
@@ -1308,21 +1302,13 @@ object ExoPlayerSettingsHelper {
             "Mezcla cuadros. Suave, puede dar fantasma.",
             "Cuadro nítido + mezcla leve. El balance.",
             "60 fps con mezcla liviana e historial a mitad de resolución. Para equipos modestos.",
+            "Cuadros intermedios en grid 60Hz real con anti-fantasma. Máxima calidad (más consumo que ECO60).",
         )
-        if (highEnd) {
-            titles.add("60 fps reales (GRID · experimental)")
-            descs.add(
-                "Emite cuadros intermedios en grid 60Hz real con anti-fantasma. " +
-                    "2 pases GL + historial. Solo para equipo potente.",
-            )
-        }
         // Fila -> ordinal MotionX2Mode legacy (el 3/SPIKE ya no se ofrece).
-        val dialogToLegacy = mutableListOf(-1, 1, 2, 0, MotionX2Mode.ECO60.ordinal)
-        if (highEnd) dialogToLegacy.add(MotionX2Mode.REAL60.ordinal)
+        val dialogToLegacy = mutableListOf(-1, 1, 2, 0, MotionX2Mode.ECO60.ordinal, MotionX2Mode.REAL60.ordinal)
         // Ordinal MotionX2Mode -> fila. El 3 (INTERP/SPIKE eliminado) se muestra
-        // como REAL60 en gama alta o HYBRID si no; en ejecución resolveStored lo
-        // migra a REAL60 de todos modos.
-        val legacyToDialog = if (highEnd) intArrayOf(3, 1, 2, 5, 5, 4) else intArrayOf(3, 1, 2, 3, 3, 4)
+        // como REAL60; en ejecución resolveStored lo migra de todos modos.
+        val legacyToDialog = intArrayOf(3, 1, 2, 5, 5, 4)
         val maxStored = MotionX2Mode.ECO60.ordinal
         val checkedIndex = if (prefs.getBoolean(KEY_MOTIONX2_EN, false)) {
             legacyToDialog[prefs.getInt(KEY_MOTIONX2_MODE, 0).coerceIn(0, maxStored)]
