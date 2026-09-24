@@ -29,6 +29,7 @@ enum class MotionX2Mode(val label: String) {
     HYBRID("HYBRID (Doubling + Micro-Blend)"),
     DOUBLING("DOUBLING (Frame x2)"),
     BLEND("BLEND (Suavizado)"),
+    @Deprecated("SPIKE eliminado: se migra a REAL60")
     INTERP("Interpolación 60 (SPIKE)"),
     REAL60("60 fps reales (GRID anti-ghost · experimental)");
 
@@ -36,6 +37,18 @@ enum class MotionX2Mode(val label: String) {
         /** True si el ordinal guardado en prefs emite cuadros intermedios (~60 fps reales). */
         fun isRealFps(ordinal: Int): Boolean =
             ordinal == INTERP.ordinal || ordinal == REAL60.ordinal
+
+        /**
+         * Resuelve el ordinal guardado en prefs al modo efectivo. El modo
+         * INTERP/SPIKE (3) está eliminado: migra a REAL60, su sucesor. Así los
+         * ajustes viejos con 3 se comportan como REAL60 sin tocar prefs.
+         * Los ordinales del enum NO se tocan (estabilidad de prefs).
+         */
+        fun resolveStored(ordinal: Int): MotionX2Mode =
+            when (ordinal) {
+                INTERP.ordinal -> REAL60
+                else -> values().getOrNull(ordinal) ?: HYBRID
+            }
     }
 }
 

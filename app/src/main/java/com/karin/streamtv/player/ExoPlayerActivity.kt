@@ -102,7 +102,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         // pedido explícito. El resto de modos usa el layout original.
         val mxOrdinal = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
         ownRenderActive = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false) &&
-            MotionX2Mode.isRealFps(mxOrdinal)
+            MotionX2Mode.resolveStored(mxOrdinal).isRealFps()
         setContentView(
             if (ownRenderActive) R.layout.activity_exo_player_motionx2
             else R.layout.activity_exo_player,
@@ -214,7 +214,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             playerView.player = it
             if (ownRenderActive) {
                 val modeIdx = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
-                val mxMode = MotionX2Mode.values().getOrNull(modeIdx) ?: MotionX2Mode.REAL60
+                val mxMode = MotionX2Mode.resolveStored(modeIdx)
                 val demo = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false)
                 val texView = findViewById<SurfaceView>(R.id.motionx2_surface)
                 glesRenderer?.attach(
@@ -574,7 +574,7 @@ class ExoPlayerActivity : AppCompatActivity() {
         // El resto de filtros de imagen se pausan en este modo (una salida).
         if (ownRenderActive) {
             val modeIdx = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
-            val mxMode = MotionX2Mode.values().getOrNull(modeIdx) ?: MotionX2Mode.REAL60
+            val mxMode = MotionX2Mode.resolveStored(modeIdx)
             chainMotionLabel = mxMode.label
             chainActive.add("MotionX2 ${mxMode.label} (render propio 60fps)")
             chainOmitted.add("Filtros de imagen (en pausa en este modo)")
@@ -763,7 +763,7 @@ class ExoPlayerActivity : AppCompatActivity() {
                 modeIndex = MotionX2Mode.HYBRID.ordinal
                 strength = 0.25f
             }
-            val mode = MotionX2Mode.values().getOrNull(modeIndex) ?: MotionX2Mode.HYBRID
+            val mode = MotionX2Mode.resolveStored(modeIndex)
             chainMotionLabel = mode.label
             motionX2Effect = MotionX2BoostEffect(mode, strength.coerceIn(0f, 1f), demoEnabled)
             addHeavyEffect("MotionX2", motionX2Effect!!)

@@ -27,11 +27,11 @@ import com.karin.streamtv.player.dsp.AudioEnhanceProcessor
  * - Se lee el track SELECCIONADO (videoFormat/audioFormat primero, luego el
  *   grupo marcado como seleccionado; antes se tomaba el primero y en
  *   adaptativo/HLS mostraba otro bitrate/idioma).
- * - FPS honesto: solo INTERP sube a ~60 fps reales; HYBRID/BLEND/DOUBLING
+ * - FPS honesto: solo INTERP/REAL60 emiten cuadros extra (~60 fps reales);
  *   mantienen la cadencia y solo suavizan (antes la fila FPS mostraba el
  *   nombre del modo como si fuera un fps).
- * - MotionX2 mapea los 4 modos legacy (0=HYBRID,1=DOUBLING,2=BLEND,3=INTERP);
- *   antes el modo 3 (INTERP) se mostraba como HYBRID.
+ * - MotionX2 mapea los modos legacy (0=HYBRID,1=DOUBLING,2=BLEND,3=INTERP migrado
+ *   a REAL60,4=REAL60).
  * - Upscaler con tope real 1080p y aviso no-op en >=1080p (espejo de
  *   SuperResolutionEffect.outputSizeFor / isNoOp).
  * - Light Boost distingue "luz OFF + color/rango solo" (antes decía
@@ -352,12 +352,12 @@ object VideoStatsHelper {
 
     // ---------- Etiquetas de modos (coherentes con Opciones avanzadas) ----------
 
-    /** Legacy guardado en prefs: 0=HYBRID, 1=DOUBLING, 2=BLEND, 3=INTERP. Corto para tabla. */
+    /** Legacy guardado en prefs: 0=HYBRID, 1=DOUBLING, 2=BLEND, 3=INTERP(migrado a REAL60), 4=REAL60. Corto para tabla. */
     fun motionLegacyLabel(legacy: Int): String {
-        return when (legacy.coerceIn(0, 3)) {
+        return when (legacy.coerceIn(0, 4)) {
             1 -> "DOUBLING x2"
             2 -> "BLEND"
-            3 -> "INTERP 60"
+            3, 4 -> "REAL60"
             else -> "HYBRID"
         }
     }
@@ -366,7 +366,7 @@ object VideoStatsHelper {
     private fun shortMotion(label: String): String {
         val l = label.uppercase()
         return when {
-            l.contains("INTERP") || l.contains("60") -> "INTERP 60"
+            l.contains("GRID") || l.contains("60 FPS") || l.contains("REAL60") || l.contains("INTERP") -> "REAL60"
             l.contains("DOUBLING") || l.contains("X2 CUADROS") -> "DOUBLING x2"
             l.contains("BLEND") && !l.contains("HYBRID") -> "BLEND"
             else -> "HYBRID"

@@ -1277,14 +1277,12 @@ object ExoPlayerSettingsHelper {
             "DOUBLING (Frame x2)",
             "BLEND (Suavizado)",
             "HYBRID (Doubling + Micro-Blend)",
-            "Interpolación 60 (SPIKE)",
         )
         val descs = mutableListOf(
             "No hace nada. Video original.",
             "Repite cada cuadro. Muy liviano, sin fantasmas.",
             "Mezcla cuadros. Suave, puede dar fantasma.",
             "Cuadro nítido + mezcla leve. El balance.",
-            "Grid 60Hz con mezcla adaptativa. 1 pase GL.",
         )
         if (highEnd) {
             titles.add("60 fps reales (GRID · experimental)")
@@ -1293,11 +1291,13 @@ object ExoPlayerSettingsHelper {
                     "2 pases GL + historial. Solo para equipo potente.",
             )
         }
-        // Fila -> ordinal MotionX2Mode legacy.
-        val dialogToLegacy = mutableListOf(-1, 1, 2, 0, 3)
+        // Fila -> ordinal MotionX2Mode legacy (el 3/SPIKE ya no se ofrece).
+        val dialogToLegacy = mutableListOf(-1, 1, 2, 0)
         if (highEnd) dialogToLegacy.add(MotionX2Mode.REAL60.ordinal)
-        // Ordinal MotionX2Mode -> fila.
-        val legacyToDialog = intArrayOf(3, 1, 2, 4, 5)
+        // Ordinal MotionX2Mode -> fila. El 3 (INTERP/SPIKE eliminado) se muestra
+        // como REAL60 en gama alta o HYBRID si no; en ejecución resolveStored lo
+        // migra a REAL60 de todos modos.
+        val legacyToDialog = if (highEnd) intArrayOf(3, 1, 2, 4, 4) else intArrayOf(3, 1, 2, 3)
         val maxStored = if (highEnd) {
             MotionX2Mode.REAL60.ordinal
         } else {
