@@ -107,6 +107,10 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
 
     private var drawCount = 0L
     private var lastDrawLogUptime = 0L
+    // Telemetría de costo GL (ns acumulados; mismo hilo, sin sincronizar).
+    private var drawNsAcc = 0L
+    private var copyNsAcc = 0L
+    private var copyCountAcc = 0L
 
     // ------------------------------------------------------------ ciclo de vida
 
@@ -429,7 +433,9 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         var histSize = 0
         if (ecoMode) {
             GLES20.glViewport(vp[0], vp[1], vp[2], vp[3])
+            val t0 = System.nanoTime()
             val r = drawEcoFrame(slotT)
+            drawNsAcc += System.nanoTime() - t0
             drawnSlot = r.first
             drawnPrev = r.second
             drawnF = r.third
@@ -450,7 +456,8 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
             val oldest = frames.first()
             val newestPts = ptsOf(newest)
             val oldestPts = ptsOf(oldest)
-        when {
+            val t0 = System.nanoTime()
+            when {
             frames.size == 1 || slotT < 0 || slotT >= newestPts -> {
                 drawCopy(newest.slot)
                 drawnSlot = newestPts
@@ -490,10 +497,11 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
                 }
             }
         }
-        histN0 = oldestPts
-        histN1 = newestPts
-        histSize = frames.size
-    }
+            histN0 = oldestPts
+            histN1 = newestPts
+            histSize = frames.size
+            drawNsAcc += System.nanoTime() - t0
+        }
 
         EGL14.eglSwapBuffers(display, windowSurface)
         drawCount++
@@ -503,7 +511,12 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
                 (now - lastDrawLogUptime).toFloat() / DRAW_LOG_EVERY
             } else -1f
             lastDrawLogUptime = now
-            Log.d(TAG, "DRAW n=$drawCount slot=$drawnSlot prev=$drawnPrev f=$drawnF avgMs=$avg hist=$histSize [$histN0..$histN1] off=$clockOffsetUs")
+            val avgDrawUs = drawNsAcc / DRAW_LOG_EVERY / 1000L
+            val avgCopyUs = if (copyCountAcc > 0) copyNsAcc / copyCountAcc / 1000L else -1L
+            Log.d(TAG, "DRAW n=$drawCount slot=$drawnSlot prev=$drawnPrev f=$drawnF avgMs=$avg hist=$histSize [$histN0..$histN1] off=$clockOffsetUs glDrawUs=$avgDrawUs glCopyUs=$avgCopyUs/copies=$copyCountAcc")
+            drawNsAcc = 0L
+            copyNsAcc = 0L
+            copyCountAcc = 0L
         }
     }
 
@@ -587,6 +600,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
 
     private fun copyOesToSlot(slot: PSlot) {
         val p = progCopyOes ?: return
+        val t0 = System.nanoTime()
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, slot.fboId)
         GLES20.glViewport(0, 0, poolW, poolH)
         p.use()
@@ -598,6 +612,8 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        copyNsAcc += System.nanoTime() - t0
+        copyCountAcc++
     }
 
     // ------------------------------------------------------------- viewport/fit
