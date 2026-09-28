@@ -69,8 +69,25 @@ La interfaz está pensada para **mando remoto / gamepad**, con una variante Lean
 
 ### KARIN Link (red local)
 - **Enviar un capítulo** a otro dispositivo de la red y que se reproduzca automáticamente.
+- **Cola de reproducción**: "reproducir ahora" sustituye lo que suena y "añadir a la cola"
+  lo deja terminar para que empiece el siguiente. Saltar y quitar desde la pantalla de la TV.
 - **Descubrimiento automático de dispositivos** en la LAN (NSD), sin servidor central.
-- **Acceso a archivos remotos** entre dispositivos (SMB / nube) con token.
+- **Acceso a archivos remotos** entre dispositivos: carpeta compartida por HTTP
+  (`/fs`) con token, solo lectura, en el propio puerto del enlace.
+- **Subir un vídeo del móvil** a la TV (`POST /push`) para los casos sin enlace directo:
+  se reproduce y se borra al terminar. Es la única vía que escribe en disco.
+
+### Emisión a otro dispositivo (DLNA / Cast)
+- Botón **"Emitir"** en el reproductor: manda el vídeo actual a un televisor,
+  decodificador o barra de sonido en lugar de reproducirlo aquí.
+- **DLNA propio, sin dependencias**: descubrimiento por SSDP
+  (`M-SEARCH` a `239.255.255.250:1900`) y control por SOAP
+  (`SetAVTransportURI` + `Play`/`Pause`/`Stop`) contra el `AVTransport` del receptor.
+- **Google Cast** con `play-services-cast-framework` y el receptor por defecto
+  de Google: el selector de dispositivos es el del propio sistema.
+- **Archivos locales**: un receptor DLNA no abre rutas de disco, así que el
+  archivo se sirve por HTTP con soporte de `Range` (sin `206` muchas TVs no
+  hacen seek ni arrancan).
 
 ### Robustez
 - Manejo de sitios protegidos por **Cloudflare** con resolución vía WebView (acotada para no agotar la memoria).
@@ -84,15 +101,16 @@ La interfaz está pensada para **mando remoto / gamepad**, con una variante Lean
 
 | Área | Tecnología |
 |---|---|
-| Lenguaje | Kotlin 1.9 |
-| Reproducción | **Media3 (ExoPlayer) 1.9.3** — exoplayer, hls, ui, leanback, effect, cronet |
-| Extracción de video | **MoonGetter** (core + server-bundle), Rhino 1.7.14 (JS sin WebView) |
+| Lenguaje | Kotlin 2.2.0 |
+| Reproducción | **Media3 (ExoPlayer) 1.11.0** — exoplayer, hls, ui, leanback, effect, cronet, transformer |
+| Extracción de video | **MoonGetter 2.0.0-alpha01** (core + server-bundle), Rhino 1.7.14 (JS sin WebView) |
 | HTTP | OkHttp 4.12.0 |
 | HTML | jsoup 1.17.2 |
-| Asincronía | Kotlin Coroutines 1.7.3 (+ kotlinx-serialization) |
-| UI | AppCompat, Material, RecyclerView, **Leanback / tvprovider** |
+| Asincronía | Kotlin Coroutines 1.7.3 (+ kotlinx-serialization 1.7.3) |
+| UI | AppCompat 1.6.1, Material 1.11.0, RecyclerView 1.3.2, **Leanback / tvprovider** |
+| Red local / archivos | jcifs-ng 2.1.10 (SMB), NSD (mDNS), WebSocket propio |
 | Pruebas | JUnit 4.13.2, Robolectric 4.11.1 |
-| Build | Gradle (AGP), Java 11, viewBinding + buildConfig |
+| Build | Gradle con AGP 8.10.1, Java 11, viewBinding + buildConfig |
 
 > La reproducción es **nativa** (Media3): no se usa FFmpeg ni WebView para extraer los enlaces de video.
 
@@ -254,6 +272,12 @@ KarinFLiX **no aloja ni distribuye contenido audiovisual**. Es un agregador que,
 
 Úsalo solo para contenido del que tengas derecho a disfrutar.
 
+Documentos legales del proyecto:
+
+- **Términos y Condiciones v1.1** — en la app (bienvenida y Ajustes) y en `app/src/main/res/layout/activity_terms.xml`.
+- **[Aviso de Privacidad](AVISO_DE_PRIVACIDAD.md)** — qué datos se guardan localmente, red LAN y derechos ARCO.
+- **[Descargo de Responsabilidad](DESCARGO_DE_RESPONSABILIDAD.md)** — uso bajo tu propio riesgo, código abierto auditable y reporte de bugs en Issues.
+
 ---
 
 ## Licencia
@@ -262,69 +286,96 @@ Este proyecto se distribuye bajo la licencia [MIT](LICENSE).
 
 ---
 
-## 🖥️ KARIN Link — Backend Python
+## 🖥️ KARIN Link — P2P nativo
 
-Un servidor FastAPI para sincronización de dispositivos en red local.
+Sincronización y control remoto entre dispositivos KarinFLiX, implemented
+enteramente en Kotlin dentro de la app. No hay backend, ni servidor externo, ni
+dependencia de Python: los equipos se descubren entre ellos en la red local.
 
-### Features
-- **Descubrimiento de dispositivos** vía mDNS/Zeroconf + UDP broadcast fallback
-- **Salas de reproducción sincronizadas** con WebSocket en tiempo real
-- **API REST completa** con documentación interactiva (Swagger)
-- **QR codes** para compartir episodios rápidamente
-- **Heartbeat** para monitoreo de health de dispositivos
-- **Autenticación** con tokens HMAC
+### Arquitectura
 
-### Instalación
-```bash
-cd karin_link
-pip install -r requirements.txt
-python -m karin_link.server
+- **Descubrimiento** con NSD (mDNS) en `_karinflix._tcp`
+- **Transporte** WebSocket sobre un servidor propio, sin librerías de por medio
+- **Emparejado** por código de 6 caracteres, con caducidad de 5 minutos
+- **Autenticación** por clave derivada con HKDF-SHA256 y firma HMAC de cada mensaje
+- **Servicio en primer plano** para que el socket sobreviva en segundo plano
+- **Cola de reproducción** en el propio proceso: `PlaybackQueue` decide qué va
+  después y `QueueHub` lo ejecuta, así que la lógica se prueba sin reproductor
+- **El fin de un vídeo** lo avisa `ExoPlayerActivity` con el id del elemento que
+  está sonando; si ese id ya no es el primero, el aviso se ignora, porque
+  mientras sonaba alguien pudo quitarlo o cambiar la cola
+
+### Protocolo v2
+
+Cada mensaje es un sobre con versión, tipo, emisor, destinatario, marca de
+tiempo, id anti-replay y firma:
+
+```json
+{ "v": 2, "t": "sync", "id": "…", "from": "…", "to": "…", "ts": 0, "sig": "…", "d": { } }
 ```
 
-La API estará disponible en `http://localhost:7800`
-- Docs: `http://localhost:7800/docs` (Swagger UI)
-- Redoc: `http://localhost:7800/redoc`
+El handshake es `hello` → `hello.ack`, y a partir de ahí la firma es
+obligatoria. Se rechazan relojes desviados más de 5 minutos, ids repetidos y
+destinatarios que no somos nosotros.
 
-### Variables de entorno
-```bash
-cp .env.example .env
-# Edita .env con tus valores
-```
+### Emparejado
+
+1. En Ajustes → KARIN Link, genera un código o escribe el que muestra el otro equipo.
+2. El código debe estar puesto en **los dos** equipos: la clave se deriva del
+   código y los identificadores de ambos.
+3. El primero que se conecta valida al otro y queda emparejado para siempre.
+4. Para revocar un emparejamiento, límpialo desde la lista de equipos de confianza.
 
 ### Estructura del módulo
+
 ```
-karin_link/
-├── server.py        Servidor principal
-├── config.py        Configuración con env vars
-├── api.py           Endpoints FastAPI REST
-├── websocket.py     WebSocket server
-├── discovery.py     Zeroconf/mDNS discovery
-├── broadcast.py     UDP broadcast fallback
-├── security.py      Token auth con HMAC
-├── rooms.py         Salas de reproducción
-├── heartbeat.py     Heartbeat manager
-├── qr.py            Generación de QR codes
-├── database.py      SQLite async
-├── models.py        Modelos Pydantic
-├── client.py        Cliente para otros nodos
-├── utils.py         Utilidades
-├── tests/           Tests pytest
-└── requirements.txt Dependencias Python
+app/src/main/java/com/karin/streamtv/karinlink/
+├── protocol/
+│   ├── LinkProtocol.kt    Sobre, rutas y versión
+│   ├── Pairing.kt         Códigos, HKDF, HMAC, Base64
+│   ├── PeerRegistry.kt    Identidad y tabla de confianza
+│   ├── LinkSession.kt     Máquina de estados y reglas de seguridad
+│   ├── WsFrameParser.kt   Codec WebSocket RFC 6455
+│   └── JsonPayload.kt     Accesores estrictos del payload
+├── LinkServer.kt          Servidor WebSocket
+├── LinkClient.kt          Cliente WebSocket
+├── DiscoveryManager.kt    Registro y browse NSD
+├── KarinLinkHost.kt       Servidor a nivel de aplicación
+├── KarinLinkService.kt    Servicio en primer plano
+├── KarinLinkManager.kt    Estado y orquestación para la UI
+├── RemoteInput.kt         Límite de frames y diff de texto del mando
+├── KarinLinkQueueActivity.kt  Cola en pantalla, pensada para el mando
+├── queue/
+│   ├── PlaybackQueue.kt   La cola: decide qué va después
+│   ├── QueueHub.kt        Une la cola con el reproductor real
+│   ├── QueueProtocol.kt   Mensajes de queue.play / queue.add / ...
+│   └── QueueCommands.kt   Reparto de cada mensaje
+└── upload/
+    └── UploadStore.kt     Dónde caen los vídeos subidos y se borran
 ```
 
-### Tests
-```bash
-cd karin_link
-pip install -e ".[dev]"
-pytest tests/ -v --cov=karin_link
 ```
+app/src/main/java/com/karin/streamtv/cast/
+├── DlnaProtocol.kt         SSDP, descripción UPnP y envelopes SOAP (puro, sin Android)
+├── DlnaDiscovery.kt        M-SEARCH multicast + lectura del controlURL
+├── DlnaController.kt       SetAVTransportURI / Play / Pause / Stop
+├── CastOptionsProvider.kt  Receptor por defecto, leído desde el manifest
+├── EphemeralMediaServer.kt Sirve un fichero local por HTTP con soporte de Range
+├── CastSession.kt          Qué se está emitiendo (sobrevive a la pantalla)
+└── KarinLinkCastActivity.kt  La pantalla "Emitir": DLNA y Cast juntos
+```
+
 
 ### Seguridad
-- Tokens con HMAC-SHA256
-- Secrets desde variables de entorno (`KARIN_TOKEN_SECRET`)
-- CORS configurable
-- `bandit` para análisis de seguridad
-- `pip-audit` para verificar dependencias
+
+- La clave de cada pareja se deriva con HKDF-SHA256 a partir del código y de
+  ambos identificadores de dispositivo
+- Todos los mensajes van firmados; el handshake es el único punto sin firma
+- Ventana temporal de 5 minutos y caché de 512 ids contra repeticiones
+- Un frame sin máscara o un protocolo distinto cierran la conexión
+- Las claves se sellan con AES-GCM bajo una clave del Android Keystore; el
+  valor en disco es `v1:<iv>:<cifrado>` y las claves antiguas en claro se
+  re-sellan solas al leerlas
 
 ---
 
@@ -338,30 +389,55 @@ pytest tests/ -v --cov=karin_link
 - Tests unitarios con Robolectric
 - Tests de instrumentación en dispositivos/emuladores
 
-### Python (pytest)
+### Protocolo de KARIN Link
 ```bash
-cd karin_link
-pytest tests/ -v --cov=karin_link --cov-report=html
+./gradlew :app:testDebugUnitTest --tests "com.karin.streamtv.karinlink.protocol.*"
 ```
-- Tests para models, security, rooms, api, websocket, discovery
-- Cobertura con HTML report
-- `bandit` para security scan
+- Cubre el sobre, el emparejado, el registro de confianza, la sesión, el codec
+  WebSocket y los payloads
+- `LinkServerHandshakeTest` habla por un socket real de loopback: handshake,
+  máscara, rechazo y broadcast firmado
+
+### Emisión DLNA / Cast
+```bash
+./gradlew :app:testDebugUnitTest --tests "com.karin.streamtv.cast.*"
+```
+- `DlnaProtocolTest`: el M-SEARCH, la lectura de la descripción del dispositivo
+  (de ahí sale la `controlURL`), los envelopes SOAP y el escaping
+- `EphemeralMediaServerTest` habla HTTP real contra un socket: 200 completo,
+  206 con rango, sufijo, `HEAD`, 404/405/416
+
+### Control remoto
+```bash
+./gradlew :app:testDebugUnitTest --tests "com.karin.streamtv.karinlink.RemoteInputTest"
+```
+- `RemoteInputTest`: la escritura en vivo (qué se manda al teclear, al borrar
+  y al pegar) y el presupuesto compartido de frames del cursor y el scroll
 
 ---
 
 ## 🔒 Seguridad
 
-### Configuración
-- `KARIN_TOKEN_SECRET` generado automáticamente
-- Tokens con expiry configurable (`KARIN_TOKEN_EXPIRY`)
-- CORS restrictivo configurado vía `CORS_ORIGINS`
-- Sin secrets hardcodeados en el código
+### KARIN Link
+- Claves derivadas con HKDF-SHA256; nunca se transmite el código de emparejado
+- Firma HMAC obligatoria en todo mensaje posterior al handshake
+- Antirrepetición por id de mensaje y ventana de reloj de 5 minutos
+- Claves de emparejado selladas con AES-GCM en reposo, bajo una clave no
+  exportable del Android Keystore
+- El acceso remoto a archivos (`/fs`) es de solo lectura y exige a la vez
+  interruptor activado, token válido y ruta dentro de una carpeta compartida
+- La única escritura en disco es la subida de vídeo (`/push`): exige interruptor
+  y token, impone `Content-Length` y un tope de tamaño, escribe a un temporal que
+  se renombra al final, y el nombre que manda el otro equipo no decide la ruta
+- Ese token se escribe a mano en el móvil en vez de repartirse por el enlace
+  firmado: es lo único que protege `/fs`, y compartirlo convertiría a cualquier
+  equipo emparejado en alguien con acceso a las carpetas compartidas
+- Los vídeos subidos se borran al terminar o al quitarse de la cola, y lo que
+  quedara de una sesión anterior se limpia al arrancar
 
 ### Buenas prácticas
-- `.env.example` como plantilla (sin secrets)
-- `bandit` para análisis estático de seguridad
-- `pip-audit` para dependencias vulnerables
-- `.gitignore` protege `*.keystore`, `karin_link_config.json`, `*.db`
+- Sin secrets hardcodeados en el código
+- `.gitignore` protege `*.keystore` y los ficheros de base de datos
 
 ---
 
@@ -369,8 +445,7 @@ pytest tests/ -v --cov=karin_link --cov-report=html
 
 GitHub Actions configurado con:
 - **Android Build & Test** — compilación + tests unitarios
-- **Python Backend Tests** — tests + cobertura + lint
-- **Security Scan** — bandit + pip-audit + secret scan
+- **Security Scan** — secret scan
 - **Deploy** — condicional a main
 
 Ver: `.github/workflows/ci.yml`
@@ -388,11 +463,11 @@ Ver [CONTRIBUTING.md](CONTRIBUTING.md) para guías detalladas.
 | Componente | Estado |
 |------------|--------|
 | Android App | ✅ Activo |
-| Backend Python | ✅ Activo |
+| KARIN Link P2P | ✅ Nativo Kotlin |
 | Tests | ✅ Cobertura completa |
 | CI/CD | ✅ GitHub Actions |
-| Documentación | ✅ README + Docs |
-| Seguridad | ✅ HMAC + env vars |
+| Documentación | ✅ README + Docs + Legal |
+| Seguridad | ✅ HMAC + HKDF |
 
 ---
 

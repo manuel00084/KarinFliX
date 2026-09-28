@@ -5,6 +5,43 @@ Todos los cambios notables de KarinFLiX se documentarán aquí.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/)
 y este proyecto sigue [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [No publicado]
+
+### Agregado
+- Términos y Condiciones v1.1 reescritos y coherentes con lo que la app realmente
+  hace (red local KARIN Link, filtrado, procesamiento local)
+- `AVISO_DE_PRIVACIDAD.md`: tratamiento local-first, red LAN, permisos y ARCO
+- `DESCARGO_DE_RESPONSABILIDAD.md`: uso bajo propio riesgo y reporte de bugs
+- Fondos de Karin en Créditos y Bienvenida; créditos a Manuel00084 con
+  tecnologías reales del build
+
+### Corregido
+- El reproductor ya no se abre dos veces con el mismo video: `ExoPlayerActivity`
+  en `singleTop` con `onNewIntent`, bandera de extracción en curso en
+  `SeriesDetailActivity` y debounce anti doble-tap en todos los lanzamientos
+  (detalle, navegador, embed, exploradores de archivos)
+
+### Cambiado
+- KARIN Link pasa a ser P2P nativo: desaparece el backend Python/FastAPI y todo
+  el protocolo se implementa en Kotlin dentro de la app
+- Descubrimiento con NSD en `_karinflix._tcp`, sin UDP broadcast ni Zeroconf
+- Protocolo v2 con sobre firmado: `hello` → `hello.ack` y HMAC obligatorio en
+  todo mensaje posterior al handshake
+- Emparejado por código de 6 caracteres con clave derivada por HKDF-SHA256
+- Codec WebSocket propio (RFC 6455) en lugar de una librería de terceros
+- El servidor pasa a un servicio en primer plano para que el socket no muera en
+  segundo plano
+
+### Seguridad
+- Antirrepetición por id de mensaje y ventana de reloj de 5 minutos
+- Los códigos de emparejamiento caducan a los 5 minutos
+- Se rechazan frames sin máscara, protocolo distinto y mensajes sin firma
+- Una identidad de dispositivo única para todo el sistema; antes el servidor y
+  el cliente podían usar identificadores distintos y ningún emparejarse
+
+### Eliminado
+- Backend Python `karin_link`, API REST, salas, heartbeat y QR codes
+
 ## [1.4.0] - 2026-09-22
 
 ### Agregado
