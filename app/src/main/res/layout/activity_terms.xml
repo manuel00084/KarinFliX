@@ -1,0 +1,377 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:src="@drawable/terms_bg"
+        android:scaleType="fitCenter"
+        android:contentDescription="@null"
+        android:importantForAccessibility="no" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#1A1A1A"
+            android:paddingHorizontal="8dp">
+
+            <TextView
+                android:id="@+id/btn_back"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingHorizontal="16dp"
+                android:text="← Atrás"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:focusable="true" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Términos y Condiciones"
+                android:textColor="@color/accent"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/btn_accept_terms"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingHorizontal="16dp"
+                android:text="Aceptar ✔"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:focusable="true" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/scroll_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="16dp"
+            android:background="#D9121218">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="TÉRMINOS Y CONDICIONES DE USO"
+                    android:textColor="@color/accent"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:gravity="center"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Versión 1.1 — Última actualización: Septiembre 2026"
+                    android:textColor="#80FFFFFF"
+                    android:textSize="11sp"
+                    android:gravity="center"
+                    android:layout_marginBottom="20dp" />
+
+                <!-- 1. DECLARACIÓN -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="1. DECLARACIONES PREVIAS"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El presente documento establece los términos y condiciones de uso del software denominado KarinFLiX (en adelante, el Software), distribuido como código abierto bajo licencia MIT desde su repositorio oficial: github.com/manuel00084/KarinFliX.\n\nAl descargar, instalar o utilizar el Software, el usuario (en adelante, el Usuario) declara: (a) ser mayor de 13 años o contar con autorización de padre/madre o tutor; (b) haber leído, comprendido y aceptado íntegramente estos Términos y el Aviso de Privacidad asociado; (c) tener capacidad legal para obligarse. Si no está de acuerdo, deberá abstenerse de utilizar el Software y desinstalarlo.\n\nLa aceptación queda registrada en el dispositivo con la versión aceptada (v1.1). Las versiones futuras con cambios materiales requerirán nueva aceptación."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 2. NATURALEZA DEL SOFTWARE -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="2. NATURALEZA DEL SOFTWARE"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="KarinFLiX es una herramienta de código abierto con fines educativos y de entretenimiento. Funciona como agregador y navegador especializado: a petición expresa del Usuario, se conecta a sitios de terceros y muestra los enlaces públicos que dichos sitios exponen.\n\nKarinFLiX NO opera, controla ni está afiliado a esos sitios. NO aloja catálogos audiovisuales en servidores propios ni vende o distribuye contenido a terceros.\n\nFunción de red local (KARIN Link): permite al propio Usuario enviar contenido entre SUS propios dispositivos dentro de su red LAN (descubrimiento mDNS, WebSocket firmado, carpeta compartida de solo lectura /fs, y subida temporal vía POST /push con borrado automático al terminar). Dicha transmisión es efímera, privada y se realiza bajo la exclusiva responsabilidad del Usuario. El Usuario no deberá usarla para redistribuir contenido a terceros sin derecho."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 3. FUNCIONES INTEGRADAS -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="3. FUNCIONES INTEGRADAS DEL SOFTWARE"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El Software incluye las siguientes funcionalidades, las cuales el Usuario reconoce y acepta al utilizarlo:"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="3.1 BLOQUEO DE CONTENIDO NO DESEADO\n\nEl Software incluye un filtrado opcional que rechaza a nivel de red conexiones hacia dominios identificados como publicidad, rastreo o análisis, con la finalidad de mejorar la experiencia y reducir interrupciones. El filtrado puede provocar que algunos sitios no funcionen correctamente. El Usuario acepta ese riesgo y reconoce que debe respetar los términos de servicio de cada sitio de origen. El Software no recopila ni reutiliza la información bloqueada."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="12dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="3.2 MEJORAS VISUALES Y DE AUDIO\n\nEl Software incluye procesamiento local opcional en tiempo real (shaders de nitidez, color, upscaling KarinSuperRes / FSR / Anime4K, interpolación a 60 fps y DSP de audio). Son ajustes cosméticos configurables y desactivables que no modifican la obra original, solo su presentación durante la reproducción en el dispositivo."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="12dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="3.3 ACCESO A SITIOS DE TERCEROS\n\nLa app utiliza un motor de navegación estándar (HTTP / WebView acotada) para mostrar el contenido solicitado por el Usuario. Algunos sitios aplican medidas anti-bots (por ejemplo, Cloudflare). KarinFLiX no garantiza el acceso continuo, no promete evadir dichas medidas, no elude sistemas de gestión de derechos digitales (DRM) ni accesos de pago o restringidos. Cuando un sitio expone públicamente un enlace de video, la app lo reproduce tal como el sitio lo entrega."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 4. PROPIEDAD INTELECTUAL DE TERCEROS -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="4. PROPIEDAD INTELECTUAL DE TERCEROS"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El Software se ofrece en respeto a la Ley Federal del Derecho de Autor (México), el DMCA de EE. UU., la Directiva 2001/29/CE de la UE y demás leyes aplicables. KarinFLiX, como software, NO reproduce, duplica, vende ni almacena por sí mismo obras protegidas; actúa como interfaz de visualización de fuentes de terceros.\n\nEl Usuario es el único responsable de: (a) usar solo contenido que tenga derecho a ver en su país; (b) no descargar, copiar ni redistribuir obras sin autorización; (c) no eludir DRM ni medidas de pago. Si un titular considera vulnerados sus derechos por un sitio enlazado, podrá notificarlo según la Cláusula 12 para orientar sobre la configuración de fuentes, sin que ello implique que alojemos dicho contenido."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 5. LIMITACIÓN DE RESPONSABILIDAD -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="5. LIMITACIÓN DE RESPONSABILIDAD"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="En la máxima medida permitida por la ley aplicable, y conforme a los artículos 1910 y siguientes del Código Civil Federal de México:\n\na) El Software se entrega TAL CUAL, sin garantías de disponibilidad, exactitud o idoneidad.\nb) El desarrollador no es responsable del contenido de terceros, de la disponibilidad de los sitios de origen, ni de bloqueos causados por dichos sitios ante el filtrado.\nc) El Usuario asume el uso bajo su propio riesgo y se obliga a cumplir las leyes de su jurisdicción.\n\nNada en esta cláusula limita la responsabilidad por dolo o culpa grave ni los derechos irrenunciables del consumidor reconocidos por la Ley Federal de Protección al Consumidor u otras normas imperativas."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 6. USO ACEPTABLE -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="6. USO ACEPTABLE Y EDAD MÍNIMA"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El Usuario se compromete a usar el Software conforme a la Constitución Mexicana, la Ley Federal del Derecho de Autor, la Ley Federal de Protección de Datos Personales en Posesión de los Particulares y las normas aplicables en su jurisdicción.\n\nQueda prohibido: (a) usar el Software para fines ilícitos o para vulnerar derechos de terceros; (b) usar KARIN Link o el explorador de archivos para distribuir obras sin derecho; (c) acceder a contenido violando los términos de los sitios de origen o medidas de pago/DRM; (d) permitir el uso por menores de 13 años sin supervisión de un adulto. El incumplimiento faculta al desarrollador a dejar de dar soporte y a retirar el acceso a canales oficiales."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 7. PROTECCIÓN DE DATOS -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="7. PROTECCIÓN DE DATOS PERSONALES (RESUMEN)"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="KarinFLiX es local-first y sin telemetría: no enviamos tus datos a servidores del desarrollador. Lo que se guarda queda en tu dispositivo: historial, preferencias, caché de imágenes, cookies de sitios visitados, registros locales de fallos y claves de emparejamiento KARIN Link selladas con Android Keystore.\n\nEn red local, KARIN Link intercambia entre TUS dispositivos identificadores, IPs, tokens y estado de cola, solo si activas la función. Los permisos (Internet, micrófono para búsqueda por voz, almacenamiento para video local, multicast para mDNS) se usan solo para la función solicitada y pueden revocarse.\n\nEl texto completo, finalidades, plazos y medios ARCO están en el Aviso de Privacidad (ver repositorio: AVISO_DE_PRIVACIDAD.md y Cláusula 12). Al aceptar estos Términos aceptas también dicho Aviso."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 8. LICENCIA -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="8. LICENCIA DE CÓDIGO ABIERTO"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El código fuente del Software se distribuye bajo Licencia MIT (ver archivo LICENSE en el repositorio). Se concede permiso gratuito para usar, copiar, modificar, fusionar, publicar, distribuir, sublicenciar y vender copias, con la única condición de conservar el aviso de copyright y la licencia.\n\nEl Software se proporciona TAL CUAL, sin garantía expresa o implícita de comerciabilidad, idoneidad o no infracción. En ningún caso los autores serán responsables de reclamaciones derivadas del uso, conforme al texto MIT."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 9. PROPIEDAD INTELECTUAL -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="9. MARCA Y PROPIEDAD INTELECTUAL DE KARINFLIX"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="La licencia MIT cubre únicamente el código fuente. El nombre KarinFLiX, logotipo, banner, textos e interfaz distintiva constituyen marca e imagen comercial de su titular y no están incluidos en la licencia MIT. No podrás usarlos para identificar productos derivados sin autorización escrita previa, salvo usos nominativos de buena fe (por ejemplo, fork con nombre distinto que indique compatibilidad). Los aportes de terceros al repositorio se entienden licenciados bajo MIT."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 10. MODIFICACIONES -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="10. MODIFICACIONES Y VERSIONADO"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Podremos actualizar estos Términos publicando la nueva versión con fecha y número en el repositorio y, cuando sea posible, avisando dentro de la app. Los cambios materiales (nuevas funciones de red, datos o responsabilidades) requerirán nueva aceptación antes de continuar usando el Software. El uso continuado tras cambios no materiales constituye aceptación."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 11. LEY APLICABLE -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="11. LEY APLICABLE, JURISDICCIÓN Y SEPARABILIDAD"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Estos Términos se rigen por la legislación federal de los Estados Unidos Mexicanos. Para controversias, las partes se someten a los tribunales competentes de la Ciudad de México, renunciando a otro fuero, sin perjuicio de los derechos irrenunciables del consumidor en su domicilio.\n\nSi alguna cláusula resulta inválida, las demás subsisten (separabilidad). Estos Términos junto con el Aviso de Privacidad y la licencia MIT constituyen el acuerdo íntegro sobre el uso del Software."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- 12. CONTACTO -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="12. CONTACTO Y NOTIFICACIONES DE PROPIEDAD INTELECTUAL"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Desarrollador: Manuel00084. Repositorio oficial: github.com/manuel00084/KarinFliX (Issues para soporte).\n\nCorreo de contacto legal y privacidad: REEMPLAZAR_POR_TU_CORREO@tudominio.mx (debes crear y monitorear este buzón; es obligatorio para ARCO y DMCA).\n\nPara notificar una presunta infracción incluye: (1) identificación de la obra y del sitio de origen (URL), no de KarinFLiX; (2) tus datos y declaración de buena fe; (3) firma. Al no alojar contenido, nuestra acción se limita a orientar, documentar y, en su caso, retirar fuentes preconfiguradas en futuras versiones."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- Footer -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="— Fin del documento v1.1 —"
+                    android:textColor="#60FFFFFF"
+                    android:textSize="11sp"
+                    android:gravity="center"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- Bottom Spacer -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:text="" />
+
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

@@ -1,37 +1,46 @@
 package com.karin.streamtv.player
 
+import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.SurfaceView
+import android.view.View
 import android.widget.ImageButton
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaItem.SubtitleConfiguration
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Player.Listener
 import androidx.media3.effect.GlEffect
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.ui.PlayerView
 import com.karin.streamtv.R
 import com.karin.streamtv.enhancer.KarinLightBoostController
 import com.karin.streamtv.enhancer.RestoreBoostController
 import com.karin.streamtv.enhancer.gpu.KarinLightBoostEffect
-import com.karin.streamtv.player.dsp.AudioDspUi
-import com.karin.streamtv.player.dsp.AudioEnhanceConfig
 import com.karin.streamtv.player.dsp.AudioEnhanceProcessor
-import com.karin.streamtv.player.dsp.audiophile.AudiophileConfig
+import com.karin.streamtv.player.dsp.smartlite.SmartLiteConfig
 import com.karin.streamtv.player.sixty.MotionX2GlesRenderer
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.DeviceProfile
+import com.karin.streamtv.util.DeviceUtils
+import com.karin.streamtv.util.Http
 import com.karin.streamtv.util.PlaylistQueue
 
 class ExoPlayerActivity : AppCompatActivity() {
@@ -54,6 +63,22 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var glesRenderer: MotionX2GlesRenderer? = null
 
     private var currentVideoUrl: String? = null
+
+    private var autoplayNextHandled = false
+
+/**
+ * Id del elemento de la cola de KARIN Link que está sonando, o null si este
+ * vídeo se abrió desde cualquier otro sitio.
+ *
+ * Es lo que permite que, al terminar, se sepa *qué* había que poner después en
+ * lugar de dar por hecho que tocaba el primero de la lista.
+ */
+private val queueItemId: String? by lazy {
+    intent.getStringExtra(com.karin.streamtv.karinlink.queue.QueueHub.EXTRA_QUEUE_ID)
+}
+    private var mediaItemRef: MediaItem? = null
+    private var dataSourceFactoryRef: DataSource.Factory? = null
+    private var mediaSourceFactoryRef: DefaultMediaSourceFactory? = null
 
     // Resolución REAL (no calculada) reportada por el configure() del pipeline
     // GL cuando Media3 arma/reaplica los efectos. Solo se usa en las estadísticas.
@@ -115,7 +140,6 @@ class ExoPlayerActivity : AppCompatActivity() {
             glesRenderer = MotionX2GlesRenderer()
         }
         wirePlayerButtons(playerView)
-        AudioEnhanceConfig.setAppVolume(AppPreferences.getPlayerVolume())
 
         val url = intent.getStringExtra("video_url") ?: intent.data?.toString()
         currentVideoUrl = url
@@ -155,6 +179,9 @@ class ExoPlayerActivity : AppCompatActivity() {
                 setMediaMetadata(MediaMetadata.Builder().setTitle(videoTitle).build())
             }
         }.build()
+        dataSourceFactoryRef = dataSourceFactory
+        mediaSourceFactoryRef = mediaSourceFactory
+        mediaItemRef = mediaItem
 
         setupPlaylistButtons(playerView)
         // DSP completo (perfiles, EQ 10 bandas, IR, binaural, compresor...) como
@@ -165,9 +192,6 @@ class ExoPlayerActivity : AppCompatActivity() {
             .setMediaSourceFactory(mediaSourceFactory)
             .build().also {
             it.setMediaItem(mediaItem)
-            // Aplica las preferencias de reproducción (speed/volumen) que existían
-            // en AppPreferences pero nunca llegaban al reproductor.
-            it.setPlaybackSpeed(AppPreferences.getPlayerSpeed())
             it.setVolume(AppPreferences.getPlayerVolume().coerceIn(0f, 1f))
             applyVideoEffects(it)
             it.addListener(object : Listener {
@@ -200,6 +224,20 @@ class ExoPlayerActivity : AppCompatActivity() {
                     glesRenderer?.setPlaying(isPlaying)
                 }
 
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_ENDED) {
+                        // Antes de la cola de KARIN Link, un capítulo que acababa
+                        // no se lo enteraba nadie: solo el autoplay interno de
+                        // playlists, y si no había playlist no pasaba nada. Sin
+                        // este aviso una cola se paraba en el primer vídeo.
+                        queueItemId?.let {
+                            Log.i("ExoPlayerActivity", "Ended, handing the queue back: $it")
+                            com.karin.streamtv.karinlink.queue.QueueHub.onPlaybackFinished(it)
+                        }
+                        maybeAutoplayNext()
+                    }
+                }
+
                 override fun onPositionDiscontinuity(
                     oldPosition: Player.PositionInfo,
                     newPosition: Player.PositionInfo,
@@ -218,6 +256,23 @@ class ExoPlayerActivity : AppCompatActivity() {
                 val mxMode = MotionX2Mode.resolveStored(modeIdx)
                 val demo = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false)
                 val texView = findViewById<SurfaceView>(R.id.motionx2_surface)
+                glesRenderer?.onFatalError = { fallbackToGraphPlayer() }
+                glesRenderer?.onThermalDowngrade = { nextMode ->
+                    // Cascada sin cortes: REAL60→ECO60→DOUBLING passthrough, sin recreate ni seek
+                    try {
+                        prefs.edit().putInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, nextMode.ordinal).apply()
+                        chainMotionLabel = nextMode.label
+                        // Mantener ownRenderActive=true para DOUBLING térmico y evitar recreate que corta
+                        if (nextMode == MotionX2Mode.DOUBLING) ownRenderActive = true
+                        glesRenderer?.setMode(nextMode)
+                        val msg = when (nextMode) {
+                            MotionX2Mode.ECO60 -> "REAL60 exigente: bajado a ECO60 liviano (60fps) sin cortes"
+                            MotionX2Mode.DOUBLING -> "ECO60 exigente: bajado a DOUBLING (x2 panel ligero) sin cortes"
+                            else -> "Ajustado a ${nextMode.label} sin cortes"
+                        }
+                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                    } catch (_: Exception) {}
+                }
                 glesRenderer?.attach(
                     texView,
                     it,
@@ -228,8 +283,31 @@ class ExoPlayerActivity : AppCompatActivity() {
         }
     }
 
+    /** El render propio no dibuja en esta GPU: se vuelve al grafo normal
+     *  (recrea la actividad) en vez de dejar pantalla negra con audio. */
+    private fun fallbackToGraphPlayer() {
+        if (isFinishing || isDestroyed) return
+        try {
+            prefs.edit().putBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false).apply()
+        } catch (_: Exception) {
+        }
+        Toast.makeText(
+            this,
+            "MotionX2 60fps no funciona en esta TV: usando reproductor normal",
+            Toast.LENGTH_LONG,
+        ).show()
+        try {
+            recreate()
+        } catch (_: Exception) {
+            finish()
+        }
+    }
+
     /** Misma botonera original en ambas rutas (PlayerView normal o solo-controles). */
     private fun wirePlayerButtons(pv: PlayerView) {
+        pv.findViewById<ImageButton>(R.id.btn_cast)?.setOnClickListener {
+            openCastScreen()
+        }
         pv.findViewById<ImageButton>(R.id.btn_ratio)?.setOnClickListener {
             val next = (ExoPlayerSettingsHelper.getAspectRatioMode(prefs) + 1) % ExoPlayerSettingsHelper.ASPECT_RATIO_MODES
             ExoPlayerSettingsHelper.setAspectRatioMode(prefs, next)
@@ -237,23 +315,7 @@ class ExoPlayerActivity : AppCompatActivity() {
             Toast.makeText(this, "Proporción: ${ExoPlayerSettingsHelper.aspectRatioLabel(next)}", Toast.LENGTH_SHORT).show()
         }
         pv.findViewById<ImageButton>(R.id.btn_settings)?.setOnClickListener {
-            // OSD con la cadena REAL (lo que de verdad se construyó, no lo que
-            // pidió el usuario) + omitidos por presupuesto + no-ops del upscaler.
-            showChainOsd()
-            ExoPlayerSettingsHelper.showAdvancedDialog(
-                activity = this,
-                prefs = prefs,
-                player = player,
-                videoInputHeight = osdInputH,
-                onEffectsChanged = { rebuildEffects(it) },
-                onStrengthChanged = { effectType, strength -> liveRoute(effectType, strength) },
-                onKarinChanged = { p ->
-                    karinLightBoostEffect?.update(p)
-                },
-                onRestoreChanged = { d, r, t ->
-                    restoreEffect?.updateStages(d, r, t)
-                },
-            )
+            openAdvancedSettings()
         }
         // Botón lentes: TECNOLOGÍA 3D. Abre el diálogo 3D directo con
         // rebuildEffects/liveRoute (misma ruta que los ajustes avanzados).
@@ -305,8 +367,8 @@ class ExoPlayerActivity : AppCompatActivity() {
                 chainOmitted = chainOmitted.toList(),
                 chainMotionLabel = chainMotionLabel.ifBlank { null },
                 chainUpscalerLabel = (chainUpscalerLabel.ifBlank { osdLabel }).ifBlank { null },
-                playbackSpeed = try { player?.playbackParameters?.speed ?: AppPreferences.getPlayerSpeed() } catch (_: Exception) { 1f },
                 aspectLabel = ExoPlayerSettingsHelper.aspectRatioLabel(ExoPlayerSettingsHelper.getAspectRatioMode(prefs)),
+                aspectRatioMode = ExoPlayerSettingsHelper.getAspectRatioMode(prefs),
                 dsp = dsp,
             )
         }
@@ -316,15 +378,30 @@ class ExoPlayerActivity : AppCompatActivity() {
         setupPlaylistButtons(pv)
     }
 
-    /** Panel de sonido único: volumen + DSP + auriculares + avanzado. */
-    private fun openSoundSettings() {
-        AudioDspUi.showSoundDialog(
-            this,
-            onAdvanced = {
-                AudioDspUi.showAdvanced(this)
-            },
-            player = player,
+    /**
+     * Boton "Emitir" (DLNA / Cast). Pasa la URL y el titulo tal cual: quien
+     * decide como llegar al receptor es la pantalla de emision, no aqui.
+     */
+    private fun openCastScreen() {
+        val url = currentVideoUrl
+        if (url.isNullOrBlank()) {
+            Toast.makeText(this, "No hay ningun video cargado", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val title = intent.getStringExtra("video_title").orEmpty()
+            .ifBlank { player?.mediaMetadata?.title?.toString().orEmpty() }
+        startActivity(
+            Intent(this, com.karin.streamtv.cast.KarinLinkCastActivity::class.java)
+                .putExtra(com.karin.streamtv.cast.KarinLinkCastActivity.EXTRA_URL, url)
+                .putExtra(com.karin.streamtv.cast.KarinLinkCastActivity.EXTRA_TITLE, title),
         )
+    }
+
+    /** Panel de sonido único: DSP on/off, volumen, potencia (el resto tras botones). */
+    private fun openSoundSettings() {
+        com.karin.streamtv.player.dsp.smartlite.SmartLiteUi.showSmartLitePanel(this) { v ->
+            player?.setVolume(v.coerceIn(0f, 1f))
+        }
     }
 
     /** Aplica el modo de relación de aspecto al frame interno del PlayerView. */
@@ -353,7 +430,11 @@ class ExoPlayerActivity : AppCompatActivity() {
                 "Sin conexión o el servidor no responde"
             PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
                 "Archivo no encontrado"
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ->
+                "Esta TV no tiene decodificador para este video (prueba otro servidor o cambia el códec en Ajustes)"
             PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
+                "Este video no se puede decodificar en este equipo (prueba otro servidor o cambia el códec en Ajustes)"
             PlaybackException.ERROR_CODE_DECODING_FAILED ->
                 "Este video no se puede decodificar en este equipo"
             PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED ->
@@ -394,7 +475,7 @@ class ExoPlayerActivity : AppCompatActivity() {
 
     private fun prefsFloat(key: String, def: Int) = prefs.getInt(key, def) / 100f
 
-    /** Reconstruye la cadena + OSD. Lo usan ajustes, lentes y diálogos. */
+    /** Reconstruye la cadena. Lo usan ajustes, lentes y diálogos. */
     private fun rebuildEffects(p: ExoPlayer) {
         // Si el cambio de modo cruza grafo<->render propio, el layout es otro:
         // se recrea la actividad (mismo intent/video) para cablear limpio.
@@ -415,17 +496,19 @@ class ExoPlayerActivity : AppCompatActivity() {
             )
         }
         applyVideoEffects(p)
-        showChainOsd()
     }
 
     /** Preview en vivo de sliders. Compartido por ajustes y botón lentes. */
     private fun liveRoute(effectType: String, strength: Float) {
         when (effectType) {
             "restore" -> {
-                // Preview en vivo del master: deriva igual que la
-                // cadena (el factor upscaler se relee de prefs).
+                // Preview en vivo del master: mismas curvas perceptuales
+                // que la cadena (no 1:1:1 lineal, que mentía en detalle).
                 val s = strength.coerceIn(0f, 1f)
-                restoreEffect?.updateStages(s, s, s * restoreDetailFactor())
+                val upOn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_UPSCALER_EN, false)
+                val upMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
+                val st = RestoreBoostController.stagesFor(s, upOn, upMode, isLowEndDevice())
+                restoreEffect?.updateStages(st.depixel, st.retro, st.detail)
             }
             "colors" -> karinLightBoostEffect?.updateColorStrength(strength)
             "shader" -> {
@@ -436,6 +519,12 @@ class ExoPlayerActivity : AppCompatActivity() {
                         (e as? CineBoostEffect)?.updateStrength(strength)
                     ExoPlayerSettingsHelper.SHADER_BW ->
                         (e as? BwBoostEffect)?.updateStrength(strength)
+                    ExoPlayerSettingsHelper.SHADER_ANIME ->
+                        (e as? AnimeLineBoostEffect)?.updateStrength(strength)
+                    ExoPlayerSettingsHelper.SHADER_SHARPEN ->
+                        (e as? AdaptiveSharpenEffect)?.updateStrength(strength)
+                    ExoPlayerSettingsHelper.SHADER_GRAIN ->
+                        (e as? FilmGrainEffect)?.updateStrength(strength)
                     else -> (e as? CrtBoostEffect)?.updateStrength(strength)
                 }
             }
@@ -447,16 +536,6 @@ class ExoPlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** Factor del detalle en vivo: el upscaler ya afila por su cuenta. */
-    private fun restoreDetailFactor(): Float {
-        if (!prefs.getBoolean(ExoPlayerSettingsHelper.KEY_UPSCALER_EN, false)) return 1f
-        val mode = prefs.getInt(ExoPlayerSettingsHelper.KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
-        if (mode == SuperResolutionEffect.MODE_FSR) return 0.55f
-        if (mode == SuperResolutionEffect.MODE_ANIME4K) return 0.5f
-        if (mode == SuperResolutionEffect.MODE_KARIN) return 0.55f
-        return 1f
-    }
-
     /**
      * Fallback ante error de procesado (7001 y familia decodificador):
      * paso 1 = restaura la última configuración que sí funcionó,
@@ -465,6 +544,9 @@ class ExoPlayerActivity : AppCompatActivity() {
      */
     private fun tryRecoverFromError(error: PlaybackException): Boolean {
         val code = error.errorCode
+        // Sin decodificador no hay nada que recuperar con reintentos de
+        // efectos: se informa directo (el selector ya reintentó la query).
+        if (code == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED) return false
         // Familia "procesado/decodificación": 7001 (frames/efectos GL),
         // 7000 (init del procesador) y 4001-4006 (decodificador). El 7001
         // literal se conserva porque el constant no existe en Media3 viejo.
@@ -644,36 +726,23 @@ class ExoPlayerActivity : AppCompatActivity() {
         exoPlayer.setVideoEffects(effects)
     }
 
-    /** OSD: muestra la cadena REAL construida, los omitidos por presupuesto y
-     *  los avisos (p. ej. Upscaler sin efecto en contenido 1080p+). */
-    private fun showChainOsd() {
-        val lines = mutableListOf<String>()
-        lines += "Cadena real: ${if (chainActive.isEmpty()) "(sin filtros de imagen)" else chainActive.joinToString(" › ")}"
-        if (chainOmitted.isNotEmpty()) {
-            lines += "Omitidos (límite GPU): ${chainOmitted.joinToString(", ")} — apaga otro filtro para usarlos"
-        }
-        val upscalerEn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_UPSCALER_EN, false)
-        if (upscalerEn && osdInputH >= 1080) {
-            lines += "Upscaler: sin efecto en ≥1080p (solo aplica en SD/720p)"
-        }
-        Toast.makeText(this, lines.joinToString("\n"), Toast.LENGTH_LONG).show()
-    }
-
     private fun addChainEffects(effects: MutableList<Effect>, demoEnabled: Boolean = false) {
         val isLowEnd = isLowEndDevice()
         val upscalerOn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_UPSCALER_EN, false)
         val upscalerMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
 
         // Presupuesto de pases GL: cada filtro es 1 pase de pantalla completa.
-        // Por potencia: gama alta 7, media 5, baja 3 (menos escalador pesado).
-        // El demo ya no reserva nada (cada efecto parte su propia pasada).
-        val upscalerHeavy = if (upscalerOn) 1 else 0
+        // Por potencia: gama alta 7, media 5, baja 3. El demo ya no reserva
+        // nada (cada efecto parte su propia pasada). El upscaler cuenta como
+        // un pase más: antes se le restaba un cupo aparte Y además entraba a
+        // `heavyEffectCount` (doble conteo) y en gama baja se omitía a él o
+        // al resto pese a que había presupuesto reservado para él.
         val baseBudget = when {
             isLowEnd -> 3
             isHighEndDevice() -> 7
             else -> 5
         }
-        val maxHeavyEffects = (baseBudget - upscalerHeavy).coerceAtLeast(2)
+        val maxHeavyEffects = baseBudget
         var heavyEffectCount = 0
 
         fun addHeavyEffect(label: String, effect: Effect) {
@@ -683,12 +752,13 @@ class ExoPlayerActivity : AppCompatActivity() {
                 chainActive.add(label)
             } else {
                 chainOmitted.add(label)
-                Log.w("ExoPlayerActivity", "Efecto omitido por límite en este equipo: $label")
-                Toast.makeText(
-                    this@ExoPlayerActivity,
-                    "$label omitido: apaga otro filtro o el demo para usarlo",
-                    Toast.LENGTH_LONG,
-                ).show()
+                val tierName = when {
+                    isLowEnd -> "gama baja (límite $maxHeavyEffects)"
+                    isHighEndDevice() -> "gama alta (límite $maxHeavyEffects)"
+                    else -> "gama media (límite $maxHeavyEffects)"
+                }
+                val activos = if (chainActive.isEmpty()) "(ninguno)" else chainActive.joinToString(", ")
+                Log.w("ExoPlayerActivity", "Efecto omitido por límite $tierName: $label (activos: $activos)")
             }
         }
 
@@ -806,11 +876,19 @@ class ExoPlayerActivity : AppCompatActivity() {
             }
             val mode = MotionX2Mode.resolveStored(modeIndex)
             chainMotionLabel = mode.label
-            motionX2Effect = MotionX2BoostEffect(mode, strength.coerceIn(0f, 1f), demoEnabled)
-            addHeavyEffect("MotionX2", motionX2Effect!!)
+            // DOUBLING es x2 por repetición del panel (1:1 passthrough, 0 pases GL).
+            // No se encola efecto: evita 1 draw fullscreen + competir por presupuesto
+            // con Restore/Light. El video va a cadencia nativa y el compositor repite.
+            if (mode == MotionX2Mode.DOUBLING) {
+                chainActive.add("MotionX2 DOUBLING (x2 panel, 0 costo)")
+                Log.d("ExoPlayerActivity", "MotionX2 DOUBLING: bypass sin efecto GL (0 pases)")
+            } else {
+                motionX2Effect = MotionX2BoostEffect(mode, strength.coerceIn(0f, 1f), demoEnabled)
+                addHeavyEffect("MotionX2", motionX2Effect!!)
+            }
         }
-        // 6. Shader (selector CRT/Cine/B-N): acabado final tras MotionX2.
-        //    Un tipo a la vez, 1 fetch/px, entra al cupo de pesados.
+        // 6. Shader (selector CRT/Cine/B-N/Anime/Sharpen/Grain): acabado
+        //    final tras MotionX2. Un tipo a la vez, entra al cupo de pesados.
         run {
             val (shaderType, shaderStrength) =
                 ExoPlayerSettingsHelper.shaderSelection(prefs)
@@ -819,6 +897,9 @@ class ExoPlayerActivity : AppCompatActivity() {
                 shaderEffect = when (shaderType) {
                     ExoPlayerSettingsHelper.SHADER_CINE -> CineBoostEffect(shaderStrength, demoEnabled)
                     ExoPlayerSettingsHelper.SHADER_BW -> BwBoostEffect(shaderStrength, demoEnabled)
+                    ExoPlayerSettingsHelper.SHADER_ANIME -> AnimeLineBoostEffect(shaderStrength, demoEnabled)
+                    ExoPlayerSettingsHelper.SHADER_SHARPEN -> AdaptiveSharpenEffect(shaderStrength, demoEnabled)
+                    ExoPlayerSettingsHelper.SHADER_GRAIN -> FilmGrainEffect(shaderStrength, demoEnabled)
                     else -> CrtBoostEffect(shaderStrength, demoEnabled)
                 }
                 addHeavyEffect("Shader:$label", shaderEffect!!)
@@ -838,35 +919,9 @@ class ExoPlayerActivity : AppCompatActivity() {
                 chainActive.add("Visión")
                 Log.d("ExoPlayerActivity", "Visión activa (${VisionAssistHelper.needsLabel(cfg)}), fuera de cupo por accesibilidad")
             }
-            if (cfg.hasAudSpeech || cfg.hasAudLoss) {
-                // La asistencia corre en el DSP actual: con el motor OFF, el
-                // DSP apagado o el motor Audiophile experimental no suena y
-                // antes se reportaba como "Audición" activa en silencio.
-                val eng = try { AudiophileConfig.engine() } catch (_: Exception) {
-                    AudiophileConfig.Engine.CURRENT
-                }
-                val dspAudible = eng == AudiophileConfig.Engine.CURRENT &&
-                    AudioEnhanceConfig.isEnabled() &&
-                    AudioEnhanceConfig.preset() != AudioEnhanceConfig.Preset.OFF
-                if (dspAudible) {
-                    chainActive.add("Audición")
-                    Log.d("ExoPlayerActivity", "Asistencia de audición activa (voz=${cfg.hasAudSpeech}, agudos=${cfg.hasAudLoss})")
-                } else {
-                    val reason = when {
-                        eng == AudiophileConfig.Engine.OFF -> "motor de sonido en OFF"
-                        eng == AudiophileConfig.Engine.AUDIOPHILE ->
-                            "motor Audiophile experimental (no aplica esta asistencia)"
-                        else -> "DSP apagado (perfil Apagado)"
-                    }
-                    chainOmitted.add("Audición ($reason)")
-                    Log.w("ExoPlayerActivity", "Audición pedida pero sin efecto: $reason")
-                    Toast.makeText(
-                        this@ExoPlayerActivity,
-                        "Audición sin efecto: $reason",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
+            // NOTA: la asistencia de audición (hasAudSpeech/hasAudLoss) vivía en
+            // el DSP antiguo, eliminado. Queda pendiente migrarla a SmartLite;
+            // mientras tanto no se aplica ni se reporta.
         }
         // 7. Tecnología 3D (botón lentes): reformatea la SALIDA al final de
         //    la cadena (tras Shader/Visión, antes de la línea Demo). 1 pase
@@ -956,15 +1011,129 @@ class ExoPlayerActivity : AppCompatActivity() {
         super.onResume()
         playerView.onResume()
         glesRenderer?.onActivityResume()
+        requestPlayerAudioFocus()
         if (wasPlayingBeforePause) player?.playWhenReady = true
     }
 
     override fun onPause() {
         wasPlayingBeforePause = player?.playWhenReady == true
         player?.playWhenReady = false
+        abandonPlayerAudioFocus()
         glesRenderer?.onActivityPause()
         playerView.onPause()
         super.onPause()
+    }
+
+    // ── Mando TV: teclas multimedia + foco de audio ──────────────
+
+    /** Teclas del mando (play/pausa/avance/retroceso): PlayerView no las
+     *  garantiza en todas las TV, así que se manejan aquí. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    if (remoteTogglePlay()) return true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                    if (remoteSetPlaying(true)) return true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
+                android.view.KeyEvent.KEYCODE_MEDIA_STOP -> {
+                    if (remoteSetPlaying(false)) return true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                    if (remoteSeekBy(10_000L)) return true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                    if (remoteSeekBy(-10_000L)) return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private val audioFocusListener =
+        android.media.AudioManager.OnAudioFocusChangeListener { change ->
+            // Llamada/notificación/otro audio: pausar en vez de sonar encima.
+            if (change == android.media.AudioManager.AUDIOFOCUS_LOSS ||
+                change == android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+            ) {
+                player?.playWhenReady = false
+            }
+        }
+
+    private fun requestPlayerAudioFocus() {
+        try {
+            val am = getSystemService(AUDIO_SERVICE) as? android.media.AudioManager ?: return
+            @Suppress("DEPRECATION")
+            am.requestAudioFocus(
+                audioFocusListener,
+                android.media.AudioManager.STREAM_MUSIC,
+                android.media.AudioManager.AUDIOFOCUS_GAIN,
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun abandonPlayerAudioFocus() {
+        try {
+            val am = getSystemService(AUDIO_SERVICE) as? android.media.AudioManager ?: return
+            @Suppress("DEPRECATION")
+            am.abandonAudioFocus(audioFocusListener)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Ajustes avanzados del reproductor (ruta de btn_settings de la botonera). */
+    private fun openAdvancedSettings() {
+        ExoPlayerSettingsHelper.showAdvancedDialog(
+            activity = this,
+            prefs = prefs,
+            player = player,
+            videoInputHeight = osdInputH,
+            onEffectsChanged = { rebuildEffects(it) },
+            onStrengthChanged = { effectType, strength -> liveRoute(effectType, strength) },
+            onKarinChanged = { p ->
+                karinLightBoostEffect?.update(p)
+            },
+            onRestoreChanged = { d, r, t ->
+                restoreEffect?.updateStages(d, r, t)
+            },
+        )
+    }
+
+    /** Al terminar un capítulo con rep. automática activa y playlist con más
+     *  capítulos, salta solo al siguiente (misma ruta que los botones ◀ ▶). */
+    private fun maybeAutoplayNext() {
+        if (autoplayNextHandled) return
+        if (!AppPreferences.isAutoPlayEnabled()) return
+        val p = player ?: return
+        val playlist = PlaylistQueue.fromJson(intent.getStringExtra("playlist_json"))
+        if (playlist.isEmpty()) return
+        val index = intent.getIntExtra("playlist_index", 0)
+        if (index >= playlist.size - 1) return
+        val siteName = intent.getStringExtra("site_name").orEmpty()
+        autoplayNextHandled = true
+        Log.i("ExoPlayerActivity", "Cerrado: reproducción automática al capítulo ${index + 2}/${playlist.size}")
+        try {
+            p.release()
+        } catch (_: Exception) {
+        }
+        startActivity(PlaylistQueue.buildIntent(this@ExoPlayerActivity, playlist, index + 1, siteName))
+        finish()
+    }
+
+    /**
+     * Red de seguridad contra el doble player: con launchMode singleTop, un
+     * segundo startActivity mientras esta instancia está arriba entrega el
+     * intent aquí en vez de apilar otro reproductor con el mismo video.
+     * Se recrea con los nuevos extras (o los mismos si era doble tap).
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        autoplayNextHandled = false
+        recreate()
     }
 
     override fun onDestroy() {
@@ -978,3 +1147,4 @@ class ExoPlayerActivity : AppCompatActivity() {
         super.onDestroy()
     }
 }
+

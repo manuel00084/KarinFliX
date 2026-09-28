@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:src="@drawable/character_glasses_reading_armchair_two_legs"
+        android:scaleType="fitCenter"
+        android:contentDescription="@null"
+        android:importantForAccessibility="no" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#1A1A1A"
+            android:paddingHorizontal="8dp">
+
+            <TextView
+                android:id="@+id/btn_back"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingHorizontal="16dp"
+                android:text="← Atrás"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:focusable="true" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Créditos"
+                android:textColor="@color/accent"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/scroll_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="16dp"
+            android:background="#D9121218">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <!-- App Title -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="KarinFLiX"
+                    android:textColor="@color/accent"
+                    android:textSize="24sp"
+                    android:textStyle="bold"
+                    android:gravity="center"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:id="@+id/tv_version"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#80FFFFFF"
+                    android:textSize="12sp"
+                    android:gravity="center"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- Developer Section -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="DESARROLLADOR"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Manuel00084"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:layout_marginBottom="4dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="github.com/manuel00084/KarinFliX"
+                    android:textColor="#80FFFFFF"
+                    android:textSize="12sp"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- Technologies Section -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="TECNOLOGÍAS UTILIZADAS"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Android SDK 36 - Framework principal de desarrollo\n• Kotlin 2.2.0 - Lenguaje de programación\n• Android Gradle Plugin 8.10.1 - Sistema de compilación\n• AppCompat 1.6.1 - Compatibilidad AndroidX\n• Material Components 1.11.0 - Componentes de interfaz\n• RecyclerView 1.3.2 - Listas de contenido\n• OkHttp 4.12.0 - Cliente HTTP y WebSocket\n• Jsoup 1.17.2 - Parser HTML\n• Media3 ExoPlayer 1.11.0 - Reproducción de video\n• MoonGetter 2.0.0-alpha01 - Extracción de servidores de video\n• Coroutines 1.7.3 - Gestión de concurrencia\n• Leanback 1.0.0 - Interfaz para Android TV\n• Rhino 1.7.14 - Motor JavaScript\n• Kotlin Serialization 1.7.3 - Parsing JSON\n• jcifs-ng 2.1.10 - Archivos en red SMB"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:lineSpacingExtra="6dp"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- Bottom Spacer -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:text="" />
+
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

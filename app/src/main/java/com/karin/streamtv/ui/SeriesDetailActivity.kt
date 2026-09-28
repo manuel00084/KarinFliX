@@ -206,7 +206,12 @@ class SeriesDetailActivity : AppCompatActivity() {
                 loadingOverlay.visibility = android.view.View.GONE
 
                 if (page == null) {
-                    Toast.makeText(this@SeriesDetailActivity, "Error al cargar la serie", Toast.LENGTH_SHORT).show()
+                    // Pantalla de error con Volver focusable en vez de cerrar
+                    // en silencio (en TV el Toast solo se pierde).
+                    startActivity(
+                        Intent(this@SeriesDetailActivity, ErrorActivity::class.java)
+                            .putExtra("message", "No se pudo cargar la serie. Revisa tu conexión.")
+                    )
                     finish()
                     return@launch
                 }
@@ -262,8 +267,14 @@ class SeriesDetailActivity : AppCompatActivity() {
     private var allEpisodes: List<Episode> = emptyList()
     private var currentEpisodeIndex: Int = -1
     private var currentNavigation: EpisodeNavigation = EpisodeNavigation()
+    // Antidoble-tap: la extracción tarda segundos y el segundo tap apilaba
+    // otro diálogo / otro reproductor con el mismo video.
+    private var episodeExtractionInProgress: Boolean = false
+    private var lastEmbedLaunchMs: Long = 0L
 
     private fun openEpisode(episode: Episode) {
+        if (episodeExtractionInProgress) return
+        episodeExtractionInProgress = true
         showLoading("Extrayendo servidores de video...")
         currentEpisodeUrl = episode.url
         currentEpisodeIndex = allEpisodes.indexOfFirst { it.url == episode.url }
@@ -294,6 +305,7 @@ class SeriesDetailActivity : AppCompatActivity() {
 
                 if (servers.isEmpty()) {
                     loadingOverlay.visibility = android.view.View.GONE
+                    episodeExtractionInProgress = false
                     Toast.makeText(
                         this@SeriesDetailActivity,
                         "No se encontraron servidores de video para este episodio",
@@ -302,9 +314,11 @@ class SeriesDetailActivity : AppCompatActivity() {
                     return@launch
                 }
 
+                episodeExtractionInProgress = false
                 showServerSelectionDialog(servers, episode.title, episode.url)
             } catch (e: Exception) {
                 loadingOverlay.visibility = android.view.View.GONE
+                episodeExtractionInProgress = false
                 Toast.makeText(
                     this@SeriesDetailActivity,
                     "Error al extraer servidores de video",
@@ -419,6 +433,11 @@ class SeriesDetailActivity : AppCompatActivity() {
     }
 
     private fun openEmbedWebView(server: VideoSource, title: String, allServers: List<VideoSource> = emptyList()) {
+        // Segundo tap al mismo diálogo (mando/TV) llegaba a abrir dos
+        // reproductores con el mismo video, uno detrás del otro.
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastEmbedLaunchMs < 1000) return
+        lastEmbedLaunchMs = now
         val isTabServer = server.serverUrl.contains("?server=")
         val intent = Intent(this, EmbedWebViewActivity::class.java).apply {
             if (isTabServer) {
@@ -554,6 +573,10 @@ class SeriesDetailActivity : AppCompatActivity() {
             }
 
             btnTv.setOnClickListener {
+                if (!com.karin.streamtv.util.AppPreferences.isKarinLinkEnabled()) {
+                    Toast.makeText(this@SeriesDetailActivity, "KARIN Link apagado: actívalo en Ajustes", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
                 val isTabServer = server.serverUrl.contains("?server=")
                 val embed = if (isTabServer) server.serverUrl.substringBefore("?server=") else server.serverUrl
                 val intent = Intent(this@SeriesDetailActivity, com.karin.streamtv.karinlink.KarinLinkSendActivity::class.java).apply {

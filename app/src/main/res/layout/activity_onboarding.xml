@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:src="@drawable/karin_maid_reverencia"
+        android:scaleType="centerCrop"
+        android:contentDescription="@null"
+        android:importantForAccessibility="no" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="28dp"
+            android:background="#C4121218">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Bienvenido a KarinFLiX"
+                android:textColor="#FFFFFF"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:gravity="center" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Antes de comenzar, revisa los términos de licencia y el tutorial de uso."
+                android:textColor="#CCFFFFFF"
+                android:textSize="14sp"
+                android:gravity="center"
+                android:lineSpacingExtra="4dp" />
+
+            <TextView
+                android:id="@+id/btn_view_terms"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="24dp"
+                android:gravity="center"
+                android:text="📄 Leer Términos y Licencia"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:background="@drawable/btn_primary"
+                android:focusable="true"
+                android:contentDescription="Leer términos y condiciones de licencia" />
+
+            <CheckBox
+                android:id="@+id/cb_terms"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:buttonTint="@color/accent"
+                android:text="He leído y acepto los Términos y Condiciones de licencia"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:focusable="true"
+                android:contentDescription="Acepto los términos y condiciones de licencia" />
+
+            <TextView
+                android:id="@+id/btn_view_tutorial"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="20dp"
+                android:gravity="center"
+                android:text="🎓 Ver Tutorial"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:background="@drawable/btn_secondary"
+                android:focusable="true"
+                android:contentDescription="Ver el tutorial de uso del software" />
+
+            <CheckBox
+                android:id="@+id/cb_tutorial"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:buttonTint="@color/accent"
+                android:text="He leído el tutorial de uso"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:focusable="true"
+                android:contentDescription="Confirmo que leí el tutorial de uso" />
+
+            <TextView
+                android:id="@+id/btn_accept"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="28dp"
+                android:gravity="center"
+                android:text="✔ Aceptar y Comenzar"
+                android:textColor="@color/btn_accept_text"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:background="@drawable/btn_accept"
+                android:enabled="false"
+                android:focusable="true"
+                android:contentDescription="Aceptar términos y comenzar a usar KarinFLiX" />
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>

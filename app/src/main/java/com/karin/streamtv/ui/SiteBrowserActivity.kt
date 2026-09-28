@@ -86,6 +86,9 @@ class SiteBrowserActivity : AppCompatActivity() {
 
     private var siteName: String = ""
     private var siteUrl: String = ""
+    private var siteId: String = ""
+    private var isTemporary: Boolean = false
+    private var tempBannerShown: Boolean = false
     private var menuItems: List<SiteMenuItem> = emptyList()
 
     private var showingSearchResults = false
@@ -107,6 +110,17 @@ class SiteBrowserActivity : AppCompatActivity() {
 
         siteName = intent.getStringExtra("site_name") ?: ""
         siteUrl = intent.getStringExtra("site_url") ?: ""
+        siteId = intent.getStringExtra("site_id") ?: ""
+        isTemporary = intent.getBooleanExtra("is_temporary", false)
+        // Página temporal o desconocida: garantiza un scraper genérico en memoria
+        // para portada, búsqueda y servidores (DynamicParser + ServerExtractor).
+        if (siteName.isNotBlank() && siteUrl.isNotBlank()) {
+            if (isTemporary || ScraperRegistry.getScraper(siteName) == null) {
+                try {
+                    ScraperRegistry.registerTempSite(siteName, siteUrl)
+                } catch (_: Exception) { }
+            }
+        }
 
         rvEpisodes = findViewById(R.id.rv_episodes)
         etSearch = findViewById(R.id.et_search)
@@ -131,15 +145,19 @@ class SiteBrowserActivity : AppCompatActivity() {
 
         btnMovies = findViewById(R.id.btn_movies)
         btnMovies.setOnClickListener { onMoviesButton() }
-        btnMovies.onActionKey { onMoviesButton() }
+        btnMovies.onActionKey { btnMovies.performClick() }
 
         btnSeries = findViewById(R.id.btn_series)
-        btnSeries.setOnClickListener { openSection(com.karin.streamtv.model.MenuSection.SERIES, "Series") }
-        btnSeries.onActionKey { openSection(com.karin.streamtv.model.MenuSection.SERIES, "Series") }
+        btnSeries.setOnClickListener {
+            openSection(com.karin.streamtv.model.MenuSection.SERIES, "Series")
+        }
+        btnSeries.onActionKey { btnSeries.performClick() }
 
         btnDorama = findViewById(R.id.btn_dorama)
-        btnDorama.setOnClickListener { openSection(com.karin.streamtv.model.MenuSection.DORAMA, "Doramas") }
-        btnDorama.onActionKey { openSection(com.karin.streamtv.model.MenuSection.DORAMA, "Doramas") }
+        btnDorama.setOnClickListener {
+            openSection(com.karin.streamtv.model.MenuSection.DORAMA, "Doramas")
+        }
+        btnDorama.onActionKey { btnDorama.performClick() }
 
         btnSettings = findViewById(R.id.btn_settings)
         btnSettings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
@@ -238,7 +256,9 @@ filterBar = findViewById(R.id.filter_bar)
         }
 
         btnVoice.setOnClickListener {
-            com.karin.streamtv.util.VoiceSearchHelper.startVoiceSearch(this)
+            if (!com.karin.streamtv.util.VoiceSearchHelper.startVoiceSearch(this)) {
+                android.widget.Toast.makeText(this, "Esta TV no tiene búsqueda por voz", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
         btnVoice.onActionKey { btnVoice.performClick() }
 
@@ -246,7 +266,11 @@ filterBar = findViewById(R.id.filter_bar)
             shareCurrentSite()
         }
         findViewById<android.view.View>(R.id.btn_karinlink)?.setOnClickListener {
-            startActivity(Intent(this, com.karin.streamtv.karinlink.KarinLinkActivity::class.java))
+            if (!com.karin.streamtv.util.AppPreferences.isKarinLinkEnabled()) {
+                android.widget.Toast.makeText(this, "KARIN Link apagado: actívalo en Ajustes", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                startActivity(Intent(this, com.karin.streamtv.karinlink.KarinLinkActivity::class.java))
+            }
         }
 
         ScrapingEngine.onMetrics = { metrics ->
@@ -269,7 +293,77 @@ filterBar = findViewById(R.id.filter_bar)
             }
             else -> loadHomepage()
         }
+        if (isTemporary && !tempBannerShown) {
+            tempBannerShown = true
+            // Se muestra tras el primer frame para no tapar el loading inicial.
+            rvEpisodes.postDelayed({ showTempBanner() }, 800)
+        }
     }
+
+    // region --- Página temporal: aviso + guardar/descartar ---
+
+    private fun showTempBanner() {
+        if (isFinishing || isDestroyed) return
+        Toast.makeText(this, "⏳ Página temporal: no se guardará al cerrar", Toast.LENGTH_LONG).show()
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("⏳ $siteName (temporal)")
+            .setMessage(
+                "$siteUrl\n\nEsta página solo vive en memoria y se borra al cerrar la app. " +
+                    "Úsala para probar sin guardar nada."
+            )
+            .setPositiveButton("💾 Guardar") { _, _ -> promoteTempSite() }
+            .setNegativeButton("Seguir temporal", null)
+            .setNeutralButton("🗑 Descartar") { _, _ -> discardTempSite() }
+            .create()
+            .apply {
+                setOnShowListener {
+                    try {
+                        getButton(android.app.AlertDialog.BUTTON_NEGATIVE)?.requestFocus()
+                    } catch (_: Exception) { }
+                }
+                show()
+            }
+    }
+
+    private fun promoteTempSite() {
+        try {
+            val mgr = com.karin.streamtv.util.SiteManager(this)
+            val target = if (siteId.isNotBlank()) mgr.getSiteById(siteId) else mgr.getSiteByName(siteName)
+            val promoted = target?.let { mgr.promoteTemporary(it.id) }
+            if (promoted != null) {
+                siteId = promoted.id
+                isTemporary = false
+                Toast.makeText(this, "'${promoted.name}' guardada", Toast.LENGTH_SHORT).show()
+            } else {
+                // Ya era permanente o venía de un intent sin registro previo.
+                mgr.addSite(
+                    com.karin.streamtv.model.SiteConfig(name = siteName, url = siteUrl)
+                )
+                isTemporary = false
+                Toast.makeText(this, "'$siteName' guardada", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Log.w("SiteBrowser", "promoteTemp failed: ${e.message}")
+            Toast.makeText(this, "No se pudo guardar", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun discardTempSite() {
+        try {
+            val mgr = com.karin.streamtv.util.SiteManager(this)
+            val target = if (siteId.isNotBlank()) mgr.getSiteById(siteId) else mgr.getSiteByName(siteName)
+            if (target != null) {
+                mgr.discardTemporary(target.id)
+                ScraperRegistry.unregister(target.name)
+            } else {
+                ScraperRegistry.unregister(siteName)
+            }
+        } catch (_: Exception) { }
+        Toast.makeText(this, "Página temporal descartada", Toast.LENGTH_SHORT).show()
+        finish()
+    }
+
+    // endregion
 
     private fun hideSearchBar() {
         etSearch.visibility = android.view.View.GONE
@@ -485,7 +579,12 @@ filterBar = findViewById(R.id.filter_bar)
             try {
                 val episodes = withContext(Dispatchers.IO) {
                     val scraper = ScraperRegistry.getScraper(siteName)
-                    if (scraper != null) scraper.search(query) else emptyList()
+                        ?: ScraperRegistry.registerTempSite(siteName, siteUrl)
+                    try {
+                        scraper.search(query)
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
                 }
 
                 loadingOverlay.visibility = android.view.View.GONE
@@ -645,11 +744,32 @@ gridIsCatalog = false
     // ¿La URL es ficha de serie (detalle con capítulos) y no capítulo reproducible?
     private fun isSeriesDetailUrl(url: String): Boolean {
         if (siteName.equals("JKAnime", ignoreCase = true)) return isJkSeriesUrl(url)
+        // AnimeFLV (.one): ficha `/anime/<slug>`; capítulo `/ver/<slug>-<num>`.
+        if (siteName.equals("AnimeFLV", ignoreCase = true)) {
+            val path = try { java.net.URI(url).path?.trim('/') } catch (_: Exception) { null }
+                ?: return false
+            if (path.startsWith("ver/")) return false
+            return path.startsWith("anime/")
+        }
         // LaCartoons: /serie/{id}; el capítulo es /serie/capitulo/{id}?t={temporada}.
         if (siteName.equals("LaCartoons", ignoreCase = true)) {
             val path = try { java.net.URI(url).path?.trim('/') } catch (_: Exception) { null }
                 ?: return false
             return Regex("""^serie/\d+$""").matches(path)
+        }
+        // DonghuaLife: fichas /series/ y /season/; reproducibles /episode/ y /movie/.
+        if (siteName.equals("DonghuaLife", ignoreCase = true)) {
+            val path = try { java.net.URI(url).path?.trim('/') } catch (_: Exception) { null }
+                ?: return false
+            if (path.startsWith("episode/") || path.startsWith("movie/")) return false
+            return path.startsWith("series/") || path.startsWith("season/")
+        }
+        // Pandrama: ficha /titulo/id/slug (+ /temporada/s); reproducibles /episodio/ y /ver/.
+        if (siteName.equals("Pandrama", ignoreCase = true)) {
+            val path = try { java.net.URI(url).path?.trim('/') } catch (_: Exception) { null }
+                ?: return false
+            if (path.contains("/episodio/") || path.startsWith("ver/")) return false
+            return path.startsWith("titulo/")
         }
         return false
     }
@@ -913,7 +1033,7 @@ gridIsCatalog = false
         val options = dim.options
         val current = selectedFilters[dim.key]
         val checked = current?.let { options.indexOf(it) } ?: -1
-        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        val dlg = android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle(dim.label)
             .setSingleChoiceItems(options.toTypedArray(), checked) { d, which ->
                 selectedFilters[dim.key] = options[which]
@@ -932,7 +1052,10 @@ gridIsCatalog = false
                 applyFilters()
             }
             .setNeutralButton("Cancelar", null)
-            .show()
+            .create()
+        // TV/D-pad: el foco debe caer en la lista de opciones.
+        com.karin.streamtv.util.TvDialogHelper.makeListTvReady(dlg, dlg.listView, this)
+        dlg.show()
     }
 
     private fun clearFilters() {
@@ -1168,6 +1291,7 @@ gridIsCatalog = false
         "mundodonghua" -> "https://www.mundodonghua.com/lista-donghuas"
         "lacartoons" -> "https://www.lacartoons.com/"
         "doramasyt" -> "https://www.doramasyt.com"
+        "pandrama" -> "https://www.pandrama.tv"
         else -> "$siteUrl/animes"
     }
 
@@ -1177,7 +1301,13 @@ gridIsCatalog = false
             btnSearch.requestFocus()
         } else {
             etSearch.visibility = android.view.View.VISIBLE
-            btnVoice.visibility = android.view.View.VISIBLE
+            // Sin reconocedor (TV sin mic): el botón de voz queda oculto.
+            btnVoice.visibility =
+                if (com.karin.streamtv.util.VoiceSearchHelper.isAvailable(this)) {
+                    android.view.View.VISIBLE
+                } else {
+                    android.view.View.GONE
+                }
             etSearch.requestFocus()
         }
     }
@@ -1194,6 +1324,7 @@ gridIsCatalog = false
     private var currentEpisodeIndex: Int = -1
     private var currentNavigation: EpisodeNavigation = EpisodeNavigation()
     private var episodeExtractionInProgress: Boolean = false
+    private var lastEmbedLaunchMs: Long = 0L
 
     private fun openEpisode(episode: Episode) {
         Log.d("SiteBrowser", "openEpisode called: url=${episode.url}, title=${episode.title}")
@@ -1235,14 +1366,10 @@ gridIsCatalog = false
                 loadingOverlay.visibility = android.view.View.GONE
 
                 if (servers.isEmpty()) {
-                    Log.d("SiteBrowser", "No servers found, showing error instead of opening website")
+                    Log.d("SiteBrowser", "No servers found, offering WebView fallback")
                     loadingOverlay.visibility = android.view.View.GONE
                     episodeExtractionInProgress = false
-                    Toast.makeText(
-                        this@SiteBrowserActivity,
-                        "No se encontraron servidores de video para este episodio",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    showNoServersDialog(episode.title, episode.url)
                     return@launch
                 }
 
@@ -1259,6 +1386,29 @@ gridIsCatalog = false
                 ).show()
             }
         }
+    }
+
+    /**
+     * Sin servidores extraíbles (páginas con reproductor 100% JS como
+     * Mediaset Infinity): se ofrece abrir la página del episodio en el
+     * WebView, donde corre el reproductor propio del sitio.
+     */
+    private fun showNoServersDialog(title: String, episodeUrl: String) {
+        android.app.AlertDialog.Builder(this, R.style.DialogTheme)
+            .setTitle(title)
+            .setMessage("No se encontraron servidores de video extraíbles. Puedes abrir la página del episodio en el navegador interno.")
+            .setPositiveButton("Abrir en WebView") { dialog, _ ->
+                dialog.dismiss()
+                val intent = Intent(this@SiteBrowserActivity, EmbedWebViewActivity::class.java).apply {
+                    putExtra("embed_url", episodeUrl)
+                    putExtra("video_title", title)
+                    putExtra("episode_url", currentEpisodeUrl)
+                    putExtra("site_name", siteName)
+                }
+                startActivity(intent)
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
     }
 
     private fun showServerSelectionDialog(servers: List<VideoSource>, title: String, episodeUrl: String) {
@@ -1365,6 +1515,9 @@ gridIsCatalog = false
     }
 
     private fun openEmbedWebView(server: VideoSource, title: String, allServers: List<VideoSource> = emptyList()) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastEmbedLaunchMs < 1000) return
+        lastEmbedLaunchMs = now
         val isTabServer = server.serverUrl.contains("?server=")
         val intent = Intent(this@SiteBrowserActivity, EmbedWebViewActivity::class.java).apply {
             if (isTabServer) {

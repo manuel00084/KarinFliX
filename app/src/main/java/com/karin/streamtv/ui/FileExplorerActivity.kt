@@ -6,6 +6,7 @@ import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -14,10 +15,13 @@ import android.os.Looper
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
 import android.provider.MediaStore
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.ProgressBar
@@ -29,22 +33,16 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.karin.streamtv.R
-import com.karin.streamtv.karinlink.CloudClients
-import com.karin.streamtv.karinlink.CloudEntry
-import com.karin.streamtv.karinlink.CloudHttpProxy
-import com.karin.streamtv.karinlink.CloudProvider
-import com.karin.streamtv.karinlink.CloudRef
-import com.karin.streamtv.karinlink.CloudResult
-import com.karin.streamtv.karinlink.CloudTokenStore
-import com.karin.streamtv.karinlink.SmbClient
-import com.karin.streamtv.karinlink.SmbHttpProxy
-import com.karin.streamtv.karinlink.SmbRef
+import com.karin.streamtv.karinlink.SmbDiscovery
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.GamepadHelper
 import com.karin.streamtv.util.onActionKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -59,13 +57,14 @@ class FileExplorerActivity : AppCompatActivity() {
     private lateinit var btnFolders: ImageView
     private lateinit var btnSort: ImageView
     private lateinit var btnView: ImageView
-    private lateinit var btnPanes: ImageView
     private lateinit var btnExit: ImageView
     private lateinit var etSearch: EditText
     private lateinit var progressBar: ProgressBar
     private lateinit var tvEmpty: TextView
     private lateinit var tvEmptyContainer: View
-    private lateinit var btnAddNetwork: TextView
+    private lateinit var btnManager: TextView
+    private lateinit var tvCount: TextView
+    private lateinit var tvHints: TextView
 
     private val cr: ContentResolver by lazy { applicationContext.contentResolver }
 
@@ -83,21 +82,24 @@ class FileExplorerActivity : AppCompatActivity() {
     private var isTvDevice = false
     private var isGridView = true
     private var sortAsc = true
+    private var sortMode = SortMode.NAME
     private val handler = Handler(Looper.getMainLooper())
+    private var searchDebounce: Runnable? = null
 
-    private var smbMode = false
-    private var smbConn: SmbRef? = null
-    private var smbCurrent: SmbRef? = null
-
-    private var cloudMode = false
-    private var cloudConn: CloudProvider? = null
-    private var cloudCurrent: CloudRef? = null
+    // Detección automática de red local (Windows + NAS): escaneo en curso,
+    // último resultado (para no re-escanear al volver Atrás) y nombres
+    // amigables por "host:port".
+    private var netScanJob: Job? = null
+    private var lastNetResult: SmbDiscovery.DiscoveryResult? = null
+    private val netNames = HashMap<String, String>()
 
     companion object {
         private const val TAG = "FileExplorer"
         private const val REQUEST_STORAGE_PERMISSION = 5001
         private const val REQUEST_MANAGE_STORAGE = 5002
     }
+
+    private enum class SortMode { NAME, COUNT, SIZE }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,19 +113,22 @@ class FileExplorerActivity : AppCompatActivity() {
         btnFolders = findViewById(R.id.btn_folders)
         btnSort = findViewById(R.id.btn_sort)
         btnView = findViewById(R.id.btn_view)
-        btnPanes = findViewById(R.id.btn_panes)
         btnExit = findViewById(R.id.btn_exit)
         etSearch = findViewById(R.id.et_search)
         progressBar = findViewById(R.id.progress_bar)
         tvEmpty = findViewById(R.id.tv_empty)
         tvEmptyContainer = findViewById(R.id.tv_empty_container)
-        btnAddNetwork = findViewById(R.id.btn_add_network)
+        btnManager = findViewById(R.id.btn_manager)
+        tvCount = findViewById(R.id.tv_count)
+        tvHints = findViewById(R.id.tv_hints)
 
         rvFolders.visibility = View.GONE
         isTvDevice = DeviceUtils.isTvDevice(this)
 
-        rvVideos.layoutManager = GridLayoutManager(this, 3)
-        rvFolders.layoutManager = GridLayoutManager(this, 3)
+        // Misma interfaz en TV y móvil: la pista de mando solo estorba en táctil.
+        tvHints.visibility = if (isTvDevice) View.VISIBLE else View.GONE
+
+        applySpanCount()
 
         videoAdapter = VideoAdapter(emptyList(), this) { item ->
             playVideo(item)
@@ -150,14 +155,11 @@ class FileExplorerActivity : AppCompatActivity() {
         btnView.setOnClickListener { toggleViewMode() }
         btnView.onActionKey { toggleViewMode() }
 
-        btnPanes.setOnClickListener { openExploreKf() }
-        btnPanes.onActionKey { openExploreKf() }
-
-        btnAddNetwork.setOnClickListener { showAddNetworkWizard() }
-        btnAddNetwork.onActionKey { showAddNetworkWizard() }
-
         btnExit.setOnClickListener { finish() }
         btnExit.onActionKey { finish() }
+
+        btnManager.setOnClickListener { openManager() }
+        btnManager.onActionKey { openManager() }
 
         etSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
@@ -165,6 +167,24 @@ class FileExplorerActivity : AppCompatActivity() {
                 true
             } else false
         }
+
+        // Filtrado en vivo en móvil (táctil + teclado). Con debounce para no
+        // re-filtrar en cada tecla en listas grandes de USB. En TV no se usa:
+        // allí la búsqueda va por diálogo (ver toggleSearchBar).
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (isTvDevice) return
+                searchDebounce?.let { handler.removeCallbacks(it) }
+                val r = Runnable {
+                    searchQuery = s?.toString()?.trim() ?: ""
+                    if (!showingFolders) showVideoGrid(restoreFocus = false)
+                }
+                searchDebounce = r
+                handler.postDelayed(r, 300)
+            }
+        })
 
         etSearch.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -175,7 +195,6 @@ class FileExplorerActivity : AppCompatActivity() {
         }
 
         setupTvNavigation()
-        CloudTokenStore.init(this)
         checkPermissionsAndLoad()
     }
 
@@ -269,10 +288,97 @@ class FileExplorerActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupTvNavigation() {
-        if (!isTvDevice) return
+    // ---------- UI ADAPTATIVA (misma interfaz TV + móvil) ----------
 
-        val topBarButtons = listOf<android.view.View>(btnBack, btnSearch, btnFolders, btnSort, btnView, btnPanes, btnExit)
+    /** Columnas según ancho real: TV 4K ~6 vídeos, móvil vertical 2. Se
+     *  recalcula al rotar (la actividad declara configChanges). */
+    private fun computeSpanCount(forFolders: Boolean): Int {
+        val widthDp = resources.configuration.screenWidthDp
+        val videoCols = when {
+            widthDp >= 1100 -> 6
+            widthDp >= 900 -> 5
+            widthDp >= 720 -> 4
+            widthDp >= 500 -> 3
+            else -> 2
+        }
+        val folderCols = when {
+            widthDp >= 1100 -> 4
+            widthDp >= 800 -> 3
+            widthDp >= 500 -> 2
+            else -> 1
+        }
+        return if (forFolders) folderCols else videoCols
+    }
+
+    private fun applySpanCount() {
+        if (isGridView) {
+            rvVideos.layoutManager = GridLayoutManager(this, computeSpanCount(false))
+            rvFolders.layoutManager = GridLayoutManager(this, computeSpanCount(true))
+            btnView.setImageResource(R.drawable.ic_grid)
+        } else {
+            rvVideos.layoutManager = LinearLayoutManager(this)
+            rvFolders.layoutManager = LinearLayoutManager(this)
+            btnView.setImageResource(R.drawable.ic_list)
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Al rotar el móvil (la actividad no se recrea): re-columnear y
+        // devolver el foco a la lista para no dejar el mando en el aire.
+        applySpanCount()
+        requestFocusOnCurrentView()
+    }
+
+    /** Posición del foco actual para restaurarlo tras re-ordenar/filtrar sin
+     *  mandar al usuario de vuelta arriba (clave con mando). */
+    private fun focusedPosition(rv: RecyclerView): Int {
+        val focused = rv.focusedChild
+        if (focused != null) {
+            val pos = rv.getChildAdapterPosition(focused)
+            if (pos != RecyclerView.NO_POSITION) return pos
+        }
+        val lm = rv.layoutManager
+        return when (lm) {
+            is GridLayoutManager -> lm.findFirstVisibleItemPosition().coerceAtLeast(0)
+            is LinearLayoutManager -> lm.findFirstVisibleItemPosition().coerceAtLeast(0)
+            else -> 0
+        }
+    }
+
+    private fun restoreFocus(rv: RecyclerView, position: Int) {
+        rv.post {
+            if (rv.adapter == null || (rv.adapter?.itemCount ?: 0) == 0) return@post
+            val pos = position.coerceIn(0, (rv.adapter?.itemCount ?: 1) - 1)
+            rv.scrollToPosition(pos)
+            rv.post {
+                val holder = rv.findViewHolderForAdapterPosition(pos)
+                (holder?.itemView ?: rv.getChildAt(0))?.requestFocus()
+            }
+        }
+    }
+
+    private fun pageScroll(forward: Boolean) {
+        val rv = if (showingFolders) rvFolders else rvVideos
+        val lm = rv.layoutManager ?: return
+        val span = if (lm is GridLayoutManager) lm.spanCount else 1
+        val visible = if (lm is LinearLayoutManager) {
+            lm.findLastVisibleItemPosition() - lm.findFirstVisibleItemPosition() + 1
+        } else 0
+        val page = (if (visible > 0) visible else span * 3).coerceAtLeast(1)
+        val cur = focusedPosition(rv)
+        val count = rv.adapter?.itemCount ?: 0
+        if (count == 0) return
+        val target = if (forward) (cur + page).coerceAtMost(count - 1)
+                     else (cur - page).coerceAtLeast(0)
+        restoreFocus(rv, target)
+    }
+
+    private fun setupTvNavigation() {
+        // Antes solo en TV: ahora siempre activo. En móvil no molesta (el
+        // táctil no genera DPAD) y deja la misma interfaz útil con teclado,
+        // gamepad o el control remoto del celular vía KARIN Link.
+        val topBarButtons = listOf<View>(btnBack, btnSearch, btnFolders, btnSort, btnView, btnExit)
         topBarButtons.forEachIndexed { index, btn ->
             btn.setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN) {
@@ -298,9 +404,14 @@ class FileExplorerActivity : AppCompatActivity() {
         val navListener = { recyclerView: RecyclerView ->
             recyclerView.setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                    val llm = recyclerView.layoutManager as? GridLayoutManager
-                    val firstVisible = llm?.findFirstVisibleItemPosition() ?: 0
+                    val lm = recyclerView.layoutManager
+                    val firstVisible = when (lm) {
+                        is GridLayoutManager -> lm.findFirstVisibleItemPosition()
+                        is LinearLayoutManager -> lm.findFirstVisibleItemPosition()
+                        else -> 0
+                    }
                     if (firstVisible <= 0) {
+                        // Primer fila + ARRIBA = volver a la top bar (no perder foco).
                         btnFolders.requestFocus()
                         return@setOnKeyListener true
                     }
@@ -569,13 +680,8 @@ class FileExplorerActivity : AppCompatActivity() {
     private fun buildRootFolderItems(): List<FolderItem> {
         val folders = mutableListOf<FolderItem>()
 
-        if (smbMode) {
-            folders.add(FolderItem(name = "Red", path = "__smb__", count = 0))
-        }
-
-        if (CloudTokenStore.configuredCount() > 0) {
-            folders.add(FolderItem(name = "Nube (${CloudTokenStore.configuredCount()})", path = "__cloud__", count = 0))
-        }
+        // Detección automática: PCs con Windows y NAS, sin escribir IPs.
+        folders.add(FolderItem(name = "Red local", path = "__net__", count = 0))
 
         folders.add(FolderItem(name = "Todos los videos", path = "__all__", count = allVideos.size))
 
@@ -627,13 +733,24 @@ class FileExplorerActivity : AppCompatActivity() {
                 showVideoGrid()
                 return
             }
-            folder.path == "__smb__" -> {
-                if (navStack.last() != "__smb__") navStack.add("__smb__")
-                loadSmbShares()
-                return
-            }
             folder.path == "__videos_in_path__" -> {
                 showVideoGrid()
+                return
+            }
+            folder.path == "__net__" -> {
+                enterNet()
+                return
+            }
+            folder.path == "__net_rescan__" -> {
+                scanNetwork()
+                return
+            }
+            folder.path?.startsWith("__net_host__:") == true -> {
+                val payload = folder.path.removePrefix("__net_host__:")
+                val sep = payload.lastIndexOf(':')
+                val host = if (sep > 0) payload.substring(0, sep) else payload
+                val port = if (sep > 0) payload.substring(sep + 1).toIntOrNull() ?: 445 else 445
+                showNetCredentials(host, port)
                 return
             }
             folder.path == "__all_in_path__" -> {
@@ -646,62 +763,8 @@ class FileExplorerActivity : AppCompatActivity() {
                 showVideoGrid()
                 return
             }
-            folder.path == "__volume__" -> {
-                navStack.add(null)
-                buildAndShowRoot()
-                return
-            }
             folder.path?.startsWith("fs:") == true -> {
                 openFileSystemDir(folder.path.substring(3), addToStack = true)
-                return
-            }
-            folder.path?.startsWith("__smb_share__:") == true -> {
-                val share = folder.path.removePrefix("__smb_share__:")
-                if (navStack.last() != folder.path) navStack.add(folder.path)
-                loadSmbDir(share, "/")
-                return
-            }
-            folder.path?.startsWith("__smb_dir__:") == true -> {
-                val payload = folder.path.removePrefix("__smb_dir__:")
-                val sep = payload.indexOf(':')
-                if (sep > 0) {
-                    val share = payload.substring(0, sep)
-                    val remotePath = payload.substring(sep + 1)
-                    if (navStack.last() != folder.path) navStack.add(folder.path)
-                    loadSmbDir(share, remotePath)
-                }
-                return
-            }
-            folder.path == "__cloud__" -> {
-                if (navStack.last() != "__cloud__") navStack.add("__cloud__")
-                showCloudProviders()
-                return
-            }
-            folder.path?.startsWith("__cloud_provider__:") == true -> {
-                val providerId = folder.path.removePrefix("__cloud_provider__:")
-                val provider = CloudProvider.fromId(providerId)
-                if (provider != null) {
-                    if (navStack.last() != folder.path) navStack.add(folder.path)
-                    cloudConn = provider
-                    cloudCurrent = null
-                    cloudMode = true
-                    loadCloudRoot(provider)
-                }
-                return
-            }
-            folder.path?.startsWith("__cloud_dir__:") == true -> {
-                val payload = folder.path.removePrefix("__cloud_dir__:")
-                val sep = payload.indexOf(':')
-                if (sep > 0) {
-                    val provider = CloudProvider.fromId(payload.substring(0, sep))
-                    val folderId = cnvDecode(payload.substring(sep + 1))
-                    if (provider != null) {
-                        if (navStack.last() != folder.path) navStack.add(folder.path)
-                        cloudConn = provider
-                        cloudMode = true
-                        loadCloudDir(provider, folderId ?: "")
-                    }
-                }
                 return
             }
              else -> {
@@ -718,6 +781,113 @@ class FileExplorerActivity : AppCompatActivity() {
             showFolderGrid()
         } else {
             showVideoGrid()
+        }
+    }
+
+    // ---------- Red local automática (Windows + NAS) ----------
+
+    /** Entra a "Red local": usa caché al volver Atrás, escanea al entrar. */
+    private fun enterNet() {
+        if (navStack.last() != "__net__") navStack.add("__net__")
+        val cached = lastNetResult
+        if (cached != null) showNetResult(cached) else scanNetwork()
+    }
+
+    private fun scanNetwork() {
+        netScanJob?.cancel()
+        showLoading("Buscando equipos Windows y NAS…")
+        netScanJob = lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    SmbDiscovery.discover(this@FileExplorerActivity)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "scan red: ${e.message}")
+                    null
+                }
+            } ?: return@launch
+            // Si el usuario salió mientras tanto, no pisar la vista actual.
+            if (navStack.last() != "__net__") return@launch
+            lastNetResult = result
+            hideLoading()
+            showNetResult(result)
+        }
+    }
+
+    private fun showNetResult(result: SmbDiscovery.DiscoveryResult) {
+        netNames.clear()
+        val folders = mutableListOf(
+            FolderItem(name = "↻ Buscar de nuevo", path = "__net_rescan__", count = 0)
+        )
+        for (s in result.servers) {
+            netNames["${s.host}:${s.port}"] = s.name
+            val label = if (s.name == s.host) s.host else "${s.name} (${s.host})"
+            folders.add(FolderItem(name = label, path = "__net_host__:${s.host}:${s.port}", count = 0))
+        }
+        currentSubFolders = folders
+        currentVideos = emptyList()
+        searchQuery = ""
+        tvPath.text = "Red local"
+        btnBack.visibility = View.VISIBLE
+        showFolderGrid(restoreFocus = false)
+        if (result.servers.isNotEmpty()) {
+            tvCount.text = if (result.servers.size == 1) "1 equipo" else "${result.servers.size} equipos"
+        } else {
+            tvCount.text = ""
+            Toast.makeText(
+                this,
+                if (result.subnets.isEmpty())
+                    "Sin conexión a red local. Conéctate a la misma WiFi o cable que tus equipos y NAS."
+                else
+                    "No se encontraron equipos ni NAS en ${result.subnets.joinToString(", ")}.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        if (isTvDevice) requestFocusOnCurrentView()
+    }
+
+    /** Usuario/clave opcionales (vacío = invitado) y salto al gestor. */
+    private fun showNetCredentials(host: String, port: Int) {
+        val name = netNames["$host:$port"] ?: host
+        val user = EditText(this).apply { hint = "Usuario (vacío = invitado)" }
+        val pass = EditText(this).apply {
+            hint = "Contraseña (opcional)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 10)
+            addView(user)
+            addView(pass)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(name)
+            .setMessage("Conectar a $host en el gestor de archivos")
+            .setView(box)
+            .setPositiveButton("Conectar") { _, _ ->
+                openNetManager(
+                    host, port, name,
+                    user.text.toString().ifBlank { null },
+                    pass.text.toString().ifBlank { null }
+                )
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun openNetManager(host: String, port: Int, name: String, user: String?, pass: String?) {
+        try {
+            val intent = android.content.Intent(this, ExploreKF::class.java).apply {
+                putExtra("smb_host", host)
+                putExtra("smb_port", port)
+                putExtra("smb_name", name)
+                if (user != null) putExtra("smb_user", user)
+                if (pass != null) putExtra("smb_pass", pass)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "No se pudo abrir el gestor", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -794,20 +964,25 @@ class FileExplorerActivity : AppCompatActivity() {
         }
     }
 
-    private fun showFolderGrid() {
+    private fun showFolderGrid(restoreFocus: Boolean = true) {
+        val keepPos = if (restoreFocus) focusedPosition(rvFolders) else 0
         showingFolders = true
         rvVideos.visibility = View.GONE
         rvFolders.visibility = View.VISIBLE
         btnFolders.setImageResource(R.drawable.ic_video)
         folderAdapter?.submitList(currentSubFolders)
 
+        tvCount.text = if (currentSubFolders.isNotEmpty())
+            "${currentSubFolders.size} carpetas" else ""
         tvEmptyContainer.visibility = if (currentSubFolders.isEmpty()) View.VISIBLE else View.GONE
         tvEmpty.text = "No hay carpetas disponibles"
 
-        if (isTvDevice) rvFolders.post { rvFolders.requestFocus() }
+        if (restoreFocus) restoreFocus(rvFolders, keepPos)
+        else if (isTvDevice) rvFolders.post { rvFolders.requestFocus() }
     }
 
-    private fun showVideoGrid() {
+    private fun showVideoGrid(restoreFocus: Boolean = true) {
+        val keepPos = if (restoreFocus) focusedPosition(rvVideos) else 0
         showingFolders = false
         rvFolders.visibility = View.GONE
         rvVideos.visibility = View.VISIBLE
@@ -822,10 +997,16 @@ class FileExplorerActivity : AppCompatActivity() {
             }
         } else {
             searchBase
-        }
+        }.let { applySortToVideos(it) }
 
         videoAdapter?.submitList(displayVideos)
 
+        tvCount.text = when {
+            displayVideos.isEmpty() -> ""
+            searchQuery.isNotBlank() ->
+                "${displayVideos.size} resultados · “$searchQuery”"
+            else -> "${displayVideos.size} videos"
+        }
         tvEmptyContainer.visibility = if (displayVideos.isEmpty()) View.VISIBLE else View.GONE
         if (searchQuery.isNotBlank()) {
             tvEmpty.text = "Sin resultados para '$searchQuery'"
@@ -835,7 +1016,8 @@ class FileExplorerActivity : AppCompatActivity() {
             tvEmpty.text = "No hay videos en esta carpeta"
         }
 
-        if (isTvDevice && displayVideos.isNotEmpty()) rvVideos.post { rvVideos.requestFocus() }
+        if (displayVideos.isNotEmpty() && restoreFocus) restoreFocus(rvVideos, keepPos)
+        else if (isTvDevice && displayVideos.isNotEmpty()) rvVideos.post { rvVideos.requestFocus() }
     }
 
     private fun toggleView() {
@@ -846,536 +1028,145 @@ class FileExplorerActivity : AppCompatActivity() {
         }
     }
 
-    private fun toggleSort() {
-        sortAsc = !sortAsc
-        if (showingFolders) {
-            val sorted = if (sortAsc) currentSubFolders.sortedBy { it.name }
-                         else currentSubFolders.sortedByDescending { it.name }
-            currentSubFolders = sorted
-            folderAdapter?.submitList(sorted)
-        } else {
-            val sorted = if (sortAsc) currentVideos.sortedBy { it.title }
-                         else currentVideos.sortedByDescending { it.title }
-            currentVideos = sorted
-            videoAdapter?.submitList(sorted)
+    private fun applySortToVideos(list: List<VideoItem>): List<VideoItem> {
+        return when (sortMode) {
+            SortMode.NAME -> if (sortAsc) list.sortedBy { it.title.lowercase() }
+                             else list.sortedByDescending { it.title.lowercase() }
+            SortMode.SIZE -> if (sortAsc) list.sortedBy { it.sizeBytes }
+                             else list.sortedByDescending { it.sizeBytes }
+            SortMode.COUNT -> list // COUNT solo aplica a carpetas
         }
-        btnSort.rotation = if (sortAsc) 0f else 180f
+    }
+
+    private fun applySortToFolders(list: List<FolderItem>): List<FolderItem> {
+        return when (sortMode) {
+            SortMode.NAME -> if (sortAsc) list.sortedBy { it.name.lowercase() }
+                             else list.sortedByDescending { it.name.lowercase() }
+            SortMode.COUNT -> if (sortAsc) list.sortedBy { it.count }
+                              else list.sortedByDescending { it.count }
+            SortMode.SIZE -> list
+        }
+    }
+
+    private fun toggleSort() {
+        // Solo opciones que aplican a la vista actual: antes "Más videos"
+        // en videos y "Tamaño" en carpetas se ofrecían pero no hacían nada.
+        data class Opt(val label: String, val mode: SortMode, val asc: Boolean)
+        val opts = if (showingFolders) listOf(
+            Opt("Nombre A–Z", SortMode.NAME, true),
+            Opt("Nombre Z–A", SortMode.NAME, false),
+            Opt("Más videos primero", SortMode.COUNT, false)
+        ) else listOf(
+            Opt("Nombre A–Z", SortMode.NAME, true),
+            Opt("Nombre Z–A", SortMode.NAME, false),
+            Opt("Archivos más grandes", SortMode.SIZE, false)
+        )
+        val labels = opts.map { it.label }.toTypedArray()
+        val checked = opts.indexOfFirst { it.mode == sortMode && it.asc == sortAsc }
+            .takeIf { it >= 0 } ?: 0
+        AlertDialog.Builder(this)
+            .setTitle("Ordenar")
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                sortMode = opts[which].mode
+                sortAsc = opts[which].asc
+                if (showingFolders) {
+                    currentSubFolders = applySortToFolders(currentSubFolders)
+                    showFolderGrid()
+                } else {
+                    // showVideoGrid ya aplica el orden al mostrar.
+                    showVideoGrid()
+                }
+                btnSort.rotation = if (sortAsc) 0f else 180f
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** MENÚ unificado como en el gestor: un menú de opciones en vez de una
+     *  acción directa distinta por pantalla. */
+    private fun showTopMenu() {
+        val items = arrayOf("Ordenar…", "Cambiar vista", "Buscar", "Gestor copiar/pegar")
+        AlertDialog.Builder(this)
+            .setTitle("Opciones")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> toggleSort()
+                    1 -> toggleViewMode()
+                    2 -> toggleSearchBar()
+                    3 -> openManager()
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun toggleViewMode() {
         isGridView = !isGridView
-        if (isGridView) {
-            rvVideos.layoutManager = GridLayoutManager(this, 3)
-            rvFolders.layoutManager = GridLayoutManager(this, 3)
-            btnView.setImageResource(R.drawable.ic_grid)
-        } else {
-            rvVideos.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
-            rvFolders.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
-            btnView.setImageResource(R.drawable.ic_list)
-        }
+        applySpanCount()
+        // Re-publicar la lista actual conservando la posición del foco.
+        if (showingFolders) showFolderGrid() else showVideoGrid()
     }
 
-    // ---------- WIZARD ----------
-
-    private fun showAddNetworkWizard() {
-        val ctx = this
-        val items = arrayOf(
-            "SMB / Red (Windows, Linux)",
-            "Red de Windows (SMB)",
-            "NAS (SMB / NFS)",
-            "Dropbox",
-            "Google Drive"
-        )
-        val icons = arrayOf(
-            R.drawable.ic_network_smb,
-            R.drawable.ic_lan,
-            R.drawable.ic_nas,
-            R.drawable.ic_dropbox,
-            R.drawable.ic_gdrive
-        )
-        val descriptions = arrayOf(
-            "Conectar a un servidor SMB/CIFS",
-            "Explorar recursos compartidos en red",
-            "Conectar a un NAS Synology, QNAP, etc.",
-            "Explorar archivos en Dropbox",
-            "Explorar archivos en Google Drive"
-        )
-
-        // "Red de Windows en el explorador" (Ajustes > KARIN Link) controla si se
-        // ofrece conexión SMB en este asistente.
-        val smbVisible = com.karin.streamtv.util.AppPreferences.isSmbShowOnHome()
-        val origIndices = if (smbVisible) items.indices.toList() else items.indices.filter { it >= 3 }
-
-        val listItems = origIndices.map { i ->
-            val row = android.widget.LinearLayout(ctx).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(24, 16, 24, 16)
-                isFocusable = true
-                isFocusableInTouchMode = true
-                background = android.util.TypedValue().let {
-                    theme.resolveAttribute(android.R.attr.selectableItemBackground, it, true)
-                    androidx.core.content.ContextCompat.getDrawable(ctx, it.resourceId)
-                }
-            }
-
-            val icon = android.widget.ImageView(ctx).apply {
-                setImageResource(icons[i])
-                layoutParams = android.widget.LinearLayout.LayoutParams(48, 48).apply {
-                    marginEnd = 20
-                }
-                val tint = android.content.res.ColorStateList.valueOf(
-                    androidx.core.content.ContextCompat.getColor(ctx, R.color.accent)
-                )
-                imageTintList = tint
-            }
-
-            val textCol = android.widget.LinearLayout(ctx).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val title = android.widget.TextView(ctx).apply {
-                text = items[i]
-                setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.text_primary))
-                textSize = 15f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-            }
-
-            val desc = android.widget.TextView(ctx).apply {
-                text = descriptions[i]
-                setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.text_secondary))
-                textSize = 12f
-                setPadding(0, 2, 0, 0)
-            }
-
-            textCol.addView(title)
-            textCol.addView(desc)
-            row.addView(icon)
-            row.addView(textCol)
-            row
-        }
-
-        val scrollView = android.widget.ScrollView(ctx).apply {
-            val wrapper = android.widget.LinearLayout(ctx).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-            }
-            listItems.forEach { wrapper.addView(it) }
-            addView(wrapper)
-        }
-
-        val dialog = AlertDialog.Builder(ctx)
-            .setTitle("Añadir almacenamiento")
-            .setView(scrollView)
-            .setNegativeButton("Cancelar", null)
-            .create()
-
-        listItems.forEachIndexed { pos, row ->
-            row.setOnClickListener {
-                dialog.dismiss()
-                when (origIndices[pos]) {
-                    0, 1, 2 -> showSmbConnectDialog()
-                    3 -> showCloudManageDialogFor(CloudProvider.DROPBOX)
-                    4 -> showCloudManageDialogFor(CloudProvider.GOOGLE_DRIVE)
-                }
-            }
-        }
-
-        dialog.show()
-    }
-
-    private fun showCloudManageDialogFor(provider: CloudProvider) {
-        val has = CloudTokenStore.hasToken(provider)
-        val items = mutableListOf<String>()
-        if (has) items.add("Conectar y explorar")
-        items.add("Introducir / cambiar token")
-        if (has) items.add("Eliminar token")
-        items.add("Ayuda: cómo obtener el token")
-        AlertDialog.Builder(this)
-            .setTitle(provider.displayName)
-            .setItems(items.toTypedArray()) { _, which ->
-                when (items[which]) {
-                    "Conectar y explorar" -> {
-                        cloudConn = provider
-                        cloudMode = true
-                        navStack.clear()
-                        navStack.add("__cloud__")
-                        navStack.add("__cloud_provider__:${provider.id}")
-                        loadCloudRoot(provider)
-                    }
-                    "Introducir / cambiar token" -> showCloudTokenDialog(provider)
-                    "Eliminar token" -> {
-                        CloudTokenStore.setToken(provider, null)
-                        Toast.makeText(this, "Token de ${provider.displayName} eliminado", Toast.LENGTH_SHORT).show()
-                        if (cloudMode && cloudConn == provider) exitCloud() else buildAndShowRoot()
-                    }
-                    else -> onCloudHelp(provider)
-                }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    // ---------- SMB ----------
-
-    private fun showSmbConnectDialog() {
-        val host = EditText(this).apply { hint = "IP del servidor (ej. 192.168.1.20)" }
-        val port = EditText(this).apply { hint = "Puerto (445)"; setText("445") }
-        val user = EditText(this).apply { hint = "Usuario (opcional)" }
-        val pass = EditText(this).apply {
-            hint = "Contraseña (opcional)"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        val box = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 10)
-            addView(host); addView(port); addView(user); addView(pass)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Conectar a red SMB")
-            .setView(box)
-            .setPositiveButton("Conectar") { _, _ ->
-                val h = host.text.toString().trim()
-                if (h.isBlank()) return@setPositiveButton
-                val p = port.text.toString().toIntOrNull() ?: 445
-                val conn = SmbRef(
-                    deviceName = h, host = h, port = p, share = "", remotePath = "/",
-                    user = user.text.toString().ifBlank { null },
-                    password = pass.text.toString().ifBlank { null }
-                )
-                smbConn = conn
-                smbCurrent = null
-                smbMode = true
-                navStack.clear()
-                navStack.add("__smb__")
-                loadSmbShares()
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun loadSmbShares() {
-        val conn = smbConn ?: return
-        showLoading("Conectando a red...")
-        lifecycleScope.launch {
-            val entries = withContext(Dispatchers.IO) {
-                when (val res = SmbClient.listShares(conn.host, conn.port, conn.user, conn.password)) {
-                    is SmbClient.SmbResult.Shares -> res.shares.map { share ->
-                        FolderItem(name = share, path = "__smb_share__:$share", count = 0)
-                    }
-                    is SmbClient.SmbResult.Error -> {
-                        withContext(Dispatchers.Main) { Toast.makeText(this@FileExplorerActivity, res.message, Toast.LENGTH_LONG).show() }
-                        smbMode = false
-                        emptyList()
-                    }
-                    else -> emptyList()
-                }
-            }
-            hideLoading()
-            if (!smbMode) {
-                navStack.clear()
-                navStack.add(null)
-                buildAndShowRoot()
-                return@launch
-            }
-            currentSubFolders = entries
-            currentVideos = emptyList()
-            tvPath.text = "Red: ${conn.hostPort}"
-            btnBack.visibility = View.VISIBLE
-            btnAddNetwork.text = "✕"
-            btnAddNetwork.setOnClickListener { disconnectSmb() }
-            btnAddNetwork.onActionKey { disconnectSmb() }
-            showFolderGrid()
-            if (isTvDevice) requestFocusOnCurrentView()
-        }
-    }
-
-    private fun loadSmbDir(share: String, remotePath: String) {
-        val conn = smbConn ?: return
-        val ref = conn.copy(share = share, remotePath = remotePath)
-        smbCurrent = ref
-        showLoading("Cargando carpeta...")
-        lifecycleScope.launch {
-            val entries: Pair<List<FolderItem>, List<VideoItem>> = withContext(Dispatchers.IO) {
-                when (val res = SmbClient.list(ref)) {
-                    is SmbClient.SmbResult.Entries -> {
-                        val folders = mutableListOf<FolderItem>()
-                        val videos = mutableListOf<VideoItem>()
-                        for (info in res.entries) {
-                            val childPath = if (remotePath.endsWith("/")) "$remotePath${info.name}" else "$remotePath/${info.name}"
-                            if (info.isDir) {
-                                folders.add(FolderItem(name = info.name, path = "__smb_dir__:$share:$childPath", count = 0))
-                            } else if (isVideoFile(info.name)) {
-                                val smbRef = ref.copy(remotePath = childPath)
-                                val proxyUrl = SmbHttpProxy.proxyUrl(smbRef)
-                                videos.add(VideoItem(
-                                    id = info.name.hashCode().toLong(),
-                                    title = info.name.substringBeforeLast('.'),
-                                    uri = proxyUrl,
-                                    durationMs = 0L,
-                                    folder = share,
-                                    relativePath = childPath,
-                                    sizeBytes = info.size
-                                ))
-                            }
-                        }
-                        Pair(folders, videos)
-                    }
-                    is SmbClient.SmbResult.Error -> {
-                        withContext(Dispatchers.Main) { Toast.makeText(this@FileExplorerActivity, res.message, Toast.LENGTH_LONG).show() }
-                        Pair(emptyList(), emptyList())
-                    }
-                    else -> Pair(emptyList(), emptyList())
-                }
-            }
-            hideLoading()
-            currentSubFolders = entries.first
-            currentVideos = entries.second
-            val label = if (remotePath == "/") share else ".../$share${remotePath}"
-            tvPath.text = "Red: $label"
-            btnBack.visibility = View.VISIBLE
-            if (currentSubFolders.isNotEmpty()) {
-                showFolderGrid()
-            } else if (currentVideos.isNotEmpty()) {
-                showVideoGrid()
-            } else {
-                tvEmptyContainer.visibility = View.VISIBLE
-                tvEmpty.text = "No hay videos ni carpetas aquí"
-                rvFolders.visibility = View.GONE
-                rvVideos.visibility = View.GONE
-            }
-        }
-    }
-
-    private fun disconnectSmb() {
-        smbMode = false
-        smbConn = null
-        smbCurrent = null
-        navStack.clear()
-        navStack.add(null)
-        btnAddNetwork.text = "+"
-        btnAddNetwork.setOnClickListener { showAddNetworkWizard() }
-        btnAddNetwork.onActionKey { showAddNetworkWizard() }
-        buildAndShowRoot()
-    }
-
-    // ---------- NUBE ----------
-
-    private fun cnvEncode(s: String): String =
-        android.util.Base64.encodeToString(s.toByteArray(Charsets.UTF_8),
-            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
-
-    private fun cnvDecode(s: String): String? =
-        try { String(android.util.Base64.decode(s, android.util.Base64.URL_SAFE), Charsets.UTF_8) }
-        catch (_: Exception) { null }
-
-    private fun showCloudManageDialog() {
-        val providers = CloudProvider.entries
-        val labels = providers.map { p ->
-            val state = if (CloudTokenStore.hasToken(p)) "configurado" else "no configurado"
-            "${p.displayName} ($state)"
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Servicios en la nube")
-            .setItems(labels.toTypedArray()) { _, which ->
-                if (which in providers.indices) showCloudProviderSettings(providers[which])
-            }
-            .setNeutralButton("Cerrar", null)
-            .show()
-    }
-
-    private fun showCloudProviderSettings(provider: CloudProvider) {
-        val has = CloudTokenStore.hasToken(provider)
-        val items = mutableListOf<String>()
-        if (has) items.add("Conectar y explorar")
-        items.add("Introducir / cambiar token")
-        if (has) items.add("Eliminar token")
-        items.add("Ayuda: cómo obtener el token")
-        AlertDialog.Builder(this)
-            .setTitle(provider.displayName)
-            .setItems(items.toTypedArray()) { _, which ->
-                when (items[which]) {
-                    "Conectar y explorar" -> {
-                        cloudConn = provider
-                        cloudMode = true
-                        navStack.clear()
-                        navStack.add("__cloud__")
-                        navStack.add("__cloud_provider__:${provider.id}")
-                        loadCloudRoot(provider)
-                    }
-                    "Introducir / cambiar token" -> showCloudTokenDialog(provider)
-                    "Eliminar token" -> {
-                        CloudTokenStore.setToken(provider, null)
-                        Toast.makeText(this, "Token de ${provider.displayName} eliminado", Toast.LENGTH_SHORT).show()
-                        if (cloudMode && cloudConn == provider) exitCloud() else buildAndShowRoot()
-                    }
-                    else -> onCloudHelp(provider)
-                }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun showCloudTokenDialog(provider: CloudProvider) {
-        val input = EditText(this).apply {
-            hint = "Pega tu token de acceso"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(CloudTokenStore.getToken(provider) ?: "")
-        }
-        val box = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 10)
-            addView(input)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Token de ${provider.displayName}")
-            .setView(box)
-            .setPositiveButton("Guardar") { _, _ ->
-                val t = input.text.toString().trim()
-                if (t.isBlank()) {
-                    Toast.makeText(this, "El token no puede estar vacío", Toast.LENGTH_SHORT).show()
-                } else {
-                    CloudTokenStore.setToken(provider, t)
-                    Toast.makeText(this, "Token de ${provider.displayName} guardado", Toast.LENGTH_SHORT).show()
-                    buildAndShowRoot()
-                }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun onCloudHelp(provider: CloudProvider) {
-        val msg = when (provider) {
-            CloudProvider.DROPBOX ->
-                "En dropbox.com/developers/apps crea una app (tipo \"Full Dropbox\" o\n" +
-                "\"App folder\") y en la pestaña \"Permissions\" activa files.content.read\n" +
-                "y files.metadata.read. Luego genera un token de acceso (Access token)\n" +
-                "de larga duración y pégalo aquí. La app solo lo guarda en tu dispositivo."
-            else ->
-                "Necesitas un Access token de Google OAuth2 (scope drive.readonly).\n" +
-                "Ejemplos: consola de Google Cloud > OAuth 2.0 Playground, o usa un\n" +
-                "token de acceso breve de tu cuenta. Pégalo aquí. Puede caducar;\n" +
-                "si ves \"401\", actualiza el token."
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Cómo obtener el token · ${provider.displayName}")
-            .setMessage(msg)
-            .setPositiveButton("Entendido", null)
-            .show()
-    }
-
-    private fun showCloudProviders() {
-        val providers = CloudTokenStore.allConfigured()
-        val folders = providers.map { p ->
-            FolderItem(name = p.displayName, path = "__cloud_provider__:${p.id}", count = 0)
-        }
-        currentSubFolders = folders
-        currentVideos = emptyList()
-        tvPath.text = "Nube"
-        btnBack.visibility = View.VISIBLE
-        showFolderGrid()
-        if (isTvDevice) requestFocusOnCurrentView()
-    }
-
-    private fun exitCloud() {
-        cloudMode = false
-        cloudConn = null
-        cloudCurrent = null
-        navStack.clear()
-        navStack.add(null)
-        buildAndShowRoot()
-    }
-
-    private fun loadCloudRoot(provider: CloudProvider) {
-        loadCloudDir(provider, "")
-    }
-
-    private fun loadCloudDir(provider: CloudProvider, folderId: String) {
-        val client = CloudClients.forProvider(provider) ?: return
-        val token = CloudTokenStore.getToken(provider)
-        if (token.isNullOrBlank()) {
-            Toast.makeText(this, "Configura el token de ${provider.displayName}", Toast.LENGTH_LONG).show()
-            showCloudProviderSettings(provider)
-            return
-        }
-        val parentLabel = provider.displayName + (if (folderId.isBlank()) "" else " / $folderId")
-        val ref = CloudRef(provider = provider, name = parentLabel, folderId = folderId, fileId = "", path = folderId)
-        cloudCurrent = ref
-        showLoading("Cargando ${provider.displayName}...")
-        lifecycleScope.launch {
-            val entries: Pair<List<FolderItem>, List<VideoItem>> = withContext(Dispatchers.IO) {
-                when (val res = client.list(ref, token)) {
-                    is CloudResult.Entries -> {
-                        val folders = res.folders.map { e ->
-                            FolderItem(
-                                name = e.name,
-                                path = "__cloud_dir__:${provider.id}:${cnvEncode(e.fileId)}",
-                                count = 0
-                            )
-                        }
-                        val videos = res.files.filter { isVideoFile(it.name) }.map { e ->
-                            val videoRef = CloudRef(
-                                provider = provider,
-                                name = e.name,
-                                folderId = folderId,
-                                fileId = e.fileId,
-                                path = (if (folderId.isBlank()) "" else "/$folderId") + "/" + e.name
-                            )
-                            VideoItem(
-                                id = e.name.hashCode().toLong(),
-                                title = e.name.substringBeforeLast('.'),
-                                uri = CloudHttpProxy.proxyUrl(videoRef),
-                                durationMs = 0L,
-                                folder = provider.displayName,
-                                relativePath = videoRef.path,
-                                sizeBytes = e.sizeBytes
-                            )
-                        }
-                        Pair(folders, videos)
-                    }
-                    is CloudResult.Error -> {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(this@FileExplorerActivity, res.message, Toast.LENGTH_LONG).show()
-                        }
-                        Pair(emptyList(), emptyList())
-                    }
-                    else -> Pair(emptyList(), emptyList())
-                }
-            }
-            hideLoading()
-            currentSubFolders = entries.first
-            currentVideos = entries.second
-            tvPath.text = parentLabel
-            btnBack.visibility = View.VISIBLE
-            if (currentSubFolders.isNotEmpty()) {
-                showFolderGrid()
-            } else if (currentVideos.isNotEmpty()) {
-                showVideoGrid()
-            } else {
-                tvEmptyContainer.visibility = View.VISIBLE
-                tvEmpty.text = "No hay videos ni carpetas aquí"
-                rvFolders.visibility = View.GONE
-                rvVideos.visibility = View.GONE
-            }
-        }
-    }
-
-    private fun openExploreKf() {
-        val startPath = "/storage/emulated/0"
+    // Gestor dual-pane con copiar/pegar (ExploreKF). Vive en su propia
+    // actividad registrada en el Manifest; aquí solo el acceso directo.
+    private fun openManager() {
         try {
-            val intent = android.content.Intent(this, ExploreKF::class.java).apply {
-                putExtra("start_path", startPath)
-            }
-            startActivity(intent)
+            startActivity(android.content.Intent(this, ExploreKF::class.java))
         } catch (e: Exception) {
             Toast.makeText(this, "No se pudo abrir el gestor", Toast.LENGTH_SHORT).show()
         }
     }
+    // ExploreKF
+    // ExploreKF// ExploreKF es el gestor dual-pane con copiar/pegar: se abre con el
+    // botón "Gestor copiar/pegar" de la fila de acciones (ver openManager).
 
     private fun toggleSearchBar() {
+        // En TV el EditText inline roba el foco del D-pad y abre el teclado en
+        // el peor momento. Diálogo dedicado: OK busca, Atrás cancela, y el
+        // foco vuelve solo a la lista. En móvil se mantiene la barra inline
+        // con filtrado en vivo (ver TextWatcher en onCreate).
+        if (isTvDevice) {
+            val input = EditText(this).apply {
+                hint = "Buscar archivo..."
+                inputType = InputType.TYPE_CLASS_TEXT
+                imeOptions = EditorInfo.IME_ACTION_SEARCH
+                setText(searchQuery)
+            }
+            val box = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                setPadding(40, 20, 40, 10)
+                addView(input)
+            }
+            val dialog = AlertDialog.Builder(this)
+                .setTitle("Buscar")
+                .setView(box)
+                .setPositiveButton("Buscar") { _, _ ->
+                    searchQuery = input.text.toString().trim()
+                    if (showingFolders && searchQuery.isNotBlank()) {
+                        // La búsqueda filtra videos: saltar a la vista de videos.
+                        showVideoGrid(restoreFocus = false)
+                    } else {
+                        showVideoGrid()
+                    }
+                }
+                .setNeutralButton("Limpiar") { _, _ ->
+                    searchQuery = ""
+                    showVideoGrid()
+                }
+                .setNegativeButton("Cancelar", null)
+                .create()
+            dialog.show()
+            input.post {
+                input.requestFocus()
+                input.setSelection(input.text.length)
+            }
+            return
+        }
         if (etSearch.visibility == View.VISIBLE) {
             etSearch.visibility = View.GONE
             etSearch.text?.clear()
+            hideKeyboard(etSearch)
             searchQuery = ""
             showVideoGrid()
             btnSearch.requestFocus()
@@ -1383,7 +1174,22 @@ class FileExplorerActivity : AppCompatActivity() {
             etSearch.visibility = View.VISIBLE
             etSearch.setText(searchQuery)
             etSearch.requestFocus()
+            showKeyboard(etSearch)
         }
+    }
+
+    private fun hideKeyboard(view: View) {
+        try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.hideSoftInputFromWindow(view.windowToken, 0)
+        } catch (_: Exception) {}
+    }
+
+    private fun showKeyboard(view: View) {
+        try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+        } catch (_: Exception) {}
     }
 
     private fun performSearch() {
@@ -1400,6 +1206,9 @@ class FileExplorerActivity : AppCompatActivity() {
             return
         }
 
+        // No dejar un escaneo corriendo al salir de la vista.
+        netScanJob?.cancel()
+
         if (navStack.size > 1) {
             navStack.removeAt(navStack.lastIndex)
             val prevPath = navStack.last()
@@ -1408,37 +1217,8 @@ class FileExplorerActivity : AppCompatActivity() {
                 prevPath == null || prevPath == "__all__" -> {
                     buildAndShowRoot()
                 }
-                prevPath == "__smb__" -> {
-                    loadSmbShares()
-                }
-                prevPath == "__cloud__" -> {
-                    showCloudProviders()
-                }
-                prevPath.startsWith("__cloud_provider__:") -> {
-                    val provider = CloudProvider.fromId(prevPath.removePrefix("__cloud_provider__:"))
-                    if (provider != null) loadCloudRoot(provider)
-                }
-                prevPath.startsWith("__cloud_dir__:") -> {
-                    val payload = prevPath.removePrefix("__cloud_dir__:")
-                    val sep = payload.indexOf(':')
-                    if (sep > 0) {
-                        val provider = CloudProvider.fromId(payload.substring(0, sep))
-                        val folderId = cnvDecode(payload.substring(sep + 1))
-                        if (provider != null && folderId != null) loadCloudDir(provider, folderId)
-                    }
-                }
-                prevPath.startsWith("__smb_share__:") -> {
-                    val share = prevPath.removePrefix("__smb_share__:")
-                    loadSmbDir(share, "/")
-                }
-                prevPath.startsWith("__smb_dir__:") -> {
-                    val payload = prevPath.removePrefix("__smb_dir__:")
-                    val sep = payload.indexOf(':')
-                    if (sep > 0) {
-                        val share = payload.substring(0, sep)
-                        val remotePath = payload.substring(sep + 1)
-                        loadSmbDir(share, remotePath)
-                    }
+                prevPath == "__net__" -> {
+                    enterNet()
                 }
                 prevPath.startsWith("fs:") -> {
                     openFileSystemDir(prevPath.substring(3), addToStack = false)
@@ -1501,17 +1281,29 @@ class FileExplorerActivity : AppCompatActivity() {
         }
     }
 
+    // Conteo superficial (1 nivel, sin recursión): el recorrido recursivo
+    // bloqueaba la UI con USB grandes en cajas modestas. El número exacto
+    // se resuelve al entrar a la carpeta (listFileSystemDir).
+    // Recursivo acotado (profundidad + topes): el conteo superficial mentía
+    // en USB con subcarpetas y el ilimitado bloqueaba la UI en cajas
+    // modestas. Corre en Dispatchers.IO (ver buildAndShowRoot).
     private fun countVideosInFileSystem(dir: File): Int {
         var count = 0
-        try {
-            val files = dir.listFiles() ?: return 0
+        var visited = 0
+        fun walk(d: File, depth: Int) {
+            if (depth < 0 || visited > 20000 || count > 9999) return
+            val files = try { d.listFiles() } catch (_: Exception) { null } ?: return
             for (f in files) {
-                if (f.isDirectory && f.canRead()) {
-                    count += countVideosInFileSystem(f)
-                } else if (f.isFile && f.canRead() && isVideoFile(f.name)) {
-                    count++
-                }
+                if (visited > 20000 || count > 9999) return
+                visited++
+                try {
+                    if (f.isDirectory) walk(f, depth - 1)
+                    else if (f.isFile && isVideoFile(f.name)) count++
+                } catch (_: Exception) { }
             }
+        }
+        try {
+            walk(dir, 4)
         } catch (e: Exception) {
             android.util.Log.d(TAG, "countVideosInFileSystem: ${e.message}")
         }
@@ -1529,7 +1321,12 @@ class FileExplorerActivity : AppCompatActivity() {
         progressBar.visibility = View.GONE
     }
 
+    private var lastPlayMs: Long = 0L
+
     private fun playVideo(item: VideoItem) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastPlayMs < 1000) return
+        lastPlayMs = now
         try {
             val intent = android.content.Intent(this, com.karin.streamtv.player.ExoPlayerActivity::class.java).apply {
                 putExtra("video_url", item.uri)
@@ -1552,9 +1349,38 @@ class FileExplorerActivity : AppCompatActivity() {
         if (mapped != keyCode) {
             return onKeyDown(mapped, event)
         }
-        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+        // BACK solo por onBackPressed(): manejarlo aquí también consumía dos
+        // niveles de pila por pulsación (API 33+ lo entrega por ambas vías).
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
             navigateBack()
             return true
+        }
+        // Atajos de mando: misma interfaz, sin menús ocultos:
+        // MENÚ = opciones (igual que en el gestor), SEARCH = buscar,
+        // CH± / L1-R1 = pasar página.
+        when (keyCode) {
+            KeyEvent.KEYCODE_MENU -> {
+                if (event?.repeatCount == 0) showTopMenu()
+                return true
+            }
+            KeyEvent.KEYCODE_SEARCH -> {
+                if (event?.repeatCount == 0) toggleSearchBar()
+                return true
+            }
+            KeyEvent.KEYCODE_PAGE_DOWN,
+            KeyEvent.KEYCODE_CHANNEL_DOWN,
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+            KeyEvent.KEYCODE_BUTTON_R1 -> {
+                pageScroll(forward = true)
+                return true
+            }
+            KeyEvent.KEYCODE_PAGE_UP,
+            KeyEvent.KEYCODE_CHANNEL_UP,
+            KeyEvent.KEYCODE_MEDIA_REWIND,
+            KeyEvent.KEYCODE_BUTTON_L1 -> {
+                pageScroll(forward = false)
+                return true
+            }
         }
         return super.onKeyDown(keyCode, event)
     }
@@ -1562,7 +1388,6 @@ class FileExplorerActivity : AppCompatActivity() {
     override fun onDestroy() {
         videoAdapter?.destroy()
         folderAdapter = null
-        CloudHttpProxy.stop()
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }

@@ -42,6 +42,7 @@ class EmbedWebViewActivity : AppCompatActivity() {
     private var currentEpisodeUrl: String = ""
     private var openExternalWhenReady: Boolean = false
     private var hasOpenedExternal: Boolean = false
+    private var lastExoLaunchMs: Long = 0L
     private var autoPlayTriggered: Boolean = false
     private var allServerUrls: Array<String> = emptyArray()
     private var allServerNames: Array<String> = emptyArray()
@@ -53,6 +54,8 @@ class EmbedWebViewActivity : AppCompatActivity() {
 
     private var presented = false
     private var launching = false
+    /** true = página oficial con reproductor propio: sin bloqueos ni DOM-removal. */
+    @Volatile private var bypassPage = false
     private var hiddenContainer: FrameLayout? = null
     private var errorScreenShown = false
     private var errorScreenShownCompleted = false
@@ -76,13 +79,32 @@ class EmbedWebViewActivity : AppCompatActivity() {
             "172.30.", "172.31.", "[::1]"
         )
 
-        private fun isSafeVideoUrl(raw: String): Boolean {
+        /**
+         * Sitios oficiales con reproductor propio (ej. Mediaset Infinity):
+         * su player necesita sus SDKs (IMA) y su DOM intacto. En estas
+         * páginas no se bloquea nada ni se limpia el DOM, y sus videos
+         * se aceptan aunque el CDN no esté en la lista de permitidos.
+         */
+        private val NO_ADBLOCK_HOSTS = setOf("mediasetinfinity.es", "mitele.es")
+
+        private fun hostOfUrl(raw: String?): String? =
+            try { raw?.let { android.net.Uri.parse(it).host?.lowercase()?.trim() } } catch (e: Exception) { null }
+
+        private fun isBypassHost(host: String?): Boolean {
+            if (host.isNullOrBlank()) return false
+            return NO_ADBLOCK_HOSTS.any { host == it || host.endsWith(".$it") }
+        }
+
+        private fun isSafeVideoUrl(raw: String, pageBypass: Boolean = false): Boolean {
             val url = raw.trim()
             if (!url.startsWith("http://") && !url.startsWith("https://")) return false
             val host = try { android.net.Uri.parse(url).host?.lowercase()?.trim() } catch (e: Exception) { null }
                 ?: return false
             if (host.isBlank()) return false
             if (BLOCKED_HOST_KEYWORDS.any { host.contains(it) }) return false
+            // Página oficial abierta por el usuario: se confía en sus videos
+            // (CDN propio no listado, ej. Mediaset).
+            if (pageBypass) return true
             if (ALLOWED_ORIGIN_HOSTS.any { host == it || host.endsWith(".$it") }) return true
             return com.karin.streamtv.model.VideoServer.detectServer(url) != com.karin.streamtv.model.VideoServer.GENERIC
         }
@@ -98,38 +120,47 @@ class EmbedWebViewActivity : AppCompatActivity() {
             return host.split(".").size >= 2
         }
 
-        private const val DIAG_JS = """
+        /**
+         * Muro de cookies (RGPD) en sitios oficiales: sin resolverlo el player
+         * no arranca. Solo hace clic (nunca quita nodos: React se rompe si le
+         * mutan el DOM). Primero acepta (varios muros, ej. Mediaset, solo dan
+         * el contenido gratuito si aceptas); si no hay botón de aceptar,
+         * rechaza. Solo páginas bypass.
+         */
+        private const val CONSENT_JS = """
 (function(){
-    if(window.__kf_diag__)return;window.__kf_diag__=1;
-    function dumpState(tag){
-        try{
-            var vids=document.querySelectorAll('video');
-            var ifs=document.querySelectorAll('iframe');
-            var srcs=[];
-            for(var i=0;i<vids.length;i++){srcs.push(vids[i].currentSrc||vids[i].src||vids[i].getAttribute('data-src')||'');}
-            var ifsrc=[];
-            for(var i=0;i<ifs.length;i++){ifsrc.push((ifs[i].src||ifs[i].getAttribute('data-src')||'').substring(0,120));}
-            console.log('KF:DUMP:'+tag+' url='+location.href.substring(0,90)+' state='+document.readyState+' title='+document.title.substring(0,40));
-            console.log('KF:DUMP:'+tag+' vids='+vids.length+' vidsrc='+JSON.stringify(srcs));
-            console.log('KF:DUMP:'+tag+' iframes='+ifs.length+' ifsrc='+JSON.stringify(ifsrc));
-            console.log('KF:DUMP:'+tag+' bodyLen='+(document.body?document.body.innerHTML.length:0)+' dsplayer='+(typeof window.dsplayer)+' md='+(typeof window.MDCore));
-            for(var i=0;i<vids.length;i++){
-                var v=vids[i];
-                console.log('KF:DUMP:'+tag+' vid'+i+' readyState='+v.readyState+' paused='+v.paused+' dur='+(isFinite(v.duration)?v.duration.toFixed(1):'nan')+' w='+v.videoWidth+'x'+v.videoHeight+' err='+(v.error?v.error.code:'none'));
-            }
-        }catch(e){console.log('KF:DUMP:err '+e.message);}
+    if(window.__kf_consent_done__)return;
+    var body=(document.body?document.body.innerText:'').toLowerCase();
+    if(body.indexOf('cookie')<0&&body.indexOf('consentimiento')<0&&body.indexOf('privacidad')<0){return;}
+    function norm(s){return (s||'').trim().toLowerCase().replace(/\s+/g,' ');}
+    function vis(el){try{if(!el||!el.offsetParent)return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}}
+    function docs(){
+        var d=[document];
+        try{document.querySelectorAll('iframe').forEach(function(f){try{if(f.contentDocument)d.push(f.contentDocument);}catch(e){}});}catch(e){}
+        return d;
     }
-    dumpState('s');
-    var n=0;
-    var intv=setInterval(function(){
-        n++;
-        dumpState('t'+n);
-        if(n>=3){clearInterval(intv);}
-    },3000);
+    function clickFirst(words){
+        var ds=docs();
+        for(var k=0;k<ds.length;k++){
+            var els=ds[k].querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]');
+            for(var i=0;i<els.length;i++){
+                var t=norm(els[i].innerText||els[i].value||els[i].getAttribute('aria-label')||'');
+                if(t.length===0||t.length>40)continue;
+                for(var j=0;j<words.length;j++){
+                    if(t===words[j]||t.indexOf(words[j])>=0){
+                        if(vis(els[i])){try{els[i].click();}catch(e){}console.log('KF:CONSENT click:'+t);return true;}
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    if(clickFirst(['aceptar y navegar','aceptar y cerrar','aceptar todo','aceptar todas','aceptar','accept all','accept'])){window.__kf_consent_done__=1;return;}
+    if(clickFirst(['rechazar todo','rechazar todas','rechazar','deny all','reject all','reject'])){window.__kf_consent_done__=1;return;}
 })();
 """
 
-        private const val ADBLOCK_JS = """
+         private const val ADBLOCK_JS = """
 (function(){
     if(window.__kf_adblock__)return;window.__kf_adblock__=1;
 
@@ -1229,7 +1260,7 @@ class EmbedWebViewActivity : AppCompatActivity() {
 
     private val videoAllowDomains = listOf(
         "dsvplay.com", "i.doodcdn.io", "static.doodcdn.io", "doodcdn.io",
-        "doimg.net", "cloudatacdn.com", "r1148gsx.cloudatacdn.com",
+        "doimg.net", "cloudatacdn.com",         "r1148gsx.cloudatacdn.com",
         "mixdrop.top", "mixdrop.co", "mxcontent.net", "mxcontent.io",
         "bysekoze.com", "byse.sx",
         "hexload.com", "hexupload.net", "vjs.zencdn.net",
@@ -1247,13 +1278,27 @@ class EmbedWebViewActivity : AppCompatActivity() {
     )
 
     private fun shouldBlockUrl(url: String): Boolean {
+        // Página oficial (bypass): no se bloquea nada, ni siquiera SDKs del player (IMA).
+        if (bypassPage || isBypassHost(hostOfUrl(url))) return false
         val lower = url.lowercase()
         if (videoAllowDomains.any { lower.contains(it) }) return false
         if (blockedDomains.any { lower.contains(it) }) return true
         if (adUrlPatterns.any { lower.contains(it) }) return true
+        if (lower.contains("instream/ad_status.js")) return true
         if (lower.endsWith(".js") && (lower.contains("ads") || lower.contains("analytics") || lower.contains("tracking") || lower.contains("beacon"))) return true
         if (lower.endsWith(".gif") && (lower.contains("pixel") || lower.contains("track") || lower.contains("beacon"))) return true
         return false
+    }
+
+    /** True si la URL ya es un archivo/stream de media reproducible por ExoPlayer. */
+    private fun isDirectMediaUrl(url: String): Boolean {
+        val lower = url.trim().lowercase()
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false
+        if (com.karin.streamtv.model.VideoServer.detectServer(lower) ==
+            com.karin.streamtv.model.VideoServer.DIRECT
+        ) return true
+        return lower.endsWith(".m3u8") || lower.endsWith(".mpd") ||
+            lower.endsWith(".mp4") || lower.endsWith(".webm")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1262,6 +1307,16 @@ class EmbedWebViewActivity : AppCompatActivity() {
 
         loadingLayout = findViewById(R.id.webview_loading)
         mainHandler = Handler(Looper.getMainLooper())
+
+        // Salida con mando durante la extracción (puede tardar ~20s).
+        findViewById<android.widget.Button>(R.id.btn_cancel_extract)?.apply {
+            setOnClickListener {
+                presented = true
+                finish()
+            }
+            // Foco inicial: es el único control de esta pantalla.
+            post { requestFocus() }
+        }
 
         hiddenContainer = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(1, 1)
@@ -1313,6 +1368,21 @@ class EmbedWebViewActivity : AppCompatActivity() {
 
         Log.d(TAG, "Opening WebView for: $title | URL: ${embedUrl.takeLast(80)}")
 
+        // Fast-path: si el "server" elegido ya es un stream/archivo directo
+        // (.mp4/.m3u8/.mpd), se reproduce con ExoPlayer al instante, sin pasar
+        // por el WebView.
+        if (isDirectMediaUrl(embedUrl)) {
+            Log.i(TAG, "Direct media URL, launching ExoPlayer directly")
+            presentExtracted(
+                listOf(
+                    com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo(
+                        url = embedUrl,
+                        referer = embedUrl
+                    )
+                )
+            )
+        }
+
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -1361,20 +1431,22 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
-                view?.evaluateJavascript(ADBLOCK_JS, null)
-                view?.evaluateJavascript(DIAG_JS, null)
+                bypassPage = isBypassHost(hostOfUrl(url ?: view?.url))
+                if (bypassPage) Log.d(TAG, "Blocker bypass active for ${url?.takeLast(60)}")
+                if (!bypassPage) view?.evaluateJavascript(ADBLOCK_JS, null)
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 val currentUrl = url ?: embedUrl
                 Log.d(TAG, "Page loaded: ${currentUrl.takeLast(80)}")
+                bypassPage = isBypassHost(hostOfUrl(currentUrl))
 
                 if (currentUrl != embedUrl && embedUrl.isNotBlank()) {
                     hasNavigatedAway = true
                 }
 
-                view?.evaluateJavascript(ADBLOCK_JS, null)
+                if (!bypassPage) view?.evaluateJavascript(ADBLOCK_JS, null)
 
                 if (serverName.isNotBlank() && !hasNavigatedAway) {
                     isDoingAutoClick = true
@@ -1454,7 +1526,9 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
                     Log.d(TAG, "Server auto-click+redirect: $serverName")
                 }
 
-                if (hasNavigatedAway || serverName.isBlank()) {
+                // En páginas oficiales (bypass) no se toca el DOM: los players
+                // React/Next se rompen si se les quitan nodos antes de hidratar.
+                if (!bypassPage && (hasNavigatedAway || serverName.isBlank())) {
                     applyVideoCss(view, currentUrl)
                     view?.evaluateJavascript(VIDEO_AD_SKIP_JS, null)
                 }
@@ -1479,18 +1553,22 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
                 view?.evaluateJavascript(VIDEO_ENDED_JS, null)
                 view?.evaluateJavascript(NEXT_EPISODE_JS, null)
 
-                view?.evaluateJavascript(AUTOPLAY_JS, null)
+                if (!bypassPage) view?.evaluateJavascript(AUTOPLAY_JS, null)
+                if (bypassPage) view?.evaluateJavascript(CONSENT_JS, null)
                 view?.evaluateJavascript(NEXT_EPISODE_JS, null)
                 mainHandler.postDelayed({
-                    view?.evaluateJavascript(AUTOPLAY_JS, null)
+                    if (!bypassPage) view?.evaluateJavascript(AUTOPLAY_JS, null)
+                    if (bypassPage) view?.evaluateJavascript(CONSENT_JS, null)
                     view?.evaluateJavascript(NEXT_EPISODE_JS, null)
                 }, 3000)
                 mainHandler.postDelayed({
-                    view?.evaluateJavascript(AUTOPLAY_JS, null)
+                    if (!bypassPage) view?.evaluateJavascript(AUTOPLAY_JS, null)
+                    if (bypassPage) view?.evaluateJavascript(CONSENT_JS, null)
                     view?.evaluateJavascript(NEXT_EPISODE_JS, null)
                 }, 8000)
                 mainHandler.postDelayed({
-                    view?.evaluateJavascript(AUTOPLAY_JS, null)
+                    if (!bypassPage) view?.evaluateJavascript(AUTOPLAY_JS, null)
+                    if (bypassPage) view?.evaluateJavascript(CONSENT_JS, null)
                     view?.evaluateJavascript(NEXT_EPISODE_JS, null)
                 }, 15000)
 
@@ -1625,10 +1703,14 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
     }
 
     private fun openExoFromResolved(resolved: com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo) {
-        if (!isSafeVideoUrl(resolved.url)) {
+        if (hasOpenedExternal) return
+        if (!isSafeVideoUrl(resolved.url, bypassPage)) {
             Log.w(TAG, "Blocked opening unsafe video URL")
             return
         }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastExoLaunchMs < 1500) return
+        lastExoLaunchMs = now
         videoFound = true
         if (animeId.isNotBlank() && episodeNumber > 0) {
             EpisodeProgress.markWatched(animeId, episodeNumber)
@@ -1672,9 +1754,9 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
     }
 
     private fun presentExtracted(bestUrl: String, allUrlsJson: String) {
-        val urls = parseJsonUrls(allUrlsJson).filter { isSafeVideoUrl(it) }
+        val urls = parseJsonUrls(allUrlsJson).filter { isSafeVideoUrl(it, bypassPage) }
         val list = if (urls.isEmpty()) {
-            if (isSafeVideoUrl(bestUrl)) listOf(bestUrl) else emptyList()
+            if (isSafeVideoUrl(bestUrl, bypassPage)) listOf(bestUrl) else emptyList()
         } else urls
         val links = list.map {
             com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo(
@@ -1687,7 +1769,7 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
 
     private fun presentExtracted(links: List<com.karin.streamtv.scraper.ServerDirectResolver.ResolvedVideo>) {
         if (presented || launching) return
-        val unique = links.distinctBy { it.url }.filter { isSafeVideoUrl(it.url) }
+        val unique = links.distinctBy { it.url }.filter { isSafeVideoUrl(it.url, bypassPage) }
         if (unique.isEmpty()) {
             mainHandler.post { showNoLinkDialog() }
             return
@@ -1732,6 +1814,15 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
             android.view.WindowManager.LayoutParams.WRAP_CONTENT
         )
         dialog.setOnDismissListener { if (!hasOpenedExternal && !launching) finish() }
+        // TV/D-pad: el foco debe caer en la lista de enlaces, no detrás.
+        dialog.setOnShowListener {
+            try {
+                val list = dialog.listView
+                list?.requestFocus()
+                if ((list?.count ?: 0) > 0) list?.setSelection(0)
+            } catch (_: Exception) {
+            }
+        }
         dialog.show()
     }
 
@@ -1787,7 +1878,7 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
     private inner class VideoBridge {
         @JavascriptInterface
         fun onVideoFound(url: String, allUrlsJson: String) {
-            if (!isSafeVideoUrl(url)) {
+            if (!isSafeVideoUrl(url, bypassPage)) {
                 Log.w(TAG, "Blocked JS bridge: unsafe video URL from page")
                 return
             }
@@ -1797,7 +1888,7 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
 
         @JavascriptInterface
         fun onDirectVideoFound(url: String, allUrlsJson: String) {
-            if (!isSafeVideoUrl(url)) {
+            if (!isSafeVideoUrl(url, bypassPage)) {
                 Log.w(TAG, "Blocked JS bridge: unsafe direct video URL from page")
                 return
             }
