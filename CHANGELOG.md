@@ -14,6 +14,13 @@ y este proyecto sigue [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `DESCARGO_DE_RESPONSABILIDAD.md`: uso bajo propio riesgo y reporte de bugs
 - Fondos de Karin en Créditos y Bienvenida; créditos a Manuel00084 con
   tecnologías reales del build
+- Música local en primer plano: el explorador y el gestor reconocen audio
+  (MediaStore + permiso `READ_MEDIA_AUDIO`), con carátula y `♪`; ExoPlayer
+  reproduce audio-only sin grafo de video ni MotionX2
+- Modo ultra económico (reemplaza bajo rendimiento): interruptor único con
+  tope 480p (variante o dibujado reducido), sin efectos ni fondos, sonido
+  básico, caché a la mitad, red a 2 conexiones, servidores ≤480p primero y
+  música con pantalla apagada solo en celular (offload si hay soporte)
 
 ### Corregido
 - El reproductor ya no se abre dos veces con el mismo video: `ExoPlayerActivity`

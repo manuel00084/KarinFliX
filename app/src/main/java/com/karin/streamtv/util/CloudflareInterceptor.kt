@@ -76,7 +76,7 @@ object CloudflareInterceptor {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    suspend fun solveWithWebView(context: Context, url: String, userAgent: String? = null): String? {
+    suspend fun solveWithWebView(context: Context, url: String, userAgent: String? = null, settleDelayMs: Long = 0L): String? {
         val permitted = withContext(Dispatchers.IO) {
             try {
                 webViewPermits.tryAcquire(maxWaitSeconds, TimeUnit.SECONDS)
@@ -89,13 +89,13 @@ object CloudflareInterceptor {
             return null
         }
         return try {
-            solveWithWebViewLocked(context, url, userAgent)
+            solveWithWebViewLocked(context, url, userAgent, settleDelayMs)
         } finally {
             webViewPermits.release()
         }
     }
 
-    private suspend fun solveWithWebViewLocked(context: Context, url: String, userAgent: String?): String? {
+    private suspend fun solveWithWebViewLocked(context: Context, url: String, userAgent: String?, settleDelayMs: Long): String? {
         return try {
             suspendCancellableCoroutine { cont ->
                 var htmlResult: String? = null
@@ -161,37 +161,54 @@ object CloudflareInterceptor {
                                 super.onPageFinished(view, loadedUrl)
                                 Log.d(TAG, "WebView page finished: $loadedUrl")
                                 cookieManager.flush()
-                                val stillChallenge = loadedUrl.isNullOrBlank() ||
-                                    loadedUrl.contains("/cdn-cgi/") ||
-                                    loadedUrl.contains("challenge-platform")
+                                val current = loadedUrl.orEmpty()
+                                val stillChallenge = current.isBlank() ||
+                                    current.contains("/cdn-cgi/") ||
+                                    current.contains("challenge-platform")
                                 if (stillChallenge || htmlResult != null) return
-                                if (loadedUrl.isNullOrBlank()) return
-                                val pageCookies = cookieManager.getCookie(loadedUrl)
+                                if (current.isBlank()) return
+                                val pageCookies = cookieManager.getCookie(current)
                                 if (!pageCookies.isNullOrBlank()) {
-                                    saveCookiesToStore(context, loadedUrl, pageCookies)
+                                    saveCookiesToStore(context, current, pageCookies)
                                 }
                                 Log.i(TAG, "Reached real page $loadedUrl — extracting HTML")
-                                view?.evaluateJavascript(
-                                    "(function(){return document.documentElement.outerHTML;})()",
-                                    { value ->
-                                        try {
-                                            val decoded = org.json.JSONTokener(value ?: "null").nextValue() as? String
-                                            htmlResult = decoded?.takeIf { it.isNotBlank() }
-                                        } catch (_: Exception) { htmlResult = null }
-                                        if (htmlResult != null) {
-                                            Log.i(TAG, "Extracted HTML (${htmlResult!!.length} chars)")
-                                        }
-                                        latch.countDown()
-                                    }
-                                )
+                                val extract = Runnable {
+                                    if (htmlResult != null) return@Runnable
+                                    Log.d(TAG, "Extracting outerHTML (settle=${settleDelayMs}ms)")
+                                    // settleDelayMs SÍ se respeta: la página
+                                    // challenge necesita render tras onPageFinished.
+                                    postDelayed({
+                                        if (htmlResult != null) return@postDelayed
+                                        webViewRef?.evaluateJavascript(
+                                            "(function(){return document.documentElement.outerHTML;})()",
+                                            { value ->
+                                                try {
+                                                    val decoded = org.json.JSONTokener(value ?: "null").nextValue() as? String
+                                                    htmlResult = decoded?.takeIf { it.isNotBlank() }
+                                                } catch (_: Exception) { htmlResult = null }
+                                                if (htmlResult != null) {
+                                                    Log.i(TAG, "Extracted HTML (${htmlResult!!.length} chars)")
+                                                }
+                                                latch.countDown()
+                                            }
+                                        )
+                                    }, settleDelayMs.coerceIn(0L, 8000L))
+                                }
+                                extract.run()
                             }
 
                             override fun onReceivedError(
                                 view: WebView?, errorCode: Int, description: String?, failingUrl: String?
                             ) {
                                 super.onReceivedError(view, errorCode, description, failingUrl)
-                                Log.w(TAG, "WebView error $errorCode: $description")
-                                if (latch.count > 0) latch.countDown()
+                                Log.w(TAG, "WebView error $errorCode: $description url=${failingUrl?.takeLast(80)}")
+                                // Solo abortar por error de la página principal:
+                                // un subrecurso roto (ads/tracker) no debe matar
+                                // el bypass en TV.
+                                val main = view?.url.orEmpty()
+                                val isMain = failingUrl == null || failingUrl == main ||
+                                    (main.isNotBlank() && failingUrl.startsWith(main.take(40)))
+                                if (isMain && latch.count > 0) latch.countDown()
                             }
                         }
 

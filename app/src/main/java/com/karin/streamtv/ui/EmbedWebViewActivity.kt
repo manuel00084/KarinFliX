@@ -1327,7 +1327,12 @@ class EmbedWebViewActivity : AppCompatActivity() {
         }
         try {
             webView = WebView(this).apply {
-            setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            // Extractor oculto: nunca debe robar el foco del mando.
+            isFocusable = false
+            isFocusableInTouchMode = false
+            // HARDWARE para <video> en TV; el manifest ya declara
+            // hardwareAccelerated=true (SOFTWARE anulaba la GPU).
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             visibility = View.INVISIBLE
             alpha = 0f
             isHorizontalScrollBarEnabled = false
@@ -1657,16 +1662,24 @@ val ua = if (DeviceUtils.isTvDevice(this@EmbedWebViewActivity)) {
                 }
                 return true
             }
+            // Sin popup/fullscreen el extractor pierde servidores: al menos
+            // registrar el intento en vez de perderlo en silencio.
+            override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?): Boolean {
+                Log.w(TAG, "WebView popup bloqueado (extractor oculto, sin ventana)")
+                return false
+            }
         }
+
+        // El bridge DEBE existir antes del primer loadUrl: si la página
+        // resuelve antes del addJavascriptInterface, onVideoFound se pierde.
+        bridge = VideoBridge()
+        webView.addJavascriptInterface(bridge!!, "KarinBridge")
 
         webView.loadUrl(embedUrl)
 
         mainHandler.postDelayed({
             Log.w(TAG, "Background extraction timeout — still scraping servers")
         }, 15000)
-
-        bridge = VideoBridge()
-        webView.addJavascriptInterface(bridge!!, "KarinBridge")
 
         if (allServerUrls.isNotEmpty()) {
             mainHandler.postDelayed({

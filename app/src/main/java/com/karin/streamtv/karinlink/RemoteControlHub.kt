@@ -9,8 +9,13 @@ import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.EditText
+import com.karin.streamtv.karinlink.protocol.bool
+import com.karin.streamtv.karinlink.protocol.double
+import com.karin.streamtv.karinlink.protocol.long
+import com.karin.streamtv.karinlink.protocol.str
 import com.karin.streamtv.player.ExoPlayerActivity
 import com.karin.streamtv.util.AppActivityHolder
+import kotlinx.serialization.json.JsonObject
 import org.json.JSONObject
 
 /**
@@ -68,6 +73,55 @@ object RemoteControlHub {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "handle $type failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Entry point for the typed protocol, where the payload arrived as a signed
+     * [JsonObject] rather than an org.json one.
+     *
+     * Kept separate from [handle] instead of converting, because the typed
+     * accessors are what stop a wrong-typed field from being read as a valid
+     * value: `"x":"left"` becomes 0.5 here rather than being coerced.
+     */
+    fun handleJson(appContext: Context, type: String, data: JsonObject) {
+        val ctx = appContext.applicationContext
+        main.post {
+            try {
+                when (type) {
+                    RemoteProtocol.KEY -> injectKey(data.long("keyCode").toInt())
+                    RemoteProtocol.TEXT -> commitText(
+                        ctx,
+                        data.str("text"),
+                        data.bool("submit"),
+                    )
+                    RemoteProtocol.MOUSE_MOVE -> {
+                        val x = data.double("x", 0.5).toFloat()
+                        val y = data.double("y", 0.5).toFloat()
+                        RemoteCursorOverlay.move(ctx, x, y)
+                    }
+                    RemoteProtocol.MOUSE_TAP -> {
+                        val x = data.double("x", 0.5).toFloat()
+                        val y = data.double("y", 0.5).toFloat()
+                        RemoteCursorOverlay.move(ctx, x, y)
+                        if (!KarinRemoteService.tapAt(ctx, x, y)) {
+                            injectKey(KeyEvent.KEYCODE_DPAD_CENTER)
+                        }
+                    }
+                    RemoteProtocol.MOUSE_SCROLL -> {
+                        val dx = data.double("dx").toFloat()
+                        val dy = data.double("dy").toFloat()
+                        val x = data.double("x", 0.5).toFloat()
+                        val y = data.double("y", 0.5).toFloat()
+                        if (!KarinRemoteService.scrollAt(ctx, x, y, dx, dy)) {
+                            injectKey(if (dy < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
+                        }
+                    }
+                    RemoteProtocol.MEDIA -> media(ctx, data.str("cmd"), data.long("value"))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "handleJson $type failed: ${e.message}")
             }
         }
     }

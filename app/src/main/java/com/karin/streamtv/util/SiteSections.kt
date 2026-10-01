@@ -20,6 +20,19 @@ object SiteSections {
             MenuSection.SERIES to "https://cine-calidad.mx/serie",
             MenuSection.ANIME to "https://cine-calidad.mx/anime",
         ),
+        "AnimeFLV" to mapOf(
+            MenuSection.ANIME to "https://vww.animeflv.one/animes",
+            MenuSection.DIRECTORY to "https://vww.animeflv.one/animes",
+        ),
+        "DonghuaLife" to mapOf(
+            MenuSection.DIRECTORY to "https://donghualife.com/donghuas",
+            MenuSection.DONGHUA to "https://donghualife.com/donghuas",
+            MenuSection.MOVIES to "https://donghualife.com/movies",
+        ),
+        "Pandrama" to mapOf(
+            MenuSection.DORAMA to "https://www.pandrama.tv",
+            MenuSection.DIRECTORY to "https://www.pandrama.tv",
+        ),
     )
 
     /** URL directa de la sección, o null si el sitio no la declara. */

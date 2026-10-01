@@ -7,7 +7,7 @@
 24/7 Casado Con Hijos T2
 24/7 Chicago Fire T1-3
 24/7 Chips
-24/7 Descubriendo MÃ©xico
+24/7 Descubriendo México
 24/7 Dinosaurios
 24/7 Don Gato y Su Pandilla
 24/7 Dr House T6-8
@@ -16,10 +16,10 @@
 24/7 El Chapulin Colorado T1-3
 24/7 El Chapulin Colorado T4-7
 24/7 El Chema
-24/7 El Conde PÃ¡tula
-24/7 El SeÃ±or de los Cielos T5
+24/7 El Conde Pátula
+24/7 El Señor de los Cielos T5
 24/7 Felix El Gato
-24/7 Freddyâ€™s Nightmares
+24/7 Freddy’s Nightmares
 24/7 Futurama HD
 24/7 Gargolas
 24/7 Gasparin y Sus Amigos
@@ -39,7 +39,7 @@
 24/7 Los 4 Fantasticos
 24/7 Los Campeones T1
 24/7 Los Mascabrothers
-24/7 Los PequeÃ±os Picapiedras
+24/7 Los Pequeños Picapiedras
 24/7 Masha y el oso
 24/7 Miraculous
 24/7 Se Renta Cuartos
@@ -194,7 +194,7 @@ Claro Sports 2 HD
 CNBC US HD
 CNBC WORLD
 CNN Chile HD
-CNN EspaÃ±ol
+CNN Español
 CNN Internacional
 Colosal TV
 Combate HD
@@ -207,7 +207,7 @@ CRIMEN INVESTIGACION HD
 CSI MIAMI 24/7 HD
 Cuatro HD
 Cubavision
-DARK ESPAÃ‘A HD
+DARK ESPAÑA HD
 DAZN 1 HD
 DAZN 1 PC
 DAZN 2 PC
@@ -219,7 +219,7 @@ De Pelicula HD
 De Pelicula Plus FHD
 DHE FHD
 Directv Sports PC
-DISCOVERY CHANNEL ESPAÃ‘A HD
+DISCOVERY CHANNEL ESPAÑA HD
 DISCOVERY CHANNELS US HD
 DISCOVERY CIVILIZATION
 DISCOVERY FAMILY
@@ -251,7 +251,7 @@ DIY NETWORK HD
 Dragon Ball GT
 Dragon Ball Z
 Dreamworks HD
-DW EN ESPAÃ‘OL HD
+DW EN ESPAÑOL HD
 E! HD
 E! WEST HD
 Ebenezercofradia
@@ -284,7 +284,7 @@ EUROPA EUROPA HD
 EWTN HD
 EXITOSA TV
 EXTREMA TV CR
-FDF ESPAÃ‘A HD
+FDF ESPAÑA HD
 Fight Network HD
 Film &amp; Arts HD
 FOOD NETWORK HD
@@ -348,7 +348,7 @@ HBO Signature HD
 HBO XTREME HD
 HBO ZONE USA HD
 HBO2 Central HD
-HGTV ESPAÃ‘OL HD
+HGTV ESPAÑOL HD
 HGTV HD
 Hipodromo Presidente Remon
 Hispan TV
@@ -364,7 +364,7 @@ Imagen HD
 Inti HD
 I-SAT
 IVC HD
-KANAL D EN ESPAÃ‘OL
+KANAL D EN ESPAÑOL
 KANAL D HD
 LA 1 HD
 LA 2 HD
@@ -511,7 +511,7 @@ PLATINO
 PLATINO 2
 Pokemon 24/7 HD
 PX SPORTS COL HD
-RCC CHAQUEÃ‘A PY
+RCC CHAQUEÑA PY
 RCN COL HD
 RCN NOVELAS FHD
 RCN NOVELAS HD
@@ -523,7 +523,7 @@ REPRETEL CANAL 4 CR HD
 REPRETEL CANAL 6 CR HD
 RPC 4 PAN HD
 RPC PY
-RT en EspaÃ±ol
+RT en Español
 RTP BO HD
 RTS HD
 RTS HD+
@@ -553,10 +553,10 @@ SPORTS MAX 2 HD
 Sportsman HD
 SPORTSNET 360
 SPORTSNET ONE CA
-STâ˜†R Central FHD
-STâ˜†R Central HD
-STâ˜†R HD
-STâ˜†R HD+
+ST☆R Central FHD
+ST☆R Central HD
+ST☆R HD
+ST☆R HD+
 STAR 24/7 HD
 STAR CHANNEL HD
 STAR CHANNEL HD+
@@ -726,7 +726,7 @@ Univision West HD
 UNO
 UNO FHD
 Urbano TV
-UV TelevisiÃ³n
+UV Televisión
 Win Sports 1
 Win Sports 2
 Win Sports 3

@@ -14,12 +14,12 @@ import androidx.media3.effect.GlShaderProgram
  * Demo split-screen sin estado entre cuadros (a prueba de desfase).
  *
  * Cada efecto de la cadena conserva la mitad izquierda intacta cuando el
- * demo estÃ¡ prendido (uniform uDemoSplit): la izquierda siempre es el
+ * demo está prendido (uniform uDemoSplit): la izquierda siempre es el
  * original del MISMO instante que la derecha procesada, porque ambas
  * salen de la misma pasada de dibujado. No hay copias guardadas ni
- * historial, asÃ­ que la cola interna de Media3 no puede desincronizarlas.
+ * historial, así que la cola interna de Media3 no puede desincronizarlas.
  *
- * Este Ãºltimo programa solo pinta la lÃ­nea blanca divisoria.
+ * Este último programa solo pinta la línea blanca divisoria.
  * GLES2 compatible.
  */
 class DemoLineEffect : GlEffect {

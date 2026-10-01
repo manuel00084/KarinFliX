@@ -17,7 +17,12 @@ class TutorialActivity : FragmentActivity() {
         setContentView(R.layout.activity_tutorial)
 
         val btnBack = findViewById<TextView>(R.id.btn_back)
-        btnBack.setOnClickListener { finish() }
+        // Volver explícito = tutorial visto (RESULT_OK para Onboarding);
+        // BACK del mando = salir sin marcar.
+        btnBack.setOnClickListener {
+            setResult(android.app.Activity.RESULT_OK)
+            finish()
+        }
         btnBack.onActionKey { btnBack.performClick() }
 
         applyHighContrastIfNeeded()

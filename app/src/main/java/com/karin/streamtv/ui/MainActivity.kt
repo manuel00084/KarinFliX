@@ -25,6 +25,7 @@ import com.karin.streamtv.scraper.ScraperRegistry
 import com.karin.streamtv.util.AppPreferences
 import com.karin.streamtv.util.CrashLogger
 import com.karin.streamtv.util.DeviceUtils
+import com.karin.streamtv.util.enableTvFocus
 import com.karin.streamtv.util.onActionKey
 import com.karin.streamtv.util.DiskImageCache
 import com.karin.streamtv.util.SearchManager
@@ -83,18 +84,31 @@ class MainActivity : FragmentActivity() {
             if (isTvDevice) {
                 etSearch.isFocusableInTouchMode = false
             }
+            enableTvFocusSafe()
             rowSites.columnCount = computeSiteColumns()
 
             rvSearchResults.layoutManager = LinearLayoutManager(this)
             rvSearchResults.adapter = searchAdapter
+            // Listas navegables con mando: sin esto el D-pad no aterriza.
+            rvSearchResults.isFocusable = true
+            rvSearchResults.isFocusableInTouchMode = false
+            rvSearchResults.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
 
             btnSearch.setOnClickListener { performGlobalSearch() }
 
             val btnVoice = findViewById<TextView>(R.id.btn_voice_search)
-            btnVoice.setOnClickListener {
-                VoiceSearchHelper.startVoiceSearch(this)
+            // Sin reconocedor de voz (TV sin mic/Google): se oculta en vez de
+            // dejar un botón muerto con foco.
+            if (!VoiceSearchHelper.isAvailable(this)) {
+                btnVoice.visibility = android.view.View.GONE
+            } else {
+                btnVoice.setOnClickListener {
+                    if (!VoiceSearchHelper.startVoiceSearch(this)) {
+                        Toast.makeText(this, "Esta TV no tiene búsqueda por voz", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                btnVoice.onActionKey { btnVoice.performClick() }
             }
-            btnVoice.onActionKey { btnVoice.performClick() }
 
             etSearch.setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_SEARCH) {
@@ -108,7 +122,15 @@ class MainActivity : FragmentActivity() {
                     true
                 } else if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                     etSearch.clearFocus()
-                    scrollSites.requestFocus()
+                    // scrollSites es ScrollView no focuseable: ir al primer
+                    // site card, o a resultados si la búsqueda ya corrió.
+                    val wentToResults = if (rvSearchResults.visibility == View.VISIBLE) {
+                        rvSearchResults.requestFocus()
+                    } else false
+                    if (!wentToResults) {
+                        val first = if (rowSites.childCount > 0) rowSites.getChildAt(0) else null
+                        if (first != null) first.requestFocus() else scrollSites.requestFocus()
+                    }
                     true
                 } else false
             }
@@ -121,13 +143,22 @@ class MainActivity : FragmentActivity() {
 
             val btnKarinLink = findViewById<TextView>(R.id.btn_karinlink_main)
             btnKarinLink.setOnClickListener {
-                startActivity(Intent(this, com.karin.streamtv.karinlink.KarinLinkActivity::class.java))
+                if (!AppPreferences.isKarinLinkEnabled()) {
+                    Toast.makeText(this, "KARIN Link apagado: actívalo en Ajustes", Toast.LENGTH_SHORT).show()
+                } else {
+                    startActivity(Intent(this, com.karin.streamtv.karinlink.KarinLinkActivity::class.java))
+                }
             }
             btnKarinLink.onActionKey { btnKarinLink.performClick() }
 
             val btnFiles = findViewById<TextView>(R.id.btn_files)
             btnFiles.setOnClickListener { openVideoFilePicker() }
             btnFiles.onActionKey { btnFiles.performClick() }
+
+            findViewById<TextView>(R.id.btn_temp_site)?.apply {
+                setOnClickListener { showAddTempSiteDialog() }
+                onActionKey { performClick() }
+            }
 
             findViewById<TextView>(R.id.btn_credits).apply {
                 setOnClickListener { startActivity(Intent(this@MainActivity, CreditsActivity::class.java)) }
@@ -148,12 +179,16 @@ class MainActivity : FragmentActivity() {
             rvHistory = findViewById(R.id.rv_history)
             rvHistory.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
             rvHistory.adapter = historyAdapter
+            rvHistory.isFocusable = true
+            rvHistory.isFocusableInTouchMode = false
 
             continueSection = findViewById(R.id.continue_section)
             dividerContinue = findViewById(R.id.divider_continue)
             rvContinue = findViewById(R.id.rv_continue)
             rvContinue.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
             rvContinue.adapter = continueAdapter
+            rvContinue.isFocusable = true
+            rvContinue.isFocusableInTouchMode = false
 
             loadHistory()
             loadContinueWatching()
@@ -196,7 +231,14 @@ class MainActivity : FragmentActivity() {
             .setView(scroll)
             .setNegativeButton("Borrar") { _, _ -> CrashLogger.clear(this) }
             .setPositiveButton("Listo", null)
-            .show()
+            .create()
+            .apply {
+                // TV/D-pad: el foco no debe quedar detrás del diálogo.
+                setOnShowListener {
+                    getButton(android.app.AlertDialog.BUTTON_POSITIVE)?.requestFocus()
+                }
+                show()
+            }
     }
 
     override fun onResume() {
@@ -209,7 +251,10 @@ class MainActivity : FragmentActivity() {
         loadHistory()
         loadContinueWatching()
         if (etSearch.text.isNullOrBlank()) {
-            renderSites()
+            if (sitesDirty || rowSites.childCount == 0) {
+                sitesDirty = false
+                renderSites()
+            }
         }
     }
 
@@ -237,9 +282,11 @@ class MainActivity : FragmentActivity() {
         if (requestCode == REQUEST_PICK_VIDEO && resultCode == RESULT_OK && data?.data != null) {
             val uri = data.data!!
             try {
+                val mime = try { contentResolver.getType(uri) } catch (_: Exception) { null }
                 val intent = Intent(this, com.karin.streamtv.player.ExoPlayerActivity::class.java).apply {
                     putExtra("video_url", uri.toString())
                     putExtra("referer", "")
+                    putExtra("audio_only", mime?.startsWith("audio") == true)
                 }
                 startActivity(intent)
             } catch (e: Exception) {
@@ -281,19 +328,42 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    // Sin este callback, denegar el micrófono dejaba el flujo de voz muerto
+    // en silencio (el permiso se pide y nunca se responde).
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1002) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                Toast.makeText(this, "Sin permiso de micrófono: usa el teclado", Toast.LENGTH_SHORT).show()
+            } else {
+                VoiceSearchHelper.startVoiceSearch(this)
+            }
+        }
+    }
+
     override fun onLowMemory() {
         super.onLowMemory()
         logoCache.evictAll()
+        // Solo en memoria crítica se sueltan vistas (se re-renderizan en onResume).
         rowSites.removeAllViews()
+        sitesDirty = true
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_MODERATE) {
-            logoCache.evictAll()
-            rowSites.removeAllViews()
-        }
+        // MODERATE no suelta vistas: antes dejaba la parrilla vacía con
+        // búsqueda activa (pantalla en negro sin foco D-pad).
+        logoCache.evictAll()
     }
+
+    /** Marcada cuando onLowMemory soltó la parrilla: onResume la reconstruye. */
+    private var sitesDirty = false
 
     private fun performGlobalSearch() {
         val query = etSearch.text.toString().trim()
@@ -331,6 +401,15 @@ class MainActivity : FragmentActivity() {
             tvSearchEmpty.visibility = View.GONE
             rvSearchResults.visibility = View.VISIBLE
             searchAdapter.submitList(results)
+            // Con mando el foco quedaba en la barra de búsqueda: moverlo a
+            // la lista para uso 100% con control remoto.
+            if (isTvDevice) {
+                rvSearchResults.post {
+                    if (!rvSearchResults.requestFocus()) {
+                        rvSearchResults.getChildAt(0)?.requestFocus()
+                    }
+                }
+            }
         }
     }
 
@@ -342,6 +421,12 @@ class MainActivity : FragmentActivity() {
         rvSearchResults.visibility = View.GONE
         scrollSites.visibility = View.VISIBLE
         renderSites()
+    }
+
+    private fun enableTvFocusSafe() {
+        try {
+            enableTvFocus()
+        } catch (_: Exception) { }
     }
 
     private fun onSearchResultClick(result: SearchManager.SearchResult) {
@@ -452,11 +537,21 @@ class MainActivity : FragmentActivity() {
             }
         }
 
-        tvName.text = site.name
-        tvUrl.text = site.url
+        tvName.text = if (site.isTemporary) "⏳ ${site.name}" else site.name
+        tvUrl.text = if (site.isTemporary) "${site.url} · temporal" else site.url
+        // Marca visual tenue para temporales (TV y táctil).
+        card.alpha = if (site.isTemporary) 0.92f else 1f
 
         card.setOnClickListener {
             openBrowser(site)
+        }
+
+        // Mantén pulsado (o MENU en TV) en un temporal: Guardar / Descartar.
+        card.setOnLongClickListener {
+            if (site.isTemporary) {
+                showTempSiteOptions(site)
+                true
+            } else false
         }
 
         card.setOnKeyListener { _, keyCode, event ->
@@ -466,6 +561,12 @@ class MainActivity : FragmentActivity() {
                     KeyEvent.KEYCODE_ENTER -> {
                         openBrowser(site)
                         true
+                    }
+                    KeyEvent.KEYCODE_MENU -> {
+                        if (site.isTemporary) {
+                            showTempSiteOptions(site)
+                            true
+                        } else false
                     }
                     else -> false
                 }
@@ -477,13 +578,114 @@ class MainActivity : FragmentActivity() {
 
     private fun openBrowser(site: SiteConfig) {
         siteManager.touchLastVisited(site.id)
+        if (site.isTemporary) {
+            // El navegador genérico necesita un scraper aunque no haya parser propio.
+            ScraperRegistry.registerTempSite(site.name, site.url)
+        }
         val intent = Intent(this, SiteBrowserActivity::class.java).apply {
             putExtra("site_id", site.id)
             putExtra("site_name", site.name)
             putExtra("site_url", site.url)
+            putExtra("is_temporary", site.isTemporary)
         }
         startActivity(intent)
     }
+
+    // region --- Páginas temporales ---
+
+    private fun showAddTempSiteDialog() {
+        val ctx = this
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val container = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(padding, padding, padding, padding)
+        }
+        val etName = EditText(ctx).apply {
+            hint = "Nombre (opcional, ej. MiPágina)"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_NEXT
+        }
+        val etUrl = EditText(ctx).apply {
+            hint = "URL (ej. https://ejemplo.com)"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+        val tvHint = TextView(ctx).apply {
+            text = "⏳ Solo vive en memoria: se borra al cerrar la app. No se guarda en disco."
+            setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
+            textSize = 12f
+            setPadding(0, padding / 2, 0, 0)
+        }
+        container.addView(etName)
+        container.addView(etUrl)
+        container.addView(tvHint)
+
+        val dlg = androidx.appcompat.app.AlertDialog.Builder(ctx)
+            .setTitle("🌐 Añadir página temporal")
+            .setView(container)
+            .setPositiveButton("Abrir", null)
+            .setNegativeButton("Cancelar", null)
+            .create()
+        dlg.setOnShowListener {
+            val btnOpen = dlg.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+            btnOpen?.requestFocus()
+            btnOpen?.setOnClickListener {
+                val rawName = etName.text.toString()
+                val rawUrl = etUrl.text.toString()
+                val built = com.karin.streamtv.util.TempSiteHelper.buildTempSite(rawName, rawUrl)
+                if (built == null) {
+                    etUrl.error = "URL no válida"
+                    etUrl.requestFocus()
+                    return@setOnClickListener
+                }
+                val added = siteManager.addTemporarySite(built)
+                if (added == null) {
+                    Toast.makeText(ctx, "Esa página ya está en la lista", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                ScraperRegistry.registerTempSite(added.name, added.url)
+                dlg.dismiss()
+                renderSites()
+                Toast.makeText(ctx, "⏳ '${added.name}' temporal: no se guardará", Toast.LENGTH_SHORT).show()
+                openBrowser(added)
+            }
+            etUrl.setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_DONE) {
+                    btnOpen?.performClick()
+                    true
+                } else false
+            }
+        }
+        dlg.show()
+    }
+
+    private fun showTempSiteOptions(site: SiteConfig) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("⏳ ${site.name} (temporal)")
+            .setMessage("${site.url}\n\nEsta página solo vive en memoria y se borra al cerrar la app.")
+            .setPositiveButton("💾 Guardar") { _, _ ->
+                val permanent = siteManager.promoteTemporary(site.id)
+                if (permanent != null) {
+                    renderSites()
+                    Toast.makeText(this, "'${permanent.name}' guardada", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("🗑 Descartar") { _, _ ->
+                siteManager.discardTemporary(site.id)
+                ScraperRegistry.unregister(site.name)
+                renderSites()
+                Toast.makeText(this, "Página temporal descartada", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("Cancelar", null)
+            .create()
+            .apply {
+                setOnShowListener { getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)?.requestFocus() }
+                show()
+            }
+    }
+
+    // endregion
 
     private fun loadHistory() {
         val entries = WatchHistory.getRecentEntries(10)

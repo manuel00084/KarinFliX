@@ -81,11 +81,15 @@ object ServerDirectResolver {
 
     /**
      * True when [url] can be played directly through ExoPlayer via the HTTP
-     * resolver (dood/dsvplay, voe, byse, mega). False means playback falls
-     * back to the WebView (hidden extractor or visible embed).
+     * resolver (dood/dsvplay, voe, byse, mega) or as raw media (mp4/m3u8/mpd).
+     * False means playback falls back to the WebView
+     * (hidden extractor or visible embed).
      */
     fun usesHttpResolver(url: String): Boolean {
-        return com.karin.streamtv.model.VideoServer.detectServer(url).httpResolvable
+        val lower = url.lowercase()
+        if (lower.endsWith(".mp4") || lower.endsWith(".m3u8") || lower.endsWith(".mpd") || lower.endsWith(".webm")) return true
+        val server = com.karin.streamtv.model.VideoServer.detectServer(url)
+        return server.httpResolvable || server == com.karin.streamtv.model.VideoServer.DIRECT
     }
 
     // region --- HTTP helpers ---

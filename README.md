@@ -51,6 +51,7 @@ La interfaz está pensada para **mando remoto / gamepad**, con una variante Lean
 - **Interpolación de movimiento a 60 fps**: `MotionX2`, `Frame x2`, `Suavizado`, `Doubling + Micro-Blend`.
 - **Escalado dinámico de resolución (DRS)**: baja la resolución de *dibujado* automáticamente cuando el equipo no da abasto, sin tocar la decodificación.
 - Reproducción de **videos locales** (explorador de archivos e intención `video/*`).
+- **Música local** (mp3, flac, ogg, m4a, opus…): desde el explorador, el gestor o SMB, con carátula incrustada, DSP de audio (preset MUSIC disponible) y sin gasto de GPU en efectos de video.
 
 ### Sonido mejorado (DSP en tiempo real)
 - Sintetizador de **subgraves** (extiende las notas graves que la bocina no puede reproducir).
@@ -258,7 +259,7 @@ KarinFLiX está optimizado para cajas con poca RAM/CPU:
 - **Interpolación de 60 fps y upscaling bajo demanda**: ambas opciones se apagan con un clic; en equipos flojos se recomienda 60 fps = Apagado y Escala = Apagado.
 - **Destrucción explícita** de adaptadores y recursos al cerrar pantallas (sin fugas de memoria).
 
-**Receta para gama baja**: Calidad 720p/480p + Escala Apagado + 60 fps Apagado → reproducción fluida en la mayoría de cajas.
+**Receta para gama baja**: activa el **Modo ultra económico** en Configuración → tope 480p, sin efectos ni fondos, sonido básico y poca memoria. Equivalente manual: Calidad 720p/480p + Escala Apagado + 60 fps Apagado.
 
 ---
 

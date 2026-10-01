@@ -17,12 +17,17 @@ import androidx.media3.effect.GlShaderProgram
  * - TAB_2D: muestrea la mitad sup/inf y la estira.
  * - ANAGLYPH ([anaglyph] 0=rojo-cian Dubois, 1=rojo-azul, 2=rojo-verde).
  *   Con [inputKind]=SBS/TAB mezcla ambos ojos reales; con 2D genera
- *   pseudo-3D por paralaje de luma ([depth] = intensidad: 0 intacto).
- * - VR_SBS: con fuente 2D duplica el cuadro en ambas mitades para
- *   Cardboard; con fuente SBS la pasa tal cual (ya es SBS).
- * - PULFRICH (Fabulojos 1997): prepara imagen 2D para lente oscuro en un
- *   ojo (realce horizontal sutil que refuerza bordes en movimiento).
- *   Sin lentes se ve normal. Fuente 2D; quieto no hay 3D.
+ *   pseudo-3D EXPERIMENTAL por paralaje de luma ([depth] = intensidad:
+ *   0 intacto). No es profundidad real: ver AIDepthDibr para IA.
+ * - VR_SBS: COMPATIBILIDAD Cardboard (no es 3D): con fuente 2D duplica
+ *   el cuadro en ambas mitades; con fuente SBS la pasa tal cual.
+ *   Disparidad = 0, sin seguimiento de cabeza.
+ * - PULFRICH TEMPORAL (Fabulojos 1997 + 3Deeps): retardo real de 1 cuadro
+ *   en un ojo (buffer propio, como MotionX2). L=actual, R=previo;
+ *   el movimiento lateral se vuelve disparidad anaglifo. En quieto
+ *   (L≈R) la mezcla por movimiento deja la imagen intacta: sin lentes
+ *   se ve normal, con bicolor hay profundidad solo en movimiento.
+ *   depth=0 → passthrough 2D puro (modo clásico de lente oscuro).
  *
  * Va AL FINAL de la cadena (tras Shader, antes de la línea Demo) porque
  * reformatea la imagen de salida: ver Karin3DController.compatWarnings()
@@ -70,6 +75,31 @@ class Karin3DShaderProgram(
     private var srcW = 0f
     private var srcH = 0f
 
+    // Historial de 1 cuadro para Pulfrich temporal (patrón MotionX2:
+    // textura + FBO propios, GLES2-safe). Solo se aloca en modo 5.
+    private var histTexId = 0
+    private var histFboId = 0
+    private var histW = 0
+    private var histH = 0
+    private var hasHistory = false
+    private var lastPtsUs = -1L
+    private var copyGlProgram: GlProgram? = null
+    private fun getCopyProgram(): GlProgram {
+        var p = copyGlProgram
+        if (p == null) {
+            p = GlProgram(VERTEX_SHADER, COPY_SHADER)
+            p.setBufferAttribute(
+                "aFramePosition",
+                GlUtil.getNormalizedCoordinateBounds(),
+                GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE,
+            )
+            p.setFloatsUniform("uTransformationMatrix", GlUtil.create4x4IdentityMatrix())
+            p.setFloatsUniform("uTexTransformationMatrix", GlUtil.create4x4IdentityMatrix())
+            copyGlProgram = p
+        }
+        return p
+    }
+
     init {
         try {
             glProgram = GlProgram(VERTEX_SHADER, FRAGMENT_SHADER)
@@ -91,6 +121,18 @@ class Karin3DShaderProgram(
             glProgram.delete()
         } catch (_: Exception) {
         }
+        try {
+            copyGlProgram?.delete()
+        } catch (_: Exception) { }
+        copyGlProgram = null
+        try {
+            if (histFboId != 0) GLES20.glDeleteFramebuffers(1, intArrayOf(histFboId), 0)
+        } catch (_: Exception) { }
+        try {
+            if (histTexId != 0) GLES20.glDeleteTextures(1, intArrayOf(histTexId), 0)
+        } catch (_: Exception) { }
+        histFboId = 0
+        histTexId = 0
         super.release()
     }
 
@@ -100,6 +142,12 @@ class Karin3DShaderProgram(
         // (Pulfrich) sobre la FUENTE, no el panel.
         srcW = inputWidth.toFloat()
         srcH = inputHeight.toFloat()
+        if (inputWidth != histW || inputHeight != histH) {
+            // Resolución cambió: el historial ya no vale (igual que MotionX2).
+            hasHistory = false
+            lastPtsUs = -1L
+            deleteHistory()
+        }
         try {
             glProgram.setFloatsUniform("uResolution", floatArrayOf(srcW, srcH))
         } catch (_: Exception) { }
@@ -108,27 +156,114 @@ class Karin3DShaderProgram(
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
+            val needHistory = mode == Karin3DController.MODE_PULFRICH
+            if (needHistory) ensureHistory(srcW.toInt(), srcH.toInt())
+            else if (histTexId != 0) deleteHistory()
+            if (needHistory && presentationTimeUs < lastPtsUs) {
+                // Seek atrás: el cuadro previo ya no vale.
+                hasHistory = false
+            }
+            lastPtsUs = presentationTimeUs
+
             glProgram.use()
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+            glProgram.setSamplerTexIdUniform(
+                "uPrevFrame", if (hasHistory && histTexId != 0) histTexId else inputTexId, 1,
+            )
             glProgram.setIntUniform("uMode", mode)
             // Paralaje real: depth 0..1 -> 0..3% del ancho (sutil, sin mareo).
             glProgram.setFloatUniform("uDepth", depth.coerceIn(0f, 1f) * 0.03f)
             glProgram.setIntUniform("uSwap", if (swapEye) 1 else 0)
             glProgram.setIntUniform("uInput", inputKind.coerceIn(0, 2))
             glProgram.setIntUniform("uAnaglyph", anaglyph.coerceIn(0, 2))
+            glProgram.setIntUniform("uFirst", if (hasHistory) 0 else 1)
             try {
                 glProgram.setFloatsUniform("uResolution", floatArrayOf(srcW, srcH))
             } catch (_: Exception) { }
             glProgram.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+            // Guardar cuadro actual como previo (copia GLES2-safe, como MotionX2).
+            if (needHistory && histFboId != 0) {
+                val prevFbo = IntArray(1)
+                val prevVp = IntArray(4)
+                GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, prevFbo, 0)
+                GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, prevVp, 0)
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, histFboId)
+                GLES20.glViewport(0, 0, histW, histH)
+                val cp = getCopyProgram()
+                cp.use()
+                cp.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+                cp.bindAttributesAndUniforms()
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo[0])
+                GLES20.glViewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3])
+                hasHistory = true
+            }
         } catch (e: GlUtil.GlException) {
             throw VideoFrameProcessingException(e, presentationTimeUs)
         }
     }
 
+    private fun ensureHistory(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        if (histTexId != 0 && histW == w && histH == h) return
+        deleteHistory()
+        val tex = IntArray(1)
+        GLES20.glGenTextures(1, tex, 0)
+        histTexId = tex[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, histTexId)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexImage2D(
+            GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0,
+            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null,
+        )
+        val fbo = IntArray(1)
+        GLES20.glGenFramebuffers(1, fbo, 0)
+        histFboId = fbo[0]
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, histFboId)
+        GLES20.glFramebufferTexture2D(
+            GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+            GLES20.GL_TEXTURE_2D, histTexId, 0,
+        )
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+        histW = w
+        histH = h
+        hasHistory = false
+    }
+
+    private fun deleteHistory() {
+        if (histFboId != 0) {
+            try {
+                GLES20.glDeleteFramebuffers(1, intArrayOf(histFboId), 0)
+            } catch (_: Exception) { }
+            histFboId = 0
+        }
+        if (histTexId != 0) {
+            try {
+                GLES20.glDeleteTextures(1, intArrayOf(histTexId), 0)
+            } catch (_: Exception) { }
+            histTexId = 0
+        }
+        histW = 0
+        histH = 0
+    }
+
     fun updateDepth(newDepth: Float) { depth = newDepth.coerceIn(0f, 1f) }
 
     companion object {
+        private const val COPY_SHADER = """
+            precision mediump float;
+            varying vec2 vTexCoord;
+            uniform sampler2D uTexSampler;
+            void main() {
+                gl_FragColor = vec4(texture2D(uTexSampler, vTexCoord).rgb, 1.0);
+            }
+        """
         private const val VERTEX_SHADER = """
             attribute vec4 aFramePosition;
             uniform mat4 uTransformationMatrix;
@@ -145,6 +280,8 @@ class Karin3DShaderProgram(
             precision highp float;
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
+            uniform sampler2D uPrevFrame; // cuadro previo (Pulfrich temporal)
+            uniform int uFirst;     // 1=sin historial (primer cuadro / seek)
             uniform int uMode;      // 1=SBS2D 2=TAB2D 3=ANAGLYPH 4=VR_SBS 5=PULFRICH
             uniform float uDepth;   // paralaje (fracción del ancho)
             uniform int uSwap;      // 1=ojo derecho/inferior/líneas impares
@@ -242,24 +379,40 @@ class Karin3DShaderProgram(
                         outc = texture2D(uTexSampler, vec2(uv.x * 2.0 - right, uv.y)).rgb;
                     }
                 } else if (uMode == 5) {
-                    // PULFRICH (Fabulojos 1997): la profundidad la pone un
-                    // lente OSCURO en un ojo (el ojo oscurecido procesa ~1
-                    // cuadro más lento y el movimiento lateral se vuelve
-                    // profundidad). Sin lentes se ve normal, como debe ser.
-                    // La app solo refuerza bordes horizontales en movimiento
-                    // (más señal para el efecto) preservando tono.
-                    outc = texture2D(uTexSampler, uv).rgb;
+                    // PULFRICH TEMPORAL (retardo real de 1 cuadro):
+                    // L = cuadro actual, R = cuadro previo (uSwap invierte).
+                    // El movimiento lateral se vuelve disparidad anaglifo.
+                    // En quieto L≈R → motion≈0 → se deja la imagen intacta
+                    // (sin lentes se ve normal). depth=0 → 2D puro clásico
+                    // (para lente oscuro físico, sin síntesis).
+                    vec3 cur = texture2D(uTexSampler, uv).rgb;
+                    vec3 prv = (uFirst == 1) ? cur : texture2D(uPrevFrame, uv).rgb;
+                    vec3 KLp = vec3(0.299, 0.587, 0.114);
+                    float yc = dot(cur, KLp);
+                    float yp = dot(prv, KLp);
+                    // Energía de movimiento por pixel (0 quieto → 1 corte).
+                    float motion = clamp(abs(yc - yp) * 6.0, 0.0, 1.0);
+                    // uDepth llega escalado (0..0.03): x33 → 0..1.
+                    float delayAmt = clamp(uDepth * 33.0, 0.0, 1.0);
+                    float amt = motion * delayAmt;
+                    vec3 L = (uSwap == 1) ? prv : cur;
+                    vec3 R = (uSwap == 1) ? cur : prv;
+                    vec3 ana;
+                    if (uAnaglyph == 1) {
+                        ana = vec3(dot(L, KLp), 0.0, dot(R, KLp));
+                    } else if (uAnaglyph == 2) {
+                        ana = vec3(dot(L, KLp), dot(R, KLp), 0.0);
+                    } else {
+                        ana = vec3(dot(L, KLp), dot(R, KLp), dot(R, KLp));
+                    }
+                    // Realce leve de bordes horizontales solo donde hay
+                    // movimiento (más señal Pulfrich, sin teñir el quieto).
                     vec2 hpx = vec2(1.0 / max(uResolution.x, 1.0), 0.0);
-                    vec3 lh = texture2D(uTexSampler, uv - hpx).rgb;
-                    vec3 rh = texture2D(uTexSampler, uv + hpx).rgb;
-                    vec3 KL = vec3(0.299, 0.587, 0.114);
-                    float lc0 = dot(outc, KL);
-                    float lh0 = dot(lh, KL);
-                    float rh0 = dot(rh, KL);
-                    float edge = clamp((abs(lc0 - lh0) + abs(lc0 - rh0)) * 3.0, 0.0, 1.0);
-                    float amt = clamp(uDepth * 20.0, 0.0, 0.5) * edge;
-                    float nl = clamp(lc0 + (lc0 - (lh0 + rh0) * 0.5) * amt, 0.0, 1.5);
-                    outc = clamp(outc * (nl / max(lc0, 0.0001)), 0.0, 1.0);
+                    float lh0 = dot(texture2D(uTexSampler, uv - hpx).rgb, KLp);
+                    float rh0 = dot(texture2D(uTexSampler, uv + hpx).rgb, KLp);
+                    float edge = clamp((abs(yc - lh0) + abs(yc - rh0)) * 3.0, 0.0, 1.0);
+                    vec3 sharp = clamp(cur * (1.0 + edge * amt * 0.25), 0.0, 1.0);
+                    outc = mix(sharp, ana, amt);
                 } else {
                     // Modo desconocido/off: passthrough defensivo.
                     outc = texture2D(uTexSampler, uv).rgb;

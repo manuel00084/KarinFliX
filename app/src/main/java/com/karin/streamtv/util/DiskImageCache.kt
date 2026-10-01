@@ -23,9 +23,26 @@ object DiskImageCache {
 
     // LRU en memoria (caché de texturas al estilo de los media centers): evita re-decodificar desde
     // disco en cada bind y baja la presión de memoria en grid/recyclers.
-    private val memoryCache = object : LruCache<String, Bitmap>(memCacheSizeBytes()) {
-        override fun sizeOf(key: String, value: Bitmap): Int =
-            value.byteCount
+    // En ultra económico se recrea a la mitad (ver setUltraMode).
+    private var memoryCache: LruCache<String, Bitmap> =
+        object : LruCache<String, Bitmap>(memCacheSizeBytes()) {
+            override fun sizeOf(key: String, value: Bitmap): Int =
+                value.byteCount
+        }
+
+    /** Ultra económico: caché RAM a la mitad (se restaura al apagarlo). */
+    fun setUltraMode(enabled: Boolean) {
+        try {
+            val full = memCacheSizeBytes()
+            val target = if (enabled) full / 2 else full
+            val current = memoryCache.maxSize()
+            if (current == target) return
+            memoryCache.evictAll()
+            memoryCache = object : LruCache<String, Bitmap>(target) {
+                override fun sizeOf(key: String, value: Bitmap): Int =
+                    value.byteCount
+            }
+        } catch (_: Exception) { }
     }
 
     // Pool para probar candidatos de favicon en paralelo (antes era secuencial:
@@ -49,7 +66,16 @@ object DiskImageCache {
 
     fun init(context: Context) {
         cacheDir = File(context.cacheDir, CACHE_DIR).also { it.mkdirs() }
-        trimCache()
+        // El recorte recorre el disco: fuera del hilo principal para no
+        // provocar ANR en arranque frío (TV con flash lenta / caché grande).
+        try {
+            Thread({ trimCache() }, "imgcache-trim").apply {
+                isDaemon = true
+                start()
+            }
+        } catch (_: Exception) {
+            // Si no se puede lanzar el hilo, se omite el recorte (no crítico).
+        }
     }
 
     fun get(url: String, reqW: Int = 0, reqH: Int = 0): Bitmap? {
@@ -171,26 +197,15 @@ object DiskImageCache {
     }
 
     /**
-     * Renders [logo] centered inside a dark rounded plate of [plateW]x[plateH],
+     * Renders [logo] centered on a transparent canvas of [plateW]x[plateH],
      * so wide brand logos and small favicons both look uniform on a card.
      */
-    fun renderLogoPlate(logo: Bitmap, plateW: Int, plateH: Int, cornerRadius: Int = 12): Bitmap {
+    fun renderLogoPlate(logo: Bitmap, plateW: Int, plateH: Int): Bitmap {
         if (logo.width <= 0 || logo.height <= 0 || plateW <= 0 || plateH <= 0) {
             return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         }
         val out = Bitmap.createBitmap(plateW, plateH, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
-        val rect = RectF(0f, 0f, plateW.toFloat(), plateH.toFloat())
-        val r = cornerRadius.toFloat()
-
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF16161C.toInt() }
-        c.drawRoundRect(rect, r, r, fill)
-        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.5f
-            color = 0xFF2E2E38.toInt()
-        }
-        c.drawRoundRect(rect, r, r, border)
 
         val pad = plateH * 0.16f
         val scale = minOf((plateW - pad * 2) / logo.width, (plateH - pad * 2) / logo.height)

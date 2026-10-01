@@ -2,7 +2,6 @@ package com.karin.streamtv.ui
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.KeyEvent
 import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -36,6 +35,13 @@ class ErrorActivity : AppCompatActivity() {
             setOnClickListener { finish() }
             onActionKey { finish() }
         }
+
+        // Foco inicial con mando: reintentar si hay URL, si no volver.
+        if (embedUrl.isNullOrBlank()) {
+            findViewById<TextView>(R.id.btn_error_back).requestFocus()
+        } else {
+            findViewById<TextView>(R.id.btn_error_retry).requestFocus()
+        }
     }
 
     private fun retry() {
@@ -45,13 +51,5 @@ class ErrorActivity : AppCompatActivity() {
             Intent(this, EmbedWebViewActivity::class.java).putExtra("embed_url", url)
         )
         finish()
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-            retry()
-            return true
-        }
-        return super.onKeyDown(keyCode, event)
     }
 }

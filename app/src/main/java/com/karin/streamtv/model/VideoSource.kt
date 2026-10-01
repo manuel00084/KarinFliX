@@ -157,7 +157,7 @@ enum class VideoServer(
     ),
     DIRECT(
         displayName = "Directo",
-        patterns = listOf(".mp4", ".m3u8", ".webm"),
+        patterns = listOf(".mp4", ".m3u8", ".webm", ".mpd"),
         supportsResolution = true,
         speedRating = 5,
         priority = 200

@@ -40,13 +40,16 @@ object VoiceSearchHelper {
         }
     }
 
-    fun startVoiceSearch(activity: Activity) {
-        if (!isAvailable(activity)) return
+    /** Inicia la búsqueda por voz. Devuelve false (sin hacer nada) si la TV
+     *  no tiene reconocedor de voz: quien llama debe avisarlo. */
+    fun startVoiceSearch(activity: Activity): Boolean {
+        if (!isAvailable(activity)) return false
         if (!hasPermission(activity)) {
             requestPermission(activity)
-            return
+            return true
         }
         activity.startActivityForResult(createIntent(), REQUEST_VOICE_SEARCH)
+        return true
     }
 
     fun handleResult(requestCode: Int, resultCode: Int, data: Intent?, target: EditText): Boolean {

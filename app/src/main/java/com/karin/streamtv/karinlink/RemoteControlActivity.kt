@@ -1,6 +1,8 @@
 package com.karin.streamtv.karinlink
 
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -11,16 +13,21 @@ import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.karin.streamtv.R
+import com.karin.streamtv.karinlink.protocol.DiscoveredPeer
 import com.karin.streamtv.util.GamepadHelper
 import kotlinx.coroutines.launch
 
 /**
- * Control remoto Karin Link (lado teléfono).
+ * Control remoto Karin Link (lado tel├®fono).
  *
- * - Botonera: D-pad + OK, Atrás, Inicio.
- * - Multimedia: play/pausa, ±10s, volumen, silencio.
+ * Todo entra por la misma superficie y llega al mismo sitio:
  * - [TouchPadView]: 1 dedo mueve el cursor / toque = clic, 2 dedos = scroll.
- * - Teclado: escribe en el campo y pulsa Enviar (o el Enter del teclado).
+ * - Teclado: cada letra se env├¡a a la TV al escribirla, sin pulsar nada.
+ *   El bot├│n de la derecha solo manda Enter (confirma) y limpia el campo.
+ * - Botonera: D-pad + OK, Atr├ís, Inicio.
+ * - Multimedia: play/pausa, ┬▒10s, volumen, silencio.
+ *
+ * Cursor, scroll y barra comparten un [FrameThrottle]: 1 frame cada 40 ms.
  *
  * Se abre desde [KarinLinkActivity] con los datos del equipo destino.
  */
@@ -34,6 +41,9 @@ class RemoteControlActivity : FragmentActivity() {
 
         /** Ganancia del scroll de la barra vertical (rueda del mouse). */
         private const val SCROLL_GAIN = 3.0f
+
+        /** Frames por segundo m├íximo hacia la TV (cursor + scroll + barra). */
+        private const val FRAME_INTERVAL_MS = 40L
     }
 
     private lateinit var manager: KarinLinkManager
@@ -41,18 +51,30 @@ class RemoteControlActivity : FragmentActivity() {
     private lateinit var etText: EditText
     private lateinit var touchPad: TouchPadView
 
-    private var lastMoveSent = 0L
+    private val frameThrottle = FrameThrottle(FRAME_INTERVAL_MS)
+
+    /**
+     * Cierra el bucle del escritor en vivo: al limpiar el campo propio no se
+     * debe mandar una r├ífaga de DEL a la TV.
+     */
+    private var suspendTextSync = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_remote)
+
+        if (!com.karin.streamtv.util.AppPreferences.isKarinLinkEnabled()) {
+            Toast.makeText(this, "KARIN Link apagado: actívalo en Ajustes", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
 
         val host = intent.getStringExtra(EXTRA_HOST).orEmpty()
         val port = intent.getIntExtra(EXTRA_PORT, 0)
         val targetId = intent.getStringExtra(EXTRA_DEVICE_ID).orEmpty()
         val targetName = intent.getStringExtra(EXTRA_DEVICE_NAME).orEmpty()
         if (host.isBlank() || port <= 0) {
-            Toast.makeText(this, "Destino inválido", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Destino inv├ílido", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
@@ -66,8 +88,8 @@ class RemoteControlActivity : FragmentActivity() {
         manager = KarinLinkManager(this)
         manager.start()
         manager.connectToDevice(
-            DiscoveryManager.DiscoveredDevice(
-                name = targetName.ifBlank { host },
+            DiscoveredPeer(
+                deviceName = targetName.ifBlank { host },
                 host = host,
                 port = port,
                 deviceId = targetId.ifBlank { "$host:$port" },
@@ -87,21 +109,19 @@ class RemoteControlActivity : FragmentActivity() {
     }
 
     private fun wirePad() {
+        // Un solo presupuesto de frames para los tres gestos: nunca pueden
+        // estar activos a la vez (1 dedo vs 2 dedos vs barra), así que el
+        // total sigue siendo 25 frames/s.
         touchPad.onMove = { x, y ->
-            val now = System.currentTimeMillis()
-            if (now - lastMoveSent > 40) {
-                lastMoveSent = now
-                manager.linkClient.sendMouseMove(x, y)
-            }
+            if (frameThrottle.allow()) manager.linkClient.sendMouseMove(x, y)
         }
         touchPad.onTap = { x, y -> manager.linkClient.sendMouseTap(x, y) }
-        touchPad.onScroll = { dx, dy, x, y -> manager.linkClient.sendMouseScroll(dx, dy, x, y) }
+        touchPad.onScroll = { dx, dy, x, y ->
+            if (frameThrottle.allow()) manager.linkClient.sendMouseScroll(dx, dy, x, y)
+        }
         // Barra vertical de scroll: arrastre = rueda del mouse.
-        var lastBarSent = 0L
         findViewById<ScrollBarView>(R.id.scroll_bar).onScroll = { dy ->
-            val now = System.currentTimeMillis()
-            if (now - lastBarSent > 40) {
-                lastBarSent = now
+            if (frameThrottle.allow()) {
                 manager.linkClient.sendMouseScroll(0f, dy * SCROLL_GAIN, 0.5f, 0.5f)
             }
         }
@@ -129,20 +149,45 @@ class RemoteControlActivity : FragmentActivity() {
     }
 
     private fun wireKeyboard() {
+        // Escritura en vivo: cada cambio del campo se traduce al instante en
+        // texto tecleado o teclas DEL sobre la TV.
+        etText.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (suspendTextSync) return
+                TextEdit.diff(start, before, count, s).forEach { edit ->
+                    when (edit) {
+                        is TextEdit.Edit.Typed -> manager.linkClient.sendRemoteText(edit.text)
+                        is TextEdit.Edit.Deleted -> repeat(edit.count) { key(KeyEvent.KEYCODE_DEL) }
+                    }
+                }
+            }
+
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
         etText.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
-                sendText(submit = true)
+                submitText()
                 true
             } else false
         }
-        btn(R.id.btn_send_text).setOnClickListener { sendText(submit = false) }
+        btn(R.id.btn_send_text).setOnClickListener { submitText() }
     }
 
-    private fun sendText(submit: Boolean) {
-        val text = etText.text.toString()
-        if (text.isEmpty() && !submit) return
-        manager.linkClient.sendRemoteText(text, submit)
-        if (text.isNotEmpty()) etText.text.clear()
+    /**
+     * Confirma lo que ya se ha enviado en vivo: la TV ya tiene el texto, así
+     * que aquí solo manda Enter y deja el campo local listo para lo siguiente.
+     */
+    private fun submitText() {
+        suspendTextSync = true
+        try {
+            etText.text.clear()
+        } finally {
+            suspendTextSync = false
+        }
+        key(KeyEvent.KEYCODE_ENTER)
     }
 
     private fun key(keyCode: Int) = manager.linkClient.sendRemoteKey(keyCode)

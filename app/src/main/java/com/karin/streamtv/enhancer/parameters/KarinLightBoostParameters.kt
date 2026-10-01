@@ -41,11 +41,18 @@ data class KarinLightBoostParameters(
     val colorStrength: Float = 0f,
     /**
      * Compensación manual de rango 0..2 (0 = no tocar).
-     * 1 = expandir limitado→completo (arregla negros lavados de streams
-     * mal etiquetados); 2 = comprimir completo→limitado. Se aplica al
+     * 1 = limitado→completo (arregla negros lavados de streams
+     * mal etiquetados); 2 = completo→limitado. Se aplica al
      * inicio, antes del análisis: todo lo demás trabaja ya corregido.
      */
     val rangeMode: Int = 0,
+    /**
+     * HDR simulado: curva tonal por tramos (lift/punto negro/aire+hombro) +
+     * clarity + gamma. true = la luz actúa; false = la luz no toca nada y
+     * solo aplican color y rango. Existe porque en AUTO el boost nunca baja
+     * de 0.18, así que sin este interruptor no habría forma de apagarlo.
+     */
+    val fakeHdr: Boolean = true,
     val contentHdr: Int = 0,
     val displayHdr: Int = 0,
 ) {

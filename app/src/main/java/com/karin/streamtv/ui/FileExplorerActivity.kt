@@ -39,6 +39,7 @@ import com.karin.streamtv.R
 import com.karin.streamtv.karinlink.SmbDiscovery
 import com.karin.streamtv.util.DeviceUtils
 import com.karin.streamtv.util.GamepadHelper
+import com.karin.streamtv.util.enableTvFocus
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -124,6 +125,7 @@ class FileExplorerActivity : AppCompatActivity() {
 
         rvFolders.visibility = View.GONE
         isTvDevice = DeviceUtils.isTvDevice(this)
+        try { enableTvFocus() } catch (_: Exception) { }
 
         // Misma interfaz en TV y móvil: la pista de mando solo estorba en táctil.
         tvHints.visibility = if (isTvDevice) View.VISIBLE else View.GONE
@@ -246,16 +248,20 @@ class FileExplorerActivity : AppCompatActivity() {
 
     /** Ruta sin All Files: permiso de medios + listado MediaStore. */
     private fun requestMediaOnlyAndLoad() {
-        val permission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_VIDEO
+        val permissions = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_AUDIO,
+                Manifest.permission.READ_MEDIA_IMAGES,
+            )
         } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
 
-        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+        if (permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             loadAllVideos()
         } else {
-            ActivityCompat.requestPermissions(this, arrayOf(permission), REQUEST_STORAGE_PERMISSION)
+            ActivityCompat.requestPermissions(this, permissions, REQUEST_STORAGE_PERMISSION)
         }
     }
 
@@ -278,12 +284,21 @@ class FileExplorerActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_STORAGE_PERMISSION) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                loadAllVideos()
+            } else if (grantResults.isNotEmpty() && grantResults.any { it == PackageManager.PERMISSION_GRANTED }) {
+                // Con al menos un permiso de medios se carga lo disponible
+                // (solo video o solo música).
                 loadAllVideos()
             } else {
                 tvEmptyContainer.visibility = View.VISIBLE
                 tvEmpty.text = "Permiso de almacenamiento denegado. Activa el permiso en Configuración."
                 progressBar.visibility = View.GONE
+                // Con mando el foco moría en el vacío: llevarlo al botón
+                // Atrás/Salir para no dejar la pantalla ciega.
+                tvEmptyContainer.post {
+                    if (!btnBack.requestFocus()) btnExit.requestFocus()
+                }
             }
         }
     }
@@ -388,11 +403,17 @@ class FileExplorerActivity : AppCompatActivity() {
                             true
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            if (index > 0) topBarButtons[index - 1].requestFocus()
+                            // Saltar botones GONE (btnBack en raíz): si no,
+                            // el foco cae a una vista invisible y se pierde.
+                            var i = index - 1
+                            while (i >= 0 && topBarButtons[i].visibility != View.VISIBLE) i--
+                            if (i >= 0) topBarButtons[i].requestFocus()
                             true
                         }
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (index < topBarButtons.lastIndex) topBarButtons[index + 1].requestFocus()
+                            var i = index + 1
+                            while (i <= topBarButtons.lastIndex && topBarButtons[i].visibility != View.VISIBLE) i++
+                            if (i <= topBarButtons.lastIndex) topBarButtons[i].requestFocus()
                             true
                         }
                         else -> false
@@ -425,6 +446,11 @@ class FileExplorerActivity : AppCompatActivity() {
 
     private fun requestFocusOnCurrentView() {
         val target = if (showingFolders) rvFolders else rvVideos
+        // Lista vacía: no pedir foco al RecyclerView (foco a nada).
+        if ((target.adapter?.itemCount ?: 0) == 0) {
+            btnFolders.requestFocus()
+            return
+        }
         target.requestFocus()
         target.post {
             val firstChild = target.getChildAt(0)
@@ -433,20 +459,20 @@ class FileExplorerActivity : AppCompatActivity() {
     }
 
     private fun loadAllVideos() {
-        showLoading("Escaneando videos...")
+        showLoading("Escaneando videos y música...")
         tvEmptyContainer.visibility = View.GONE
 
         lifecycleScope.launch {
-            allVideos = withContext(Dispatchers.IO) { queryAllVideos() }
+            allVideos = withContext(Dispatchers.IO) { queryAllVideos() + queryAllAudio() }
 
             if (allVideos.isEmpty()) {
                 hideLoading()
                 tvEmptyContainer.visibility = View.VISIBLE
                 tvEmpty.text = if (isTvDevice) {
-                    "No se encontraron videos. En Smart TV conecta un USB con videos " +
-                        "y concede acceso a fotos y videos cuando se pida."
+                    "No se encontraron videos ni música. En Smart TV conecta un USB con archivos " +
+                        "y concede acceso a fotos, videos y música cuando se pida."
                 } else {
-                    "No se encontraron videos en el dispositivo"
+                    "No se encontraron videos ni música en el dispositivo"
                 }
                 return@launch
             }
@@ -539,16 +565,100 @@ class FileExplorerActivity : AppCompatActivity() {
         return items
     }
 
+    /** Música del dispositivo vía MediaStore.Audio (solo IS_MUSIC: sin tonos). */
+    private fun queryAllAudio(): List<VideoItem> {
+        val items = mutableListOf<VideoItem>()
+        val uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        val useDataColumn = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+        val projection = if (useDataColumn) {
+            arrayOf(
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.DURATION,
+                MediaStore.Audio.Media.SIZE,
+                MediaStore.Audio.Media.DATA,
+                MediaStore.Audio.Media.ARTIST
+            )
+        } else {
+            arrayOf(
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.DURATION,
+                MediaStore.Audio.Media.SIZE,
+                MediaStore.Audio.Media.RELATIVE_PATH,
+                MediaStore.Audio.Media.ARTIST
+            )
+        }
+        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+        val sortOrder = "${MediaStore.Audio.Media.DATE_ADDED} DESC"
+        try {
+            cr.query(uri, projection, selection, null, sortOrder)?.use { c ->
+                val idIdx = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                val nameIdx = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+                val durIdx = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                val sizeIdx = c.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+                val pathIdx = if (useDataColumn) {
+                    c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                } else {
+                    c.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)
+                }
+                val artistIdx = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+                while (c.moveToNext()) {
+                    val id = c.getLong(idIdx)
+                    val name = c.getString(nameIdx) ?: continue
+                    if (!isAudioFile(name)) continue
+                    val duration = c.getLong(durIdx)
+                    val size = c.getLong(sizeIdx)
+                    val pathVal = c.getString(pathIdx) ?: ""
+                    val artist = c.getString(artistIdx)?.takeIf { it.isNotBlank() } ?: "Música"
+                    val relPath = if (useDataColumn) {
+                        pathVal.substringAfter("/storage/emulated/0/", "")
+                    } else {
+                        pathVal
+                    }
+                    val audioUri = ContentUris.withAppendedId(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id
+                    ).toString()
+                    items.add(VideoItem(
+                        id = id,
+                        title = name,
+                        uri = audioUri,
+                        durationMs = duration,
+                        folder = artist,
+                        relativePath = relPath,
+                        sizeBytes = size,
+                        isAudio = true
+                    ))
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "queryAllAudio error: ${e.message}", e)
+        }
+        return items
+    }
+
     data class StorageVolumeInfo(val name: String, val path: String)
 
     private val videoExtensions = setOf(
         "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts", "3gp", "mpg", "mpeg"
     )
 
+    private val audioExtensions = setOf(
+        "mp3", "wav", "flac", "aac", "ogg", "m4a", "opus", "wma", "mid", "midi", "amr"
+    )
+
     private fun isVideoFile(name: String): Boolean {
         val ext = name.substringAfterLast('.', "").lowercase()
         return ext in videoExtensions
     }
+
+    private fun isAudioFile(name: String): Boolean {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return ext in audioExtensions
+    }
+
+    /** Video o música: lo reproducible por el reproductor. */
+    private fun isMediaFile(name: String): Boolean = isVideoFile(name) || isAudioFile(name)
 
     private fun detectStorageVolumes(): List<StorageVolumeInfo> {
         val result = mutableListOf<StorageVolumeInfo>()
@@ -615,14 +725,14 @@ class FileExplorerActivity : AppCompatActivity() {
             if (child.isDirectory && child.canRead()) {
                 var count = 0
                 child.listFiles()?.let { files ->
-                    count = files.count { !it.isDirectory && isVideoFile(it.name) }
+                    count = files.count { !it.isDirectory && isMediaFile(it.name) }
                 }
                 folders.add(FolderItem(
                     name = child.name.replaceFirstChar { it.uppercase() },
                     path = "fs:${child.absolutePath}",
                     count = count
                 ))
-            } else if (child.isFile && child.canRead() && isVideoFile(child.name)) {
+            } else if (child.isFile && child.canRead() && isMediaFile(child.name)) {
                 val videoUri = FileProvider.getUriForFile(
                     this,
                     "${applicationContext.packageName}.fileprovider",
@@ -636,7 +746,8 @@ class FileExplorerActivity : AppCompatActivity() {
                     durationMs = 0L,
                     folder = child.parentFile?.name ?: "",
                     relativePath = child.absolutePath,
-                    sizeBytes = child.length()
+                    sizeBytes = child.length(),
+                    isAudio = isAudioFile(child.name)
                 ))
             }
         }
@@ -683,7 +794,7 @@ class FileExplorerActivity : AppCompatActivity() {
         // Detección automática: PCs con Windows y NAS, sin escribir IPs.
         folders.add(FolderItem(name = "Red local", path = "__net__", count = 0))
 
-        folders.add(FolderItem(name = "Todos los videos", path = "__all__", count = allVideos.size))
+        folders.add(FolderItem(name = "Videos y música", path = "__all__", count = allVideos.size))
 
         val volumes = detectStorageVolumes()
         for (vol in volumes) {
@@ -728,7 +839,7 @@ class FileExplorerActivity : AppCompatActivity() {
                 if (navStack.last() != "__all__") navStack.add("__all__")
                 currentSubFolders = buildRootFoldersForPath("")
                 currentVideos = allVideos
-                tvPath.text = "Todos los videos"
+                tvPath.text = "Videos y música"
                 btnBack.visibility = View.VISIBLE
                 showVideoGrid()
                 return
@@ -1005,15 +1116,15 @@ class FileExplorerActivity : AppCompatActivity() {
             displayVideos.isEmpty() -> ""
             searchQuery.isNotBlank() ->
                 "${displayVideos.size} resultados · “$searchQuery”"
-            else -> "${displayVideos.size} videos"
+            else -> "${displayVideos.size} archivos"
         }
         tvEmptyContainer.visibility = if (displayVideos.isEmpty()) View.VISIBLE else View.GONE
         if (searchQuery.isNotBlank()) {
             tvEmpty.text = "Sin resultados para '$searchQuery'"
         } else if (navStack.size <= 1) {
-            tvEmpty.text = "No se encontraron videos"
+            tvEmpty.text = "No se encontraron videos ni música"
         } else {
-            tvEmpty.text = "No hay videos en esta carpeta"
+            tvEmpty.text = "No hay videos ni música en esta carpeta"
         }
 
         if (displayVideos.isNotEmpty() && restoreFocus) restoreFocus(rvVideos, keepPos)
@@ -1087,7 +1198,7 @@ class FileExplorerActivity : AppCompatActivity() {
      *  acción directa distinta por pantalla. */
     private fun showTopMenu() {
         val items = arrayOf("Ordenar…", "Cambiar vista", "Buscar", "Gestor copiar/pegar")
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Opciones")
             .setItems(items) { _, which ->
                 when (which) {
@@ -1099,6 +1210,22 @@ class FileExplorerActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancelar", null)
             .show()
+        com.karin.streamtv.util.TvDialogHelper.makeButtonsTvReady(dialog, this)
+    }
+
+    /**
+     * Menú contextual del ítem con foco (reemplazo del long-press táctil
+     * para mando TV: MENU/C/INFO/GUIDE). Devuelve true si había ítem.
+     */
+    private fun showFocusedItemMenu(): Boolean {
+        return try {
+            val target = if (showingFolders) rvFolders else rvVideos
+            val focused = target.focusedChild
+                ?: target.getChildAt(0) ?: return false
+            // Dispara el long-click del ViewHolder (VideoAdapter/FolderAdapter
+            // lo tienen cableado) para reutilizar el mismo menú contextual.
+            focused.performLongClick()
+        } catch (_: Exception) { false }
     }
 
     private fun toggleViewMode() {
@@ -1272,7 +1399,7 @@ class FileExplorerActivity : AppCompatActivity() {
                 currentVideos.isNotEmpty() -> showVideoGrid()
                 else -> {
                     tvEmptyContainer.visibility = View.VISIBLE
-                    tvEmpty.text = "No hay videos ni carpetas aquí"
+                    tvEmpty.text = "No hay videos, música ni carpetas aquí"
                     rvFolders.visibility = View.GONE
                     rvVideos.visibility = View.GONE
                 }
@@ -1298,7 +1425,7 @@ class FileExplorerActivity : AppCompatActivity() {
                 visited++
                 try {
                     if (f.isDirectory) walk(f, depth - 1)
-                    else if (f.isFile && isVideoFile(f.name)) count++
+                    else if (f.isFile && isMediaFile(f.name)) count++
                 } catch (_: Exception) { }
             }
         }
@@ -1332,11 +1459,12 @@ class FileExplorerActivity : AppCompatActivity() {
                 putExtra("video_url", item.uri)
                 putExtra("video_title", item.title)
                 putExtra("referer", "")
+                putExtra("audio_only", item.isAudio)
                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(this, "No se pudo abrir el video", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No se pudo abrir el archivo", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1359,8 +1487,16 @@ class FileExplorerActivity : AppCompatActivity() {
         // MENÚ = opciones (igual que en el gestor), SEARCH = buscar,
         // CH± / L1-R1 = pasar página.
         when (keyCode) {
-            KeyEvent.KEYCODE_MENU -> {
-                if (event?.repeatCount == 0) showTopMenu()
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_C,
+            KeyEvent.KEYCODE_INFO,
+            KeyEvent.KEYCODE_GUIDE -> {
+                // Sobre un ítem: menú contextual del elemento enfocado
+                // (equivale al long-press táctil, imposible con mando).
+                // En la top-bar o lista vacía: menú global.
+                if (event?.repeatCount == 0) {
+                    if (!showFocusedItemMenu()) showTopMenu()
+                }
                 return true
             }
             KeyEvent.KEYCODE_SEARCH -> {

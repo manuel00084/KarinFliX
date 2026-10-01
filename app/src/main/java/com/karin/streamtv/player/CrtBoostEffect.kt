@@ -179,7 +179,7 @@ class CrtBoostShaderProgram(
                     return;
                 }
 
-                vec2 px = vec2(1.0 / uResolution.x, 1.0 / uResolution.y2019);
+                vec2 px = vec2(1.0 / uResolution.x, 1.0 / uResolution.y);
                 vec3 c = texture2D(uTexSampler, tuv).rgb;
                 vec3 cl = texture2D(uTexSampler, tuv + vec2(-px.x, 0.0)).rgb;
                 vec3 cr = texture2D(uTexSampler, tuv + vec2(px.x, 0.0)).rgb;

@@ -3,7 +3,6 @@ package com.karin.streamtv.ui
 import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
@@ -28,7 +27,9 @@ data class VideoItem(
     val durationMs: Long = 0L,
     val folder: String = "",
     val relativePath: String = "",
-    val sizeBytes: Long = 0L
+    val sizeBytes: Long = 0L,
+    /** True si es audio (música): sin miniatura de video, con carátula. */
+    val isAudio: Boolean = false
 )
 
 class VideoAdapter(
@@ -67,7 +68,7 @@ class VideoAdapter(
         private val tvDuration: TextView = view.findViewById(R.id.tv_duration)
 
         fun bind(item: VideoItem) {
-            tvTitle.text = item.title
+            tvTitle.text = if (item.isAudio) "♪ ${item.title}" else item.title
             tvFolder.text = item.folder
             tvDuration.text = formatDuration(item.durationMs)
 
@@ -96,7 +97,22 @@ class VideoAdapter(
             itemView.onActionKey { onItemClick(item) }
         }
 
+        // Miniatura ligera para gama baja: primero la miniatura indexada de
+        // MediaStore (barata), y solo si no hay, un único frame al segundo 1.
+        // Se eliminó el barrido multi-posición + detección de frame negro
+        // (hasta ~10 getFrameAtTime por celda) que provocaba jank en scroll.
         private fun loadThumbnail(item: VideoItem): Bitmap? {
+            // Audio: el id es de MediaStore.Audio (no sirve el banco de
+            // miniaturas de video); se intenta la carátula incrustada.
+            if (item.isAudio) return loadEmbeddedArt(item)
+            if (item.id > 0) {
+                try {
+                    val thumb = MediaStore.Video.Thumbnails.getThumbnail(
+                        cr, item.id, MediaStore.Video.Thumbnails.MINI_KIND, null
+                    )
+                    if (thumb != null) return scaleBitmap(thumb, 320)
+                } catch (_: Exception) {}
+            }
             var pfd: android.os.ParcelFileDescriptor? = null
             val retriever = MediaMetadataRetriever()
             try {
@@ -115,9 +131,9 @@ class VideoAdapter(
                         retriever.setDataSource(item.relativePath)
                     else -> retriever.setDataSource(item.uri)
                 }
-
-                val durationUs = getDurationUs(retriever, item)
-                val frame = extractBestFrame(retriever, durationUs)
+                val frame = retriever.getFrameAtTime(
+                    1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                )
                 if (frame != null) return scaleBitmap(frame, 320)
             } catch (e: Exception) {
                 android.util.Log.e("KarinThumb", "extract failed: ${e.message}")
@@ -125,107 +141,39 @@ class VideoAdapter(
                 try { retriever.release() } catch (_: Exception) {}
                 try { pfd?.close() } catch (_: Exception) {}
             }
-            return try {
-                MediaStore.Video.Thumbnails.getThumbnail(cr, item.id, MediaStore.Video.Thumbnails.MINI_KIND, null)
-            } catch (_: Exception) { null }
-        }
-
-        private fun getDurationUs(retriever: MediaMetadataRetriever, item: VideoItem): Long {
-            try {
-                val dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                if (dur != null) return dur.toLong() * 1000
-            } catch (_: Exception) {}
-            if (item.durationMs > 0) return item.durationMs * 1000
-            return 0L
-        }
-
-        private fun extractBestFrame(retriever: MediaMetadataRetriever, durationUs: Long): Bitmap? {
-            val positions = buildTimePositions(durationUs)
-            for (posUs in positions) {
-                try {
-                    val frame = retriever.getFrameAtTime(posUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                    if (frame != null && !isBlackFrame(frame)) {
-                        return frame
-                    }
-                    frame?.recycle()
-                } catch (_: Exception) {}
-            }
-            for (posUs in positions) {
-                try {
-                    val frame = retriever.getFrameAtTime(posUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    if (frame != null && !isBlackFrame(frame)) {
-                        return frame
-                    }
-                    frame?.recycle()
-                } catch (_: Exception) {}
-            }
-            try {
-                val frame = retriever.getFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST)
-                if (frame != null && !isBlackFrame(frame)) return frame
-                frame?.recycle()
-            } catch (_: Exception) {}
-            try {
-                val frame = retriever.getFrameAtTime(0)
-                if (frame != null && !isBlackFrame(frame)) return frame
-                frame?.recycle()
-            } catch (_: Exception) {}
             return null
         }
 
-        private fun buildTimePositions(durationUs: Long): List<Long> {
-            val positions = mutableListOf<Long>()
-            if (durationUs > 0) {
-                val sec5 = 5_000_000L
-                val sec10 = 10_000_000L
-                val sec30 = 30_000_000L
-                val quarter = durationUs / 4
-                val third = durationUs / 3
-                val half = durationUs / 2
-
-                positions.add(sec5)
-                positions.add(sec10)
-                if (durationUs > sec30) {
-                    positions.add(sec30)
-                    positions.add(quarter)
-                    positions.add(third)
-                    positions.add(half)
-                    positions.add(durationUs - sec10)
-                    positions.add(durationUs - sec5)
-                }
-            } else {
-                positions.add(1_000_000L)
-                positions.add(2_000_000L)
-                positions.add(5_000_000L)
-                positions.add(10_000_000L)
-            }
-            return positions
-        }
-
-        private fun isBlackFrame(bitmap: Bitmap, threshold: Int = 25): Boolean {
-            if (bitmap.width < 4 || bitmap.height < 4) return true
-            val sampleSize = 8
-            val w = bitmap.width / sampleSize
-            val h = bitmap.height / sampleSize
-            if (w < 1 || h < 1) return true
-
-            var totalBrightness = 0L
-            var pixelCount = 0
-            val pixels = IntArray(w * h)
+        /** Carátula incrustada (cover art) de un archivo de audio. */
+        private fun loadEmbeddedArt(item: VideoItem): Bitmap? {
+            var pfd: android.os.ParcelFileDescriptor? = null
+            val retriever = MediaMetadataRetriever()
             try {
-                bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-                for (pixel in pixels) {
-                    val r = Color.red(pixel)
-                    val g = Color.green(pixel)
-                    val b = Color.blue(pixel)
-                    totalBrightness += (r + g + b) / 3
-                    pixelCount++
+                val uri = Uri.parse(item.uri)
+                when {
+                    uri.scheme == "content" -> {
+                        pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                        if (pfd != null) {
+                            retriever.setDataSource(pfd.fileDescriptor)
+                        } else {
+                            retriever.setDataSource(context, uri)
+                        }
+                    }
+                    uri.scheme == "file" -> retriever.setDataSource(uri.path ?: item.relativePath)
+                    item.relativePath.isNotBlank() && item.relativePath.startsWith("/") ->
+                        retriever.setDataSource(item.relativePath)
+                    else -> retriever.setDataSource(item.uri)
                 }
+                val art = retriever.embeddedPicture ?: return null
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(art, 0, art.size)
+                    ?: return null
+                return scaleBitmap(bmp, 320)
             } catch (_: Exception) {
-                return false
+                return null
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+                try { pfd?.close() } catch (_: Exception) {}
             }
-            if (pixelCount == 0) return true
-            val avgBrightness = totalBrightness / pixelCount
-            return avgBrightness < threshold
         }
 
         private fun scaleBitmap(src: Bitmap, maxDim: Int): Bitmap {

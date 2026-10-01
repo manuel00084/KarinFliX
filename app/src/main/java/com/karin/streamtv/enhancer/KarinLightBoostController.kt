@@ -32,6 +32,7 @@ object KarinLightBoostController {
         val cineEn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_CINE_EN, false)
         val colorsEn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_COLORS_EN, false)
         val rangeMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_RANGE_MODE, 0).coerceIn(0, 2)
+        val fakeHdr = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_CINE_FAKEHDR, true)
         if (!cineEn && !colorsEn && rangeMode == 0) return KarinLightBoostParameters(enabled = false)
 
         // Función extra de color: switch independiente, puede ir con luz en 0.
@@ -57,6 +58,7 @@ object KarinLightBoostController {
                 vibrance = 0f,
                 colorStrength = colorStrength,
                 rangeMode = rangeMode,
+                fakeHdr = fakeHdr,
             )
         }
 
@@ -67,6 +69,7 @@ object KarinLightBoostController {
             autoMode = autoMode,
             colorStrength = colorStrength,
             rangeMode = rangeMode,
+            fakeHdr = fakeHdr,
         )
     }
 

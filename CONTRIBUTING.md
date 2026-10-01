@@ -7,7 +7,6 @@
 ### 1. Prerrequisitos
 
 - **Android**: JDK 11+, Android Studio, Android SDK (compileSdk 36)
-- **Backend Python**: Python 3.10+, pip
 - **Git**: Configurado con tu usuario
 
 ### 2. Fork y clone
@@ -48,44 +47,17 @@ Sigue estas convenciones de nombres:
 fun getPlaybackState(): PlaybackState = ...
 ```
 
-#### Python (Backend)
-- PEP 8, 4 espacios de indentación
-- Type hints obligatorios
-- Docstrings en formato Google Style
-
-```python
-def get_device_status(uuid: str) -> DeviceStatus:
-    """Retorna el estado de un dispositivo.
-
-    Args:
-        uuid: UUID del dispositivo.
-
-    Returns:
-        DeviceStatus del dispositivo.
-    """
-```
-
 ### 5. Tests
 
-#### Android
 ```bash
 # Tests unitarios
 ./gradlew test
 
 # Tests de instrumentación
 ./gradlew connectedDebugAndroidTest
-```
 
-#### Python
-```bash
-# Ejecutar todos los tests
-pip install -r karin_link/requirements.txt
-pip install pytest pytest-asyncio httpx
-cd karin_link
-pytest tests/ -v
-
-# Cobertura
-pytest tests/ --cov=karin_link --cov-report=html
+# Solo el protocolo de KARIN Link
+./gradlew :app:testDebugUnitTest --tests "com.karin.streamtv.karinlink.protocol.*"
 ```
 
 ### 6. Commit y PR

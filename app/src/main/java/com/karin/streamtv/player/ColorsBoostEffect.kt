@@ -11,15 +11,15 @@ import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 
 /**
- * Colors Boost: colores mÃ¡s vÃ­vidos con barra de intensidad.
+ * Colors Boost: colores más vívidos con barra de intensidad.
  *
- * Pipeline por pÃ­xel (adaptativo por contenido, sin historial):
- * 1) Mide lo apagado del pÃ­xel, cuida sombras/blancos y detecta piel.
- * 2) SaturaciÃ³n adaptativa: escenas apagadas reciben mÃ¡s, vÃ­vidas casi
- *    nada, piel al mÃ­nimo.
+ * Pipeline por píxel (adaptativo por contenido, sin historial):
+ * 1) Mide lo apagado del píxel, cuida sombras/blancos y detecta piel.
+ * 2) Saturación adaptativa: escenas apagadas reciben más, vívidas casi
+ *    nada, piel al mínimo.
  * 3) Vibrance de remate con la misma respuesta adaptativa.
  *
- * Remate de color al final de la cadena (despuÃ©s de HDR/Cine), antes de
+ * Remate de color al final de la cadena (después de HDR/Cine), antes de
  * MotionX2. Barato: sin taps extra (1 fetch) ni loops. GLES2 compatible.
  */
 class ColorsBoostEffect(

@@ -23,8 +23,16 @@ abstract class ScrollableInfoActivity : AppCompatActivity() {
         scrollView = findViewById(R.id.scroll_view)
         val btnBack = findViewById<TextView>(R.id.btn_back)
 
-        btnBack.setOnClickListener { finish() }
-        btnBack.onActionKey { finish() }
+        // Volver explícito = pantalla vista (RESULT_OK para Onboarding);
+        // BACK del mando = salir sin marcar (RESULT_CANCELED).
+        btnBack.setOnClickListener {
+            setResult(android.app.Activity.RESULT_OK)
+            finish()
+        }
+        btnBack.onActionKey {
+            setResult(android.app.Activity.RESULT_OK)
+            finish()
+        }
 
         if (DeviceUtils.isTvDevice(this)) {
             btnBack.requestFocus()

@@ -2,7 +2,15 @@ package com.karin.streamtv.karinlink
 
 import android.content.Context
 import android.util.Log
-import org.json.JSONObject
+import com.karin.streamtv.karinlink.protocol.Capability
+import com.karin.streamtv.karinlink.protocol.Envelope
+import com.karin.streamtv.karinlink.protocol.PeerInfo
+import com.karin.streamtv.karinlink.protocol.PeerRegistry
+import com.karin.streamtv.karinlink.protocol.str
+import com.karin.streamtv.karinlink.queue.QueueCommands
+import com.karin.streamtv.karinlink.queue.QueueHub
+import com.karin.streamtv.karinlink.queue.QueueProtocol
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Mantiene el servidor Karin Link encendido a nivel de aplicación para que
@@ -16,9 +24,6 @@ import org.json.JSONObject
 object KarinLinkHost {
 
     private const val TAG = "KarinLinkHost"
-    private const val PREFS_NAME = "karin_link"
-    private const val KEY_DEVICE_ID = "device_id"
-    private const val KEY_DEVICE_NAME = "device_name"
 
     @Volatile var isRunning = false
         private set
@@ -26,25 +31,50 @@ object KarinLinkHost {
     private var discovery: DiscoveryManager? = null
     private var appContext: Context? = null
 
-    private val hostListener: (from: String?, type: String, data: JSONObject) -> Unit =
-        { _, type, data ->
-            when {
-                RemoteProtocol.isRemote(type) -> {
-                    appContext?.let { RemoteControlHub.handle(it, type, data) }
-                }
-                // Capítulo compartido para reproducir en este equipo.
-                type == "sync" -> {
-                    appContext?.let { handleSync(it, data) }
-                }
+    /**
+     * One identity for the whole feature.
+     *
+     * This used to read a device id from its own `karin_link` prefs, while
+     * [com.karin.streamtv.karinlink.protocol.PeerRegistry] keeps a different one
+     * in `karin_link_v2`. Two ids for one device means every signature is
+     * derived from the wrong pair and no handshake can ever succeed, so the
+     * registry is now the single source.
+     */
+    private val peerRegistry by lazy { PeerRegistry(appContext!!) }
+
+    private val localPeerInfo: PeerInfo by lazy {
+        PeerInfo(
+            deviceId = peerRegistry.deviceId,
+            deviceName = peerRegistry.deviceName,
+            appVersion = com.karin.streamtv.BuildConfig.VERSION_NAME,
+            capabilities = setOf(Capability.PLAY, Capability.REMOTE)
+        )
+    }
+
+    private val hostListener: (Envelope) -> Unit = { env ->
+        when {
+            RemoteProtocol.isRemote(env.t) -> {
+                appContext?.let { RemoteControlHub.handleJson(it, env.t, env.d) }
+            }
+            // Capítulo compartido para reproducir en este equipo.
+            env.t == "sync" -> {
+                appContext?.let { handleSync(it, env.d) }
+            }
+            // Cola de reproducción: se atiende siempre, haya o no una pantalla
+            // abierta, porque mandar un vídeo con la app en segundo plano es el
+            // caso normal.
+            QueueProtocol.isQueue(env.t) -> {
+                appContext?.let { QueueCommands.handle(it, env.from, env.t, env.d) }
             }
         }
+    }
 
     /**
      * Auto-reproduce un capítulo enviado por otro equipo, aunque la pantalla
      * de Karin Link no esté abierta. Si sí lo está, ella lo gestiona.
      */
-    private fun handleSync(app: Context, data: JSONObject) {
-        val embed = data.optString("embedUrl")
+    private fun handleSync(app: Context, data: JsonObject) {
+        val embed = data.str("embedUrl")
         if (embed.isBlank()) return
         val current = com.karin.streamtv.util.AppActivityHolder.current()
         if (current is KarinLinkActivity) return
@@ -55,12 +85,12 @@ object KarinLinkHost {
             ).apply {
                 flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
                 putExtra("embed_url", embed)
-                putExtra("video_title", data.optString("episodeTitle", ""))
-                putExtra("episode_url", data.optString("episodeUrl", ""))
+                putExtra("video_title", data.str("episodeTitle"))
+                putExtra("episode_url", data.str("episodeUrl"))
                 putExtra("episode_number", 0)
             }
             app.startActivity(intent)
-            Log.i(TAG, "Auto-playing shared episode: ${data.optString("episodeTitle", "")}")
+            Log.i(TAG, "Auto-playing shared episode: ${data.str("episodeTitle")}")
         } catch (e: Exception) {
             Log.w(TAG, "handleSync failed: ${e.message}")
         }
@@ -72,26 +102,29 @@ object KarinLinkHost {
         try {
             val app = ctx.applicationContext
             appContext = app
+            // La cola vive en el proceso, no en una pantalla: tiene que seguir
+            // funcionando con el reproductor delante y la app en segundo plano.
+            QueueHub.attach(app)
+            if (!LinkServer.configure(peerRegistry, localPeerInfo)) {
+                Log.w(TAG, "Host start failed: identity mismatch")
+                return
+            }
             val port = LinkServer.start(0)
             if (port <= 0) {
                 Log.w(TAG, "LinkServer did not bind")
                 return
             }
+            // El host es el camino que sobrevive a que se cierre la pantalla,
+            // así que también es quien expone las carpetas compartidas.
+            LinkServer.filesProvider = { FsStore.config(app) }
+        LinkServer.uploadsProvider = { QueueHub.uploadStore }
             LinkServer.addListener(hostListener)
-            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val deviceId = prefs.getString(KEY_DEVICE_ID, null)
-                ?: java.util.UUID.randomUUID().toString().also {
-                    prefs.edit().putString(KEY_DEVICE_ID, it).apply()
-                }
-            val deviceName = prefs.getString(KEY_DEVICE_NAME, null)
-                ?: android.provider.Settings.Global.getString(app.contentResolver, android.provider.Settings.Global.DEVICE_NAME)
-                ?: "KarinFLiX-$deviceId"
-            discovery = DiscoveryManager(app).also {
-                it.registerService(port, deviceId, deviceName)
+            discovery = DiscoveryManager(app, peerRegistry.deviceId).also {
+                it.registerService(port, localPeerInfo)
                 it.startDiscovery()
             }
             isRunning = true
-            Log.i(TAG, "Host started on port $port as $deviceName")
+            Log.i(TAG, "Host started on port $port as ${localPeerInfo.deviceName}")
         } catch (e: Exception) {
             Log.w(TAG, "Host start failed: ${e.message}")
         }

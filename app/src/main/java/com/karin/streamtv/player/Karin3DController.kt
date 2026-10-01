@@ -12,15 +12,17 @@ import android.content.SharedPreferences
  * - TAB_2D: entrada arriba-abajo (sup/inf) -> 2D (ojo elegido, estirado).
  * - ANAGLYPH: lentes bicolor con 3 variantes ([ANAG_RED_CYAN],
  *   [ANAG_RED_BLUE], [ANAG_RED_GREEN]). Si la entrada ya es estéreo
- *   (SBS/TAB) la combina; si es 2D genera pseudo-3D con [depth].
- * - VR_SBS: con fuente 2D la duplica para visor Cardboard/VR; con
- *   fuente SBS la pasa tal cual (ya es SBS). Sin seguimiento de cabeza:
- *   la misma imagen a ambos ojos.
- * - PULFRICH (homenaje Fabulojos 1997): la profundidad la pone un lente
- *   OSCURO en un ojo (el ojo oscurecido procesa ~1 cuadro más lento y el
- *   movimiento lateral se vuelve profundidad). La app solo prepara la
- *   imagen (realce horizontal sutil); quieto no hay 3D (física, no bug).
- *   Sin lentes se ve normal, como debe ser. Fuente 2D.
+ *   (SBS/TAB) la combina (3D REAL); si es 2D genera pseudo-3D
+ *   EXPERIMENTAL por luma con [depth] (no es profundidad real).
+ * - VR_SBS: COMPATIBILIDAD Cardboard (NO es 3D): con fuente 2D la
+ *   duplica para el visor; con fuente SBS la pasa tal cual.
+ *   Disparidad = 0, sin seguimiento de cabeza.
+ * - PULFRICH TEMPORAL (homenaje Fabulojos 1997 + 3Deeps): retardo REAL
+ *   de 1 cuadro en un ojo (buffer propio). L=actual, R=previo; el
+ *   movimiento lateral se vuelve disparidad anaglifo. En quieto la
+ *   mezcla por movimiento deja la imagen intacta (sin lentes se ve
+ *   normal). depth=0 → 2D puro (modo clásico de lente oscuro físico).
+ *   uSwap elige el ojo retardado.
  *
  * Uso rápido:
  * ```
@@ -57,8 +59,8 @@ object Karin3DController {
         MODE_SBS_2D -> "SBS → 2D"
         MODE_TAB_2D -> "TAB → 2D"
         MODE_ANAGLYPH -> "Anaglifo"
-        MODE_VR_SBS -> "VR (Cardboard)"
-        MODE_PULFRICH -> "Pulfrich"
+        MODE_VR_SBS -> "VR duplicado (sin profundidad)"
+        MODE_PULFRICH -> "Pulfrich temporal"
         else -> "Off"
     }
 
@@ -113,7 +115,7 @@ object Karin3DController {
     fun currentDepth(prefs: SharedPreferences): Float =
         (prefs.getInt(ExoPlayerSettingsHelper.KEY_3D_DEPTH, DEFAULT_DEPTH) / 100f).coerceIn(0f, 1f)
 
-    /** true = ojo derecho; false = contrario. (En Pulfrich el swap no aplica.) */
+    /** true = ojo derecho retardado (Pulfrich) / ojo elegido; false = contrario. */
     fun isSwapEye(prefs: SharedPreferences): Boolean =
         prefs.getBoolean(ExoPlayerSettingsHelper.KEY_3D_SWAP, false)
 
@@ -145,10 +147,11 @@ object Karin3DController {
         if (m == MODE_ANAGLYPH) {
             label += "[${inputName(inputKind(prefs))}]"
         }
-        // El swap invierte ojos en SBS→2D, TAB→2D y en anaglifo con
-        // fuente estéreo (fetchStereo lo usa); en VR/Pulfrich no aplica.
+        // El swap invierte ojos en SBS→2D, TAB→2D, anaglifo estéreo y
+        // Pulfrich temporal (elige el ojo retardado); en VR no aplica.
         val swapApplies = m == MODE_SBS_2D || m == MODE_TAB_2D ||
-            (m == MODE_ANAGLYPH && inputKind(prefs) != INPUT_2D)
+            (m == MODE_ANAGLYPH && inputKind(prefs) != INPUT_2D) ||
+            m == MODE_PULFRICH
         if (isSwapEye(prefs) && swapApplies) label += "(swap)"
         return label
     }
@@ -165,11 +168,12 @@ object Karin3DController {
      *
      * - B/N + anaglifo = MUERTO: el anaglifo codifica la disparidad en los
      *   canales de color (R vs GB/B/G). Sin color no hay separación.
-     * - MotionX2(BLEND/HYBRID) + PULFRICH = MUERTO: la mezcla temporal
-     *   destruye el retardo entre ojos del que vive el efecto (lo aplana
-     *   a 2D). DOUBLING es no-op (seguro).
-     * - PULFRICH necesita lente oscuro en un ojo + movimiento lateral;
-     *   quieto no hay 3D (física). Funciona en B/N y le sienta bien Light.
+      * - MotionX2(BLEND/HYBRID) + PULFRICH = MUERTO: la mezcla temporal
+      *   previa aplana la diferencia entre cuadros de la que vive el
+      *   retardo de 1 cuadro (lo deja en 2D). DOUBLING es no-op (seguro).
+      * - PULFRICH necesita movimiento lateral; quieto no hay 3D (física:
+      *   L≈R → mezcla intacta). Funciona en B/N y le sienta bien Light.
+      *   depth=0 → 2D puro (lente oscuro físico clásico).
      * - Upscaler + fuente SBS/TAB = COSTURA CONTAMINADA: el FSR/Anime4K
      *   reescala el cuadro SBS completo y su kernel mezcla píxeles de ambos
      *   ojos en la columna central (halo + fuga entre ojos).
@@ -226,7 +230,7 @@ object Karin3DController {
             out += "⚠ CRT + VR: la curvatura se aplica al cuadro completo, no por ojo. Mejor apaga el Shader CRT."
         }
         if (mode == MODE_PULFRICH) {
-            out += "ℹ Pulfrich: ponte un lente oscuro en un ojo (Fabulojos/gafa de sol) y busca escenas con movimiento lateral. Quieto no hay 3D."
+            out += "ℹ Pulfrich temporal: retardo real de 1 cuadro (L=actual, R=previo). Busca movimiento lateral con lentes bicolor; en quieto se ve normal. depth=0 → 2D puro para lente oscuro físico."
         }
         return out
     }

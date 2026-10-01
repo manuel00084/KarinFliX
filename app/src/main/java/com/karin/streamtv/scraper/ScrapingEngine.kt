@@ -32,6 +32,9 @@ object ScrapingEngine {
     var memCacheTtlMs: Long = 15 * 60 * 1000L
     var diskCacheTtlMs: Long = 6 * 60 * 60 * 1000L
     var staleCacheMaxTtlMs: Long = 14L * 24 * 60 * 60 * 1000L
+    // La página renderizada por WebView es dinámica (hidrata con JS tras el
+    // onPageFinished): caduca rápido para no re-servir HTML obsoleto.
+    var renderedCacheTtlMs: Long = 5 * 60 * 1000L
     var diskCacheMaxBytes: Long = 20L * 1024 * 1024
     var maxConcurrentRequests: Int = 8
     var circuitBreakerThreshold: Int = 3
@@ -94,6 +97,10 @@ object ScrapingEngine {
     /** Returns the UA string that must be used for an already-CF-locked [host], or null if unlocked. */
     fun getLockedUa(host: String): String? = cfLockedHosts[host].also {
         if (it != null) Log.d(TAG, "Using CF-locked UA for host=$host")
+    }
+
+    private fun resolveProfile(host: String): BrowserProfile {
+        return if (cfLockedHosts.containsKey(host)) cfLockedProfile else nextBrowserProfile()
     }
 
     // Fixed mobile Android Chrome/131 profile shared by the CF WebView and every retry to a
@@ -183,11 +190,11 @@ object ScrapingEngine {
         }
     }
 
-    private fun diskGet(key: String, allowStale: Boolean = false): String? {
+    private fun diskGet(key: String, allowStale: Boolean = false, ttlMs: Long = diskCacheTtlMs): String? {
         val file = diskCacheFile(key) ?: return null
         if (!file.exists()) return null
         val ageMs = System.currentTimeMillis() - file.lastModified()
-        if (!allowStale && ageMs > diskCacheTtlMs) {
+        if (!allowStale && ageMs > ttlMs) {
             file.delete()
             return null
         }
@@ -234,6 +241,26 @@ object ScrapingEngine {
 
     // region --- Concurrent Request Limiter ---
     private val concurrencySemaphore = Semaphore(maxConcurrentRequests)
+    private var concurrencyPermits = maxConcurrentRequests
+
+    /**
+     * Ultra económico: baja las descargas simultáneas (listas más lentas,
+     * picos menores de CPU/red). Valor normal: 8.
+     */
+    fun setMaxConcurrent(n: Int) {
+        val target = n.coerceIn(1, 16)
+        if (target == concurrencyPermits) return
+        try {
+            if (target > concurrencyPermits) {
+                repeat(target - concurrencyPermits) { concurrencySemaphore.release() }
+            } else {
+                // Encoger sin bloquear: solo los permisos libres se retiran.
+                repeat(concurrencyPermits - target) { concurrencySemaphore.tryAcquire() }
+            }
+            concurrencyPermits = target
+            maxConcurrentRequests = target
+        } catch (_: Exception) { }
+    }
 
     private suspend fun <T> withConcurrencyLimit(block: suspend () -> T): T {
         val acquired = try {
@@ -504,7 +531,7 @@ object ScrapingEngine {
         } catch (_: Exception) { url }
 
         val host = hostOf(url)
-        val profile = if (cfLockedHosts.containsKey(host)) cfLockedProfile else nextBrowserProfile()
+        val profile = resolveProfile(host)
 
         val requestBuilder = Request.Builder()
             .url(url)
@@ -558,7 +585,7 @@ object ScrapingEngine {
                         val uri = java.net.URI(url)
                         "${uri.scheme}://${uri.host}/"
                     } catch (_: Exception) { url }
-val profile = if (cfLockedHosts.containsKey(hostOf(url))) cfLockedProfile else nextBrowserProfile()
+val profile = resolveProfile(hostOf(url))
 
                     val formBody = FormBody.Builder().apply {
                         for ((k, v) in form) add(k, v)

@@ -18,7 +18,10 @@ data class FileEntry(
     val storagePrimary: Boolean = false,
     val remote: RemoteRef? = null,
     val smb: SmbRef? = null,
-    val isAnimeBadge: Boolean = false
+    val isAnimeBadge: Boolean = false,
+    /** Entrada virtual ".." para retroceder a la carpeta superior (como en
+     *  Kodi). No se puede seleccionar, copiar ni borrar. */
+    val isParentMarker: Boolean = false
 ) {
 
     val name: String get() = customName ?: file.name.ifEmpty { file.absolutePath }

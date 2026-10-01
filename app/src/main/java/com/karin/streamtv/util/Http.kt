@@ -7,6 +7,7 @@ import okhttp3.ConnectionPool
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
@@ -145,6 +146,55 @@ object Http {
 
         private fun Cookie.hasExpired(): Boolean {
             return expiresAt > 0 && System.currentTimeMillis() > expiresAt
+        }
+
+        /**
+         * Stores a raw `name=value; name2=value2` cookie header (as returned by
+         * WebView's CookieManager after a sign-in flow) for a given host. Used to
+         * hand a session captured in the WebView over to the OkHttp scraper client.
+         */
+        fun saveFromHeader(host: String, cookieHeader: String) {
+            val names = mutableSetOf<String>()
+            val cookies = mutableListOf<Cookie>()
+            val now = System.currentTimeMillis()
+            for (section in cookieHeader.split(";")) {
+                val eq = section.indexOf('=')
+                if (eq <= 0) continue
+                val name = section.substring(0, eq).trim()
+                val value = section.substring(eq + 1).trim()
+                if (name.isEmpty() || value.isEmpty() || !names.add(name)) continue
+                try {
+                    cookies.add(
+                        Cookie.Builder()
+                            .name(name)
+                            .value(value)
+                            .domain(host)
+                            .path("/")
+                            .expiresAt(now + 365L * 24 * 60 * 60 * 1000)
+                            .httpOnly()
+                            .build()
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping invalid cookie $name: ${e.message}")
+                }
+            }
+            if (cookies.isEmpty()) return
+            // OkHttp only delivers cookies that match the request host.
+            saveFromResponse("https://$host".toHttpUrl(), cookies)
+        }
+
+        /** Returns the names of the cookies currently stored for [host]. */
+        fun getCookieNames(host: String): Set<String> =
+            (cookieStore[host] ?: emptyList()).map { it.name }.toSet()
+
+        /** Returns the value of a single cookie ([name]) stored for [host], or null. */
+        fun getCookieValue(host: String, name: String): String? =
+            (cookieStore[host] ?: emptyList()).firstOrNull { it.name == name }?.value
+
+        /** Removes all stored cookies for [host] (used when signing out). */
+        fun clearHost(host: String) {
+            cookieStore.remove(host)
+            prefs.edit().remove("cookies_${host.replace(".", "_")}").apply()
         }
     }
 }

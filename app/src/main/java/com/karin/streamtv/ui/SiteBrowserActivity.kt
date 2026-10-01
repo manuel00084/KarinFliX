@@ -31,12 +31,14 @@ import com.karin.streamtv.scraper.ScrapingEngine
 import com.karin.streamtv.scraper.ScraperRegistry
 import com.karin.streamtv.scraper.ServerExtractor
 import com.karin.streamtv.util.DeviceUtils
+import com.karin.streamtv.util.enableTvFocus
 import com.karin.streamtv.model.VideoSource
 import com.karin.streamtv.util.ServerHelper
 import com.karin.streamtv.util.onActionKey
 import kotlinx.coroutines.Dispatchers
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -106,6 +108,7 @@ class SiteBrowserActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_site_browser)
+        try { enableTvFocus() } catch (_: Exception) { }
 
 
         siteName = intent.getStringExtra("site_name") ?: ""
@@ -185,14 +188,18 @@ filterBar = findViewById(R.id.filter_bar)
             etSearch.isFocusableInTouchMode = false
             // Configurar foco para TV
             rvEpisodes.isFocusable = true
-            rvEpisodes.isFocusableInTouchMode = true
+            rvEpisodes.isFocusableInTouchMode = false
             rvEpisodes.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
             // Solicitar foco inicial al RecyclerView cuando se carguen los datos
-            rvEpisodes.setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus) {
+            // (solo si el RV ya tiene el foco: evita bucle/parpadeo al volver
+            // de otra vista, que antes re-pedía foco en cada hasFocus).
+            rvEpisodes.setOnFocusChangeListener { v, hasFocus ->
+                if (hasFocus && v.hasFocus()) {
                     rvEpisodes.post {
-                        val firstChild = rvEpisodes.getChildAt(0)
-                        firstChild?.requestFocus()
+                        val focused = rvEpisodes.focusedChild
+                        if (focused == null) {
+                            rvEpisodes.getChildAt(0)?.requestFocus()
+                        }
                     }
                 }
             }
@@ -200,8 +207,9 @@ filterBar = findViewById(R.id.filter_bar)
             rvEpisodes.setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
                     val firstVisible = (rvEpisodes.layoutManager as GridLayoutManager).findFirstVisibleItemPosition()
-                    if (firstVisible == 0) {
-                        btnSettings.requestFocus()
+                    if (firstVisible <= 0) {
+                        // Volver a la búsqueda si está visible; si no, a ajustes.
+                        if (!etSearch.requestFocus()) btnSettings.requestFocus()
                         return@setOnKeyListener true
                     }
                 }
@@ -1412,7 +1420,9 @@ gridIsCatalog = false
     }
 
     private fun showServerSelectionDialog(servers: List<VideoSource>, title: String, episodeUrl: String) {
-        val sorted = servers.sortedByDescending { it.speedRating }
+        val sorted = servers.toMutableList()
+        val resolutionLabels = java.util.concurrent.ConcurrentHashMap<String, String>()
+        sortServersForDialog(sorted, resolutionLabels)
 
         val view = layoutInflater.inflate(R.layout.dialog_servers, null)
         val listView = view.findViewById<android.widget.ListView>(R.id.lv_servers)
@@ -1422,8 +1432,8 @@ gridIsCatalog = false
         val btnEpisodeList = view.findViewById<TextView>(R.id.btn_episode_list)
         tvDialogTitle.text = title
 
-        val resolutionLabels = java.util.concurrent.ConcurrentHashMap<String, String>()
-        listView.adapter = ServerAdapter(sorted, title, resolutionLabels)
+        val adapter = ServerAdapter(sorted, title, resolutionLabels)
+        listView.adapter = adapter
 
         var dialog: android.app.AlertDialog? = null
 
@@ -1487,15 +1497,41 @@ gridIsCatalog = false
         }
     }
 
+    /**
+     * Orden de servidores del diálogo. En ultra económico van primero los de
+     * resolución conocida ≤480p (ahorran decodificación); los desconocidos al
+     * medio y el resto por velocidad. Sin ultra, solo por velocidad.
+     */
+    private fun sortServersForDialog(
+        list: MutableList<VideoSource>,
+        labels: Map<String, String>
+    ) {
+        if (com.karin.streamtv.util.AppPreferences.isUltraEconomyMode()) {
+            list.sortWith(
+                compareBy<VideoSource> { serverResRank(labels[it.serverUrl]) }
+                    .thenByDescending { it.speedRating }
+            )
+        } else {
+            list.sortByDescending { it.speedRating }
+        }
+    }
+
+    private fun serverResRank(label: String?): Int {
+        if (label.isNullOrBlank()) return 1
+        val h = Regex("(\\d{3,4})").find(label)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: return 1
+        return if (h <= 480) 0 else 2
+    }
+
     private fun detectServerResolutions(
-        servers: List<VideoSource>,
+        servers: MutableList<VideoSource>,
         container: ViewGroup,
         adapter: android.widget.BaseAdapter,
         labels: java.util.concurrent.ConcurrentHashMap<String, String>
     ) {
         val semaphore = java.util.concurrent.Semaphore(3)
         lifecycleScope.launch {
-            servers.forEach { server ->
+            val jobs = servers.map { server ->
                 launch(Dispatchers.IO) {
                     semaphore.acquire()
                     try {
@@ -1509,6 +1545,15 @@ gridIsCatalog = false
                     } finally {
                         semaphore.release()
                     }
+                }
+            }
+            jobs.joinAll()
+            // Con las resoluciones ya detectadas, en ultra se reordena para
+            // dejar arriba los servidores ≤480p.
+            if (com.karin.streamtv.util.AppPreferences.isUltraEconomyMode()) {
+                runOnUiThread {
+                    sortServersForDialog(servers, labels)
+                    adapter.notifyDataSetChanged()
                 }
             }
         }

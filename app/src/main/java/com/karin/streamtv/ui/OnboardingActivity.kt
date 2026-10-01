@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.widget.CheckBox
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.karin.streamtv.R
 import com.karin.streamtv.util.AppPreferences
@@ -32,6 +33,13 @@ class OnboardingActivity : AppCompatActivity() {
         cbTerms = findViewById(R.id.cb_terms)
         cbTutorial = findViewById(R.id.cb_tutorial)
 
+        // Ultra económico: sin fondo grande, color plano (menos memoria).
+        if (AppPreferences.isUltraEconomyMode()) {
+            try {
+                findViewById<android.view.View>(R.id.bg_art)?.visibility = android.view.View.GONE
+            } catch (_: Exception) { }
+        }
+
         findViewById<TextView>(R.id.btn_view_terms).apply {
             setOnClickListener { openTerms() }
             onActionKey { openTerms() }
@@ -58,11 +66,19 @@ class OnboardingActivity : AppCompatActivity() {
     }
 
     private fun openTerms() {
-        startActivityForResult(Intent(this, TermsAndConditionsActivity::class.java), REQ_TERMS)
+        try {
+            startActivityForResult(Intent(this, TermsAndConditionsActivity::class.java), REQ_TERMS)
+        } catch (e: Exception) {
+            Toast.makeText(this, "No se pudo abrir los términos", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun openTutorial() {
-        startActivityForResult(Intent(this, TutorialActivity::class.java), REQ_TUTORIAL)
+        try {
+            startActivityForResult(Intent(this, TutorialActivity::class.java), REQ_TUTORIAL)
+        } catch (e: Exception) {
+            Toast.makeText(this, "No se pudo abrir el tutorial", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun updateAcceptState() {
@@ -85,6 +101,9 @@ class OnboardingActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        // Solo cuenta como leído si la pantalla se completó (RESULT_OK):
+        // BACK o un fallo no deben desbloquear el gate.
+        if (resultCode != android.app.Activity.RESULT_OK) return
         when (requestCode) {
             REQ_TERMS -> {
                 termsRead = true

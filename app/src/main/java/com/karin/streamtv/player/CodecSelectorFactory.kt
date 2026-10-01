@@ -32,6 +32,36 @@ object CodecSelectorFactory {
             .setMediaCodecSelector(selector())
     }
 
+    /**
+     * Variante ultra económica para música: sin DSP propio y con offload
+     * pedido al chip de audio (si el equipo/formato no lo soporta, el sink
+     * vuelve solo a decodificación normal).
+     */
+    fun renderersFactoryOffload(context: Context): DefaultRenderersFactory {
+        return object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): androidx.media3.exoplayer.audio.AudioSink? {
+                return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(false)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .build()
+                    .also {
+                        try {
+                            it.setOffloadMode(
+                                androidx.media3.exoplayer.audio.AudioSink
+                                    .OFFLOAD_MODE_ENABLED_GAPLESS_NOT_REQUIRED
+                            )
+                        } catch (_: Exception) {
+                        }
+                    }
+            }
+        }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setMediaCodecSelector(selector())
+    }
+
     /** Subclase de media3 para inyectar AudioProcessors propios al AudioSink. */
     class KarinAudioRenderersFactory(
         context: Context,
@@ -58,14 +88,34 @@ object CodecSelectorFactory {
         }
     }
 
+    /** Consulta con un reintento: la lista de MediaCodec a veces falla de forma
+     *  transitoria y devolver vacío cierra el reproductor sin motivo. */
+    private fun queryWithRetry(
+        mimeType: String,
+        secure: Boolean,
+        tunneling: Boolean,
+    ): List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> {
+        try {
+            return MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling)
+        } catch (e: MediaCodecUtil.DecoderQueryException) {
+            Log.w(TAG, "query falló, reintentando: $mimeType (${e.message})")
+        }
+        try {
+            Thread.sleep(200)
+        } catch (_: InterruptedException) {
+        }
+        return try {
+            MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling)
+        } catch (e2: MediaCodecUtil.DecoderQueryException) {
+            Log.e(TAG, "query falló 2 veces, lista vacía: $mimeType (${e2.message})")
+            emptyList()
+        }
+    }
+
     private fun swGoogleSelector(): MediaCodecSelector {
         return MediaCodecSelector { mimeType, secure, tunneling ->
             try {
-                val all = try {
-                    MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling)
-                } catch (e: MediaCodecUtil.DecoderQueryException) {
-                    emptyList()
-                }
+                val all = queryWithRetry(mimeType, secure, tunneling)
                 val sw = all.filter { isGoogleSoftware(it) }
                 if (sw.isNotEmpty()) sw else all
             } catch (e: Throwable) {
@@ -83,11 +133,7 @@ object CodecSelectorFactory {
     private fun autoSelector(): MediaCodecSelector {
         return MediaCodecSelector { mimeType, secure, tunneling ->
             try {
-                val all = try {
-                    MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling)
-                } catch (e: MediaCodecUtil.DecoderQueryException) {
-                    emptyList()
-                }
+                val all = queryWithRetry(mimeType, secure, tunneling)
                 val hw = all.filter { !it.softwareOnly }
                 if (hw.isNotEmpty()) hw else all
             } catch (e: Throwable) {

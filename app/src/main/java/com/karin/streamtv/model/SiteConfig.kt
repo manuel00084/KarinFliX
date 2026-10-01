@@ -8,5 +8,7 @@ data class SiteConfig(
     val url: String,
     val icon: String = name.firstOrNull()?.uppercase() ?: "?",
     val isActive: Boolean = true,
-    val lastVisited: Long = System.currentTimeMillis()
+    val lastVisited: Long = System.currentTimeMillis(),
+    /** true = página temporal: vive solo en memoria, no se guarda en disco. */
+    val isTemporary: Boolean = false
 )

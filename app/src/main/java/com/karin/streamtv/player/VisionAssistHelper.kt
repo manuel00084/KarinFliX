@@ -16,8 +16,7 @@ import android.widget.Toast
 import com.karin.streamtv.R
 import androidx.appcompat.app.AlertDialog
 import androidx.media3.exoplayer.ExoPlayer
-import com.karin.streamtv.player.dsp.AudioEnhanceConfig
-import com.karin.streamtv.player.dsp.audiophile.AudiophileConfig
+import com.karin.streamtv.player.dsp.smartlite.SmartLiteConfig
 
 /**
  * KARINFLIX VISION ASSIST: prefs + diálogo del botón de anteojos.
@@ -290,8 +289,6 @@ object VisionAssistHelper {
                 }
             }
             ed.apply()
-            AudioEnhanceConfig.setAudSpeech(initAudSpeech)
-            AudioEnhanceConfig.setAudLoss(initAudLoss)
         }
 
         fun pct(v: Float) = "Intensidad: ${(v * 100).toInt()}%"
@@ -663,11 +660,14 @@ object VisionAssistHelper {
         }
 
         val needBox = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        // TV/D-pad: el foco inicial va a la primera necesidad, no a Cerrar.
+        var firstNeedBox: CheckBox? = null
         needNames.forEachIndexed { i, name ->
             val cb = CheckBox(activity).apply {
                 text = name
                 isChecked = pendingMask and needFlag[i] != 0
             }
+            if (firstNeedBox == null) firstNeedBox = cb
             val sub = TextView(activity).apply {
                 text = needDescs[i]
                 textSize = 12f
@@ -713,14 +713,8 @@ object VisionAssistHelper {
                     audLossSeek.progress = 60
                     audLossLabelFn()
                 }
-                // Audición en vivo: el DSP lo lee del hilo de audio en el
-                // siguiente buffer (~ms). Al desmarcar se apaga en vivo.
-                if (needFlag[i] == VisionAssistSettings.FLAG_SPEECH) {
-                    AudioEnhanceConfig.setAudSpeech(if (isChecked) cfg.audSpeech else 0f)
-                }
-                if (needFlag[i] == VisionAssistSettings.FLAG_HEARING_LOSS) {
-                    AudioEnhanceConfig.setAudLoss(if (isChecked) cfg.audLoss else 0f)
-                }
+                // La audición en vivo vivía en el DSP antiguo (eliminado): los
+                // valores se guardan en ajustes para la futura migración.
                 updateSubVisibility()
                 // Monta/desmonta el efecto al momento: la primera activación
                 // ya se ve sin esperar a Aplicar (con OSD de confirmación).
@@ -904,8 +898,6 @@ object VisionAssistHelper {
                 if (!fromUser) return
                 cfg = cfg.copy(audSpeech = progress / 100f)
                 audSpeechLabelFn()
-                // En vivo al DSP (se guarda definitivo al confirmar).
-                AudioEnhanceConfig.setAudSpeech(cfg.audSpeech)
                 refreshWarningsFn()
             }
 
@@ -917,8 +909,6 @@ object VisionAssistHelper {
                 if (!fromUser) return
                 cfg = cfg.copy(audLoss = progress / 100f)
                 audLossLabelFn()
-                // En vivo al DSP (se guarda definitivo al confirmar).
-                AudioEnhanceConfig.setAudLoss(cfg.audLoss)
                 refreshWarningsFn()
             }
 
@@ -927,26 +917,18 @@ object VisionAssistHelper {
         })
 
         // ---- Avisos con arreglo en un toque ----
-        // ¿La audición pedida suena de verdad? (mismo criterio que el OSD de
-        // ExoPlayerActivity: motor CURRENT + DSP habilitado + preset no OFF).
+        // La asistencia de audición vivía en el DSP antiguo (eliminado): por
+        // ahora solo se avisa que está pendiente de migrar a SmartLite.
         fun hearingProblem(): String? {
             val wantsHearing =
                 (pendingMask and VisionAssistSettings.FLAG_SPEECH != 0 && cfg.audSpeech > 0f) ||
                     (pendingMask and VisionAssistSettings.FLAG_HEARING_LOSS != 0 && cfg.audLoss > 0f)
             if (!wantsHearing) return null
-            val eng = try { AudiophileConfig.engine() } catch (_: Exception) {
-                AudiophileConfig.Engine.CURRENT
+            val eng = try { SmartLiteConfig.engine() } catch (_: Exception) {
+                SmartLiteConfig.Engine.SMART_LITE
             }
-            if (eng == AudiophileConfig.Engine.OFF) return "motor de sonido en OFF"
-            if (eng == AudiophileConfig.Engine.AUDIOPHILE) {
-                return "motor Audiophile experimental (no aplica esta asistencia)"
-            }
-            if (!AudioEnhanceConfig.isEnabled() ||
-                AudioEnhanceConfig.preset() == AudioEnhanceConfig.Preset.OFF
-            ) {
-                return "DSP apagado (perfil Apagado)"
-            }
-            return null
+            if (eng == SmartLiteConfig.Engine.OFF) return "motor de sonido en OFF"
+            return "asistencia de audición pendiente de migrar a SmartLite"
         }
         val warnBox = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -964,20 +946,6 @@ object VisionAssistHelper {
             motionWarn.visibility = View.GONE
         }
         warnBox.addView(dspWarn)
-        val btnFixDsp = Button(activity).apply {
-            text = "Activar DSP actual (para la audición)"
-            visibility = View.GONE
-            setOnClickListener {
-                AudiophileConfig.setEngine(AudiophileConfig.Engine.CURRENT)
-                AudioEnhanceConfig.setEnabled(true)
-                if (AudioEnhanceConfig.preset() == AudioEnhanceConfig.Preset.OFF) {
-                    AudioEnhanceConfig.applyPreset(AudioEnhanceConfig.Preset.ANIME)
-                }
-                refreshWarningsFn()
-                Toast.makeText(activity, "DSP actual activado: la audición ya suena", Toast.LENGTH_SHORT).show()
-            }
-        }
-        warnBox.addView(btnFixDsp)
         // Salir del render propio requiere recrear la actividad: se guarda,
         // se cierra el diálogo y se reconstruye (el OSD lo confirma).
         var dismissFn: () -> Unit = {}
@@ -1005,10 +973,8 @@ object VisionAssistHelper {
             if (problem != null) {
                 dspWarn.text = "⚠ Audición sin efecto: $problem."
                 dspWarn.visibility = View.VISIBLE
-                btnFixDsp.visibility = View.VISIBLE
             } else {
                 dspWarn.visibility = View.GONE
-                btnFixDsp.visibility = View.GONE
             }
             warnBox.visibility =
                 if (motionWarn.visibility == View.VISIBLE || dspWarn.visibility == View.VISIBLE) {
@@ -1115,11 +1081,6 @@ object VisionAssistHelper {
                     audLoss = if (pendingMask and VisionAssistSettings.FLAG_HEARING_LOSS != 0) cfg.audLoss else 0f,
                 )
                 saveInto(prefs, finalCfg)
-                // Audición → DSP de audio (effectiveParams() la superpone al
-                // preset activo y el hilo de audio reconfigura al detectar el
-                // cambio). El OSD confirma la cadena real al reconstruir.
-                AudioEnhanceConfig.setAudSpeech(finalCfg.audSpeech)
-                AudioEnhanceConfig.setAudLoss(finalCfg.audLoss)
                 mountedVision = finalCfg.isActive && finalCfg.hasVision && !ownRenderNow
                 player?.let { onEffectsChanged(it) }
             }
@@ -1132,6 +1093,7 @@ object VisionAssistHelper {
             }
             .create()
         dismissFn = { dlg.dismiss() }
+        dlg.setOnShowListener { firstNeedBox?.requestFocus() }
         dlg.show()
     }
 }

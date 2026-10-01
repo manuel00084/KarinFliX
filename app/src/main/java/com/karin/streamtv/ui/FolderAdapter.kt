@@ -45,11 +45,26 @@ class FolderAdapter(
 
         fun bind(item: FolderItem) {
             tvName.text = item.name
-            tvPath.text = item.path
-            tvCount.text = item.count.toString()
+            tvPath.text = friendlyPath(item.path)
+            tvCount.text = if (item.count > 0) item.count.toString() else ""
+            tvPath.visibility = if (tvPath.text.isBlank()) View.GONE else View.VISIBLE
 
             itemView.setOnClickListener { onItemClick(item) }
             itemView.onActionKey { onItemClick(item) }
+        }
+
+        // No exponer prefijos internos (fs:/storage/..., __net_host__:ip) en
+        // una UI de TV con mando. (Las rutas de red/nube manuales se
+        // eliminaron con la función Añadir; la red ahora es automática.)
+        private fun friendlyPath(path: String): String {
+            return when {
+                path == "__all__" || path == "__net__" || path == "__net_rescan__" ||
+                    path.startsWith("__videos") || path.startsWith("__all_in") -> ""
+                path.startsWith("__net_host__:") ->
+                    path.removePrefix("__net_host__:").substringBeforeLast(":")
+                path.startsWith("fs:") -> path.removePrefix("fs:")
+                else -> path
+            }
         }
     }
 }

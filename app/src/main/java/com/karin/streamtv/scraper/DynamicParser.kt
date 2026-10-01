@@ -405,6 +405,14 @@ object DynamicParser {
                 return lc
             }
         }
+        // Pandrama: SPA con datos en `window.bootstrapData` (sin tarjetas HTML).
+        if (siteName.equals("Pandrama", ignoreCase = true)) {
+            val pd = PandramaScraper.parseHomeTitles(doc)
+            if (pd.isNotEmpty()) {
+                Log.i(TAG, "Pandrama parsing: ${pd.size} titles")
+                return pd
+            }
+        }
         val cards = findCards(doc, minCards)
         val episodes = cards.mapNotNull { card ->
             try {
@@ -647,6 +655,43 @@ object DynamicParser {
                     coverUrl = findSeriesCover(doc),
                     description = LaCartoonsScraper.fetchSeriesDescription(doc).ifBlank { findDescription(doc) },
                     episodes = lcEpisodes
+                )
+            }
+        }
+        // AnimeFLV (.one): la ficha lista los capítulos en JS
+        // (`var eps` + `data-sl`).
+        if (siteName.equals("AnimeFLV", ignoreCase = true)) {
+            val flvEpisodes = AnimeFlvScraper.fetchSeriesEpisodes(doc, baseUrl, siteName)
+            if (flvEpisodes.isNotEmpty()) {
+                return SeriesPage(
+                    title = findSeriesTitle(doc),
+                    coverUrl = findSeriesCover(doc),
+                    description = findDescription(doc),
+                    episodes = flvEpisodes
+                )
+            }
+        }
+        // DonghuaLife: /series/ agrega temporadas, /season/ tabla directa.
+        if (siteName.equals("DonghuaLife", ignoreCase = true)) {
+            val dlEpisodes = DonghuaLifeScraper.fetchSeriesEpisodes(doc, baseUrl, siteName)
+            if (dlEpisodes.isNotEmpty()) {
+                return SeriesPage(
+                    title = findSeriesTitle(doc),
+                    coverUrl = findSeriesCover(doc),
+                    description = findDescription(doc),
+                    episodes = dlEpisodes
+                )
+            }
+        }
+        // Pandrama: ficha /titulo/id/slug (episodios en bootstrap JSON).
+        if (siteName.equals("Pandrama", ignoreCase = true)) {
+            val pdEpisodes = PandramaScraper.fetchSeriesEpisodes(doc, baseUrl, siteName)
+            if (pdEpisodes.isNotEmpty()) {
+                return SeriesPage(
+                    title = findSeriesTitle(doc),
+                    coverUrl = findSeriesCover(doc),
+                    description = findDescription(doc),
+                    episodes = pdEpisodes
                 )
             }
         }

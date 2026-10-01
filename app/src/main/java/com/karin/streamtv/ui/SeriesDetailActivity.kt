@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -329,7 +330,9 @@ class SeriesDetailActivity : AppCompatActivity() {
     }
 
     private fun showServerSelectionDialog(servers: List<VideoSource>, title: String, episodeUrl: String) {
-        val sorted = servers.sortedByDescending { it.speedRating }
+        val sorted = servers.toMutableList()
+        val resolutionLabels = java.util.concurrent.ConcurrentHashMap<String, String>()
+        sortServersForDialog(sorted, resolutionLabels)
 
         val view = layoutInflater.inflate(R.layout.dialog_servers, null)
         val listView = view.findViewById<android.widget.ListView>(R.id.lv_servers)
@@ -339,7 +342,6 @@ class SeriesDetailActivity : AppCompatActivity() {
         val btnEpisodeList = view.findViewById<TextView>(R.id.btn_episode_list)
         tvDialogTitle.text = title
 
-        val resolutionLabels = java.util.concurrent.ConcurrentHashMap<String, String>()
         val adapter = ServerAdapter(sorted, title, resolutionLabels)
         listView.adapter = adapter
 
@@ -405,15 +407,41 @@ class SeriesDetailActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Orden de servidores del diálogo. En ultra económico van primero los de
+     * resolución conocida ≤480p (ahorran decodificación); los desconocidos al
+     * medio y el resto por velocidad. Sin ultra, solo por velocidad.
+     */
+    private fun sortServersForDialog(
+        list: MutableList<VideoSource>,
+        labels: Map<String, String>
+    ) {
+        if (com.karin.streamtv.util.AppPreferences.isUltraEconomyMode()) {
+            list.sortWith(
+                compareBy<VideoSource> { serverResRank(labels[it.serverUrl]) }
+                    .thenByDescending { it.speedRating }
+            )
+        } else {
+            list.sortByDescending { it.speedRating }
+        }
+    }
+
+    private fun serverResRank(label: String?): Int {
+        if (label.isNullOrBlank()) return 1
+        val h = Regex("(\\d{3,4})").find(label)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: return 1
+        return if (h <= 480) 0 else 2
+    }
+
     private fun detectServerResolutions(
-        servers: List<VideoSource>,
+        servers: MutableList<VideoSource>,
         container: ViewGroup,
         adapter: android.widget.BaseAdapter,
         labels: java.util.concurrent.ConcurrentHashMap<String, String>
     ) {
         val semaphore = java.util.concurrent.Semaphore(3)
         lifecycleScope.launch {
-            servers.forEach { server ->
+            val jobs = servers.map { server ->
                 launch(Dispatchers.IO) {
                     semaphore.acquire()
                     try {
@@ -427,6 +455,15 @@ class SeriesDetailActivity : AppCompatActivity() {
                     } finally {
                         semaphore.release()
                     }
+                }
+            }
+            jobs.joinAll()
+            // Con las resoluciones ya detectadas, en ultra se reordena para
+            // dejar arriba los servidores ≤480p.
+            if (com.karin.streamtv.util.AppPreferences.isUltraEconomyMode()) {
+                runOnUiThread {
+                    sortServersForDialog(servers, labels)
+                    adapter.notifyDataSetChanged()
                 }
             }
         }

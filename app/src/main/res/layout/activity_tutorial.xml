@@ -62,7 +62,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="KarinFLiX es tu centro de anime y series. En lugar de tener que entrar a varios sitios web por separado, aquí los tienes todos juntos en una sola pantalla. Elige tu serie, dale play y olvídate del resto: la app busca el mejor enlace, limpia la publicidad, mejora la imagen y el sonido, y hasta te deja continuar viendo en otra pantalla si quieres."
+                    android:text="KarinFLiX es tu centro de anime, series, películas y doramas. En lugar de entrar a varios sitios web por separado, aquí los tienes todos juntos en una sola pantalla: eliges tu serie, le das play y la app hace el resto.\n\nVentajas principales:\n• Todo en uno: navega por varios sitios de anime y video sin salir de la app.\n• Extracción directa: detecta el video real dentro de la página y lo abre en su propio reproductor, sin reproductores web confusos.\n• Anti-publicidad: bloquea banners, ventanas emergentes, overlays y redirecciones de los sitios para que veas el video limpio.\n• Varios servidores: si un servidor falla, prueba automáticamente con el siguiente.\n• Mejora de imagen y sonido: restauración, reescalado, fluidez de movimiento, modos 3D y un DSP de audio completo.\n• Karin Link: manda episodios a otra pantalla y controla la app a distancia.\n• Gestor de archivos: reproduce tus propios videos del equipo, USB, red local o la nube."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -81,7 +81,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Todo se controla igual que una app de TV normal:\n• Las flechas (o el anillo del mando) mueven el cursor por la pantalla.\n• Enter o el botón central del mando selecciona lo que tienes marcado.\n• El botón Atrás te regresa a la pantalla anterior.\nNo necesitas tocar la pantalla: con mando, teclado o el control remoto de Android TV funciona igual."
+                    android:text="Todo se controla igual que una app de TV normal:\n• Las flechas (o el anillo del mando) mueven el cursor por la pantalla.\n• Enter o el botón central del mando selecciona lo que tienes marcado.\n• El botón Atrás te regresa a la pantalla anterior.\n• Con mando de juegos: A = seleccionar, B = atrás, START = menú, SELECT = buscar. En el reproductor, L1 y R1 retroceden y avanzan 10 segundos.\n• Las teclas multimedia del control (play, pausa, avance, retroceso) también funcionan en el reproductor.\nNo necesitas tocar la pantalla: con mando, teclado o el control remoto de Android TV funciona igual."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -100,7 +100,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Esta es tu casa. Desde aquí puedes llegar a todo:\n• Sitios: las tarjetas que ves son cada sitio de anime disponible (JKAnime, LatAnime y otros). Entrar a una tarjeta te lleva al contenido de ese sitio.\n• Buscar: escribe lo que quieras y la app lo busca en TODOS los sitios al mismo tiempo, para que no tengas que buscar uno por uno.\n• Historial: aquí aparecen las series que ya abriste alguna vez, por si quieres volver a ellas sin buscarlas de nuevo.\n• Continuar viendo: lo que empezaste y no terminaste, listo para retomarlo exactamente donde lo dejaste.\n• Calendario: un calendario con los episodios que salen cada día de la semana.\n• KARIN Link: el botón para conectar tus dispositivos entre sí.\n• Archivos: si tienes videos guardados en tu equipo o en una memoria USB, los puedes reproducir aquí."
+                    android:text="Esta es tu casa. La barra de arriba y las tarjetas te llevan a todo:\n• Barra de búsqueda (🔍 Buscar en todos los sitios...): escribe lo que quieras y la app lo busca en TODOS los sitios al mismo tiempo. Verás el aviso «Buscando... en N sitios...» y luego «X resultados de M sitio(s)». Si no hay nada, dice «Sin resultados para...».\n• Micrófono (🎤): búsqueda por voz en español. Si tu equipo no tiene reconocimiento de voz, el botón se oculta solo.\n• Tarjetas de sitios: cada tarjeta es un sitio disponible (JKAnime, LatAnime, MundoDonghua, RetroTVE, LaCartoons, DoramasYT, FrikiSeries, PeliPops, CineCalidad y más). Toca una para entrar a su contenido.\n• 📁 Archivos: abre el Explorador de archivos para ver tus propios videos (memoria, USB, red o nube).\n• 📡 Link: abre KARIN Link para conectar tus dispositivos entre sí.\n• ℹ️: créditos de la app. 📄: términos y licencia. 📖: este tutorial. ⚙️: Configuración."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -117,7 +117,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="DENTRO DE UN SITIO"
+                    android:text="DENTRO DE UN SITIO (PÁGINAS)"
                     android:textColor="@color/accent"
                     android:textSize="12sp"
                     android:textStyle="bold"
@@ -127,7 +127,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Cuando entras a un sitio, en la parte superior encuentras sus secciones:\n• Portada: los episodios más recientes que se han publicado.\n• Buscar: busca series y episodios, pero solo dentro de ese sitio.\n• Filtros: puedes filtrar por género, estado (en emisión, finalizada), tipo de serie, etc. Muy útil para descubrir algo nuevo.\n• Directorio: el catálogo completo del sitio, para explorarlo de principio a fin.\n• Siguiente / Anterior: recorren las páginas del catálogo.\n• Compartir: si tienes otro dispositivo conectado, puedes mandarle el episodio para que se reproduzca allá."
+                    android:text="Cuando entras a un sitio, la barra superior tiene sus secciones. Según el sitio verás:\n• 🏠 Inicio: la portada del sitio con lo más reciente («Cargando episodios...» mientras carga).\n• 🎬 Películas o 📚 Catálogo: el catálogo completo del sitio para explorarlo de principio a fin («Cargando directorio...»).\n• 📺 Series y 🏮 Doramas: aparecen solo en los sitios que ofrecen esas secciones.\n• 🔍 Buscar...: toca la lupa y escribe; busca series y episodios solo dentro de ese sitio. Verás «Buscando...» y, si no hay nada, «Sin resultados para...». El micrófono (🎤) aparece junto a la búsqueda si tu equipo tiene voz.\n• Filtros: en el directorio y en algunas portadas aparece una fila de chips para filtrar. Toca un chip y elige un valor; el chip activo muestra ✓. Con ✕ Limpiar quitas todos, y con Quitar filtro quitas uno. En JKAnime puedes filtrar por Ordenar (fecha, nombre, popularidad), Año, Género, Demografía, Tipo, Estado, Temporada, Letra y Categoría. En otros sitios hay Año, Género (más de 40: Acción, Comedia, Romance, Isekai...) y Categoría (Anime, Película, Ova, Donghua, Latino...). Si ningún resultado coincide, verás «Sin resultados con estos filtros».\n• Paginación: al final del catálogo verás ← Atrás, Página N y Siguiente → para recorrer las páginas. Si no hay más, avisa «No hay mas contenido»."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -154,7 +154,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Al elegir una serie verás su portada, la sinopsis y la lista de episodios en orden.\n• Reproducir: elige un episodio y la app te muestra los servidores disponibles (las fuentes donde está alojado el video).\n• Playlist: puedes marcar varios episodios con el botón 📋 y reproducirlos seguidos, uno tras otro, sin tener que estar pendiente. Perfecto para maratones."
+                    android:text="Al elegir una serie verás su portada, sus datos (tipo y estado), la Sinopsis y la lista de Episodios en orden:\n• Cada episodio muestra su insignia Ep N. Los que ya terminaste de ver llevan una V.\n• Toca un episodio y verás «Extrayendo servidores de video...». La app prueba cada servidor y te muestra la ventana «Selecciona servidor» (con el título del episodio).\n• Cada servidor muestra su nombre, estrellas de velocidad ★, su resolución (HD...) y dos botones: 📺 para enviarlo a otro equipo por KARIN Link, y ▶ para abrirlo en un reproductor externo.\n• Abajo tienes ◀ Capítulo anterior, Capítulos (vuelve a la lista) y Capítulo siguiente ▶, más Cancelar.\n• Si el episodio trae varios enlaces directos, verás la ventana «Enlaces extraídos (N)» para elegir con cuál reproducir.\n• Si un servidor no responde, la app avisa «Probando servidor:...» y pasa sola al siguiente (esto lo controla el Fallback de servidores en Ajustes).\n• Si algo falla del todo, verás «No se encontraron servidores de video para este episodio» o una pantalla de error explicando el problema."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -163,7 +163,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="EL REPRODUCTOR"
+                    android:text="REPRODUCCIÓN AUTOMÁTICA"
                     android:textColor="@color/accent"
                     android:textSize="12sp"
                     android:textStyle="bold"
@@ -173,16 +173,16 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Aquí es donde la app hace su magia: quita la publicidad y los avisos molestos para que veas el video limpio. La barra de abajo tiene botones sencillos:\n• ▶/⏸ Play y Pausa.\n• ±10s: retrocede o avanza 10 segundos.\n• ⏮ ⏭ (anterior / siguiente): saltan al episodio anterior o siguiente de tu lista (solo si armaste un maratón).\n• Barra de progreso: mueve el video con el mando.\n• La app recuerda en qué episodio y minuto te quedaste."
+                    android:text="Dos opciones de Ajustes te ahorran toques:\n• Continuar Episodio: al terminar un capítulo con más capítulos en la lista, aparece una cuenta atrás de 5 segundos y salta solo al siguiente. Perfecto para maratones.\n• Auto Play: si el episodio tiene un solo enlace, lo abre directamente sin preguntar qué servidor usar.\nAmbas se encienden o apagan en Configuración."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
-                    android:layout_marginBottom="18dp" />
+                    android:layout_marginBottom="22dp" />
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="OTROS BOTONES — PARA QUÉ SIRVE CADA UNO"
+                    android:text="EL REPRODUCTOR (EXOPLAYER)"
                     android:textColor="@color/accent"
                     android:textSize="12sp"
                     android:textStyle="bold"
@@ -192,47 +192,39 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="• Calidad: este botón cambia la RESOLUCIÓN REAL que se descarga (480p, 720p, 1080p...). Sólo funciona si el sitio ofrece varias versiones.\n  ➜ Dónde: si el video se corta (rebuffering) o tu equipo es flojo, baja para que no se atore."
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:lineSpacingExtra="5dp"
-                    android:layout_marginBottom="14dp" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="• Escala (el que agranda el video): este NO cambia la resolución que se descarga, solo estira la imagen a pantalla completa y la hace más nítida. Es distinto a Calidad: aquí no cambias la resolución real.\n  ➜ Apagado: deja que el televisor lo estire (recomendado en cajas débiles).\n  ➜ KarinSuperRes: nítido sin halos ni ruido, con variante por gama (Experimental).\n  ➜ FSR: reescala con calidad gastando poco (default, el más equilibrado).\n  ➜ Anime4K DoG: hace el anime muy nítido, pero es pesado."
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:lineSpacingExtra="5dp"
-                    android:layout_marginBottom="14dp" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="• MotionX2 Boost (fluidez): hace que el movimiento se vea más fluido, como las teles modernas. No cambia la resolución.\n  ➜ Apagado: el video corre a sus cuadros naturales. Es lo que menos gasta.\n  ➜ HYBRID (recomendado): combina cuadro nítido + un poco de mezcla suave. Mejor balance.\n  ➜ DOUBLING (Frame x2): muestra cada cuadro tal cual. Más ligero, menos suave.\n  ➜ BLEND (Suavizado): mezcla el cuadro anterior con el actual. Suave, pero puede verse fantasma.\n  ▶ IMPORTANTE EN EQUIPOS DÉBILES: apágalo si el video se te traba."
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:lineSpacingExtra="5dp"
-                    android:layout_marginBottom="14dp" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="• IMAGEN MEJORADA (Enhancement): ajustes de color a tu gusto: brillo, contraste, saturación, nitidez, etc. Hace que la imagen se vea mejor sin tocar la resolución ni la fluidez.\n  ➜ Útil si el video se ve apagado o sin color. Si el aparato es lento, deja algo o todo off."
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:lineSpacingExtra="5dp"
-                    android:layout_marginBottom="14dp" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="• SONIDO MEJORADO (Volumen y sonido): realza los graves, da claridad a la voz y añade potencia al volumen con un ecualizador integrado (5 bandas en TV/bocina, 10 en audífonos). Se aplica al parlante (TV, bocina, auriculares) y se adapta automáticamente según el equipo."
+                    android:text="El reproductor propio de KarinFLiX reproduce el video extraído con todos los filtros y mejoras. Sus controles:\n• Barra central: play/pausa, episodio anterior y siguiente (cuando hay lista de capítulos) y barra de progreso para moverte por el video.\n• Botón Info (Estadísticas): abre la ventana «Estadísticas» con los datos técnicos reales (ver sección de estadísticas).\n• Botón de volumen: abre el panel de sonido «Sonido · Karin DSP Smart Lite».\n• Botón de lentes (Modo 3D): abre directo el diálogo «Tecnología 3D».\n• Botón de ajustes (Ajustes de video): abre las «Opciones Avanzadas de Video» (restauración, luz, fluidez, reescalado, acabados y demo).\n• Botón de anteojos (Asistencia): abre «Asistencia: Visión y Audición».\n• Botón de aspecto (Relación de aspecto): cambia cómo encaja el video en pantalla. Cada toque rota entre Original, Zoom, Estirar, 4:3, 16:9 y 2.35:1, y avisa con «Proporción:...».\n• Botón X (Salir del reproductor): cierra el video.\n• Mando: las teclas multimedia (play, pausa, avance y retroceso de 10 segundos) funcionan directo; L1 y R1 del gamepad también saltan ∓10 segundos. Si cambias de app o entra una llamada, el video se pausa solo."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
                     android:layout_marginBottom="18dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="OPCIONES AVANZADAS DE VIDEO"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El botón de ajustes abre «Opciones Avanzadas de Video» con 6 funciones en el orden real del procesado. Cada fila muestra ON u OFF y abre su propio panel con vista previa en vivo; los cambios se confirman con Aplicar (o se descartan con Cancelar):\n\n• 1. Restore Boost: restaura la imagen en una sola pasada. El interruptor Activado/Desactivado lo enciende, la Intensidad maestra mueve sus 3 etapas a la vez, y el Ajuste fino (opcional) las mueve por separado: Limpieza (quita bloques, ruido y bandas), Reconstrucción (reconstruye bordes con coherencia de píxel inspirada en CRT, sin scanlines ni máscara, y luego el Detalle afila encima) y Detalle (afila el micro-detalle). Si tocas un ajuste fino pasas a «Modo: personalizado»; si mueves la maestra vuelves a «Modo: vinculado». Ideal para videos viejos o de baja calidad.\n\n• 2. Light Boost: luz, contraste y color con una sola Intensidad. Elige el MODO DE INTENSIDAD: Manual (intensidad fija) o Auto (la escena decide). Tienes presets Bajo, Medio y Alto. El interruptor HDR simulado añade curva tonal cinematográfica (apagado, solo aplican color y rango). En RANGO puedes corregir streams mal etiquetados: Original (sin cambios), Completo (16-235 → 0-255) o Limitado (0-255 → 16-235). Útil si el video se ve apagado, oscuro o lavado.\n\n• 3. MotionX2: fluidez de movimiento, del modo más liviano al más pesado: ⏻ Apagado (video original), DOUBLING (repite cada cuadro nítido, 0 pases de GPU, el más rápido), HYBRID —recomendado— (cuadro nítido más micro-mezcla del 25%, un solo pase), BLEND (mezcla anterior y actual al 50%, más fluido pero puede verse fantasma), ECO60 (60 fps liviano con historial a media resolución, para equipos modestos) y 60 fps reales GRID (cuadros intermedios a 60 Hz con anti-fantasma; máxima fluidez, máximo consumo). No cambia la resolución, solo cómo se ve el movimiento."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• 4. Upscaler: reescala el video con calidad (2x con tope en 1080p) y su propio control de Nitidez. Tres motores: KarinSuperRes Experimental (nítido sin halos ni ruido, con variante según la gama del equipo), FSR (el estable de todos los días) y Anime4K (afilado rápido tuneado para anime). Ojo: si el video ya es 1080p o más, la app te avisa que no cambiará la imagen; solo aplica en SD y 720p. Si Light Boost está activo, el reescalado sale gratis (reusa su pasada).\n\n• 5. Shader: acabado estético final, un tipo a la vez con su Intensidad: Apagado (imagen tal cual), CRT pantalla plana (curvatura, scanlines, rejilla RGB y viñeta retro), Cine (viñeta suave más grano de película), B/N (blanco y negro con contraste), Anime (define bordes y limpia el dibujo), Sharpen (nitidez inteligente sin halos) y Grain (grano cinematográfico animado).\n\n• 6. Demo split-screen: divide la pantalla con una línea blanca vertical; a la izquierda el video original y a la derecha con tus mejoras, en el mismo instante. Perfecto para comparar si tus ajustes realmente mejoran la imagen.\n\n• Opciones incompatibles: algunas combinaciones no pueden funcionar juntas (por ejemplo, 3D Anaglifo con Shader B/N, o MotionX2 con 3D estéreo). Si eliges una, la app te avisa con «Opciones incompatibles», te explica por qué y te deja elegir cuál conservar con «Conservar...»; la otra se apaga sola."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
 
                 <TextView
                     android:layout_width="match_parent"
@@ -247,7 +239,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="• Calidad = QUÉ se descarga (resolución).\n• Escala = CÓMO se estira esa imagen (grande/definición).\n• MotionX2 Boost = FLUIDEZ (cómo se ve el movimiento).\n• Imagen mejorada = COLORES/NITIDEZ.\n• Sonido mejorado = CÓMO se escucha.\n\nRECUERDA: si tu equipo es de gama baja o está limitado, pon Calidad en 720/480, Escala en OFF y MotionX2 Boost apagado. Así verás el video igual de bien pero corriendo fluido, incluso si no puedes bajar de resolución."
+                    android:text="• Restore Boost = LIMPIEZA y reconstrucción (repara la imagen).\n• Light Boost = LUZ, contraste y color.\n• MotionX2 = FLUIDEZ del movimiento.\n• Upscaler = TAMAÑO y definición al agrandar (2x hasta 1080p).\n• Shader = ACABADO estético final.\n• Sonido DSP = CÓMO se escucha (ver sección de sonido).\n\nRECUERDA: si tu equipo es de gama baja o el video se traba, activa el «Modo ultra económico» en Configuración: tope 480p, sin efectos ni fondos y sonido básico, todo de un toque."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -272,6 +264,139 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:text="MODO 3D (TECNOLOGÍA 3D)"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El botón de lentes abre «Tecnología 3D», que corre al final de la cadena de video:\n• Anaglifo (lentes bicolor): para gafas rojo-cian, rojo-azul o rojo-verde (eliges tus lentes abajo). Con fuente SBS mezcla ambos ojos reales; con fuente 2D genera pseudo-3D.\n• VR Cardboard (2D → SBS): duplica la imagen lado a lado para verla en un visor de cartón. Sin seguimiento de cabeza.\n• Pulfrich (homenaje Fabulojos 1997): ponte un lente oscuro en un ojo y busca movimiento lateral; sin lentes se ve normal.\n• Fuente del video 3D: 2D (pseudo-3D) o SBS (lado-a-lado).\n• Profundidad: intensidad del efecto (previsualiza en vivo si el 3D ya está activo).\n• Swap ojo derecho: intercambia los ojos (solo anaglifo con fuente estéreo).\n• 📖 Gafas 3D caseras: abre el tutorial para fabricar tus propios lentes de anaglifo, Pulfrich o Cardboard con materiales caseros, con medidas, plano y armado paso a paso.\n• La ventana te avisa si hay conflictos con los filtros activos («⚠ Conflictos con filtros activos») o te confirma «✓ Sin conflictos»."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="ASISTENCIA: VISIÓN Y AUDICIÓN"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El botón de anteojos abre «Asistencia: Visión y Audición». Viene DESACTIVADA por defecto: no cambia nada hasta que marques tus necesidades (puedes marcar varias) y confirmes con Aplicar; Cancelar revierte todo. Todo previsualiza en vivo:\n• Visión: Colores (daltonismo: Protan, Deutan, Tritan o Monocromático), Claridad (baja visión: definición, bordes y sombras), Alto contraste (abrir sombras y proteger luces), Antibrillo y confort ocular (tinte cálido y atenuar brillos), Luz azul (tono cálido: ligeramente cálido, cálido o muy cálido) y Vista cansada (modo Suave o Confort).\n• Audición: Dificultad para oír diálogos (Claridad de voz: sube la voz sobre música y efectos) y Pérdida de audición en agudos (Realce de agudos).\n• Comparar: divide la pantalla (izquierda original, derecha con ayuda) para comprobar el efecto.\n• Nota: si usas MotionX2 en 60 fps, lo visual se pausa (ese modo usa su propio render); la ventana ofrece «Salir de MotionX2 60fps (activa la visión)»."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="ESTADÍSTICAS (INFO ORIGINAL VS MEJORADO)"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El botón Info abre la ventana «Estadísticas», la ficha técnica honesta de lo que está pasando:\n• Mejoras · imagen: qué filtros pediste, cuáles están realmente activos en la GPU y cuáles se omitieron por límite del equipo (MotionX2, Upscaler, Restore Boost, Light Boost, Shader, Ayuda visual y auditiva, 3D, Demo y Proporción).\n• Video · stream: contenedor, códec, resolución de entrada y salida, aspecto, FPS, bitrate, color, HDR y más.\n• Audio · stream: códec, bitrate, muestreo, canales, idioma y compresión del audio original.\n• Sonido · DSP activo: motor, salida detectada, ecualizador, sonoridad, dinámica, graves, transitorios, armónicos, crossfeed, bocina, techo true-peak, ganancia y dither.\n• Información del Hardware: CPU, GPU, video y audio por hardware, RAM, GLES, textura máxima (el techo real del Upscaler en tu equipo) y pantalla.\nIdeal para saber por qué un video se ve o se escucha de cierta forma, o si tu equipo está al límite."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="SONIDO · KARIN DSP SMART LITE"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El botón de volumen abre «Sonido · Karin DSP Smart Lite», el estudio de audio de la app. Arriba verás el estado: «DSP: encendido» o «DSP: apagado (audio original)».\n• Audio: elige entre «Usar el DSP» (procesado Karin Smart Lite) o «Usar el audio original» (copia directa sin tocar nada).\n• Volumen: volumen del reproductor de 10 a 100%.\n• Potencia: ganancia extra del DSP («Ganancia extra del DSP. 100% = sin cambios»). Solo actúa con el DSP encendido.\n• Elegir preset: ajusta graves, claridad y dinámica de fábrica y cambia el sonido al instante."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="PRESETS DE SONIDO (12)"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="• Automático (recomendado): detecta tu salida y elige solo. Audífonos o DAC → Headphones; bocina del celular, Bluetooth o USB → Mobile Speaker; receptor AV → Cinema; bocina de la TV o barra de sonido → TV Speaker. Verás «Ahora suena como... (según la salida detectada)».\n• Pure: sonido limpio con ecualización suave, sin realces.\n• Reference: nivelación de volumen a −16 LUFS, lo demás apagado.\n• Hi-Fi: nivelación más dinámica suave y crossfeed leve.\n• Headphones: crossfeed medio para que la música suene fuera de la cabeza.\n• Mobile Speaker: para la bocinita del celular: refuerza graves con TrueBass y da cuerpo a la voz.\n• TV Speaker: para las bocinas de la TV: graves extendidos, voz al frente y dinámica controlada.\n• Cinema: sonido de cine en casa con diálogo presente.\n• Anime: voces al frente sobre música y efectos.\n• Power Bass: máximo de graves controlados.\n• Clear Voice: solo claridad de voz (quita subgraves y realza los 4 kHz). Ideal para diálogos bajitos.\n• Music: calidez sutil para música."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="CONFIGURACIÓN AVANZADA DE SONIDO"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El botón «Configuración avanzada…» es para curiosos y exigentes (si no lo necesitas, deja todo en automático):\n• Salida detectada: muestra dónde está sonando (bocina del celular, bocina de la TV, audífonos con cable o Bluetooth, bocina Bluetooth o USB, barra de sonido, receptor AV, DAC externo...). Con «Adaptar salida automáticamente» el DSP ajusta graves, dinámica y protección según esa salida. También muestra el Códec BT (SBC, AAC, aptX, LDAC...) si das el permiso de Bluetooth, y el modo Bit-perfect (copia directa, sin DSP).\n• AutoEQ medido: corrección medida de audífonos reales hacia la curva Harman. En Automático elige solo según tu modelo (Sennheiser HD 600/650/800 S, Focal Clear, ATH-M50x, AKG K702, Sony WH/WF-1000XM4, Moondrop Aria, Galaxy Buds2 Pro...); también puedes elegir uno a mano o Ninguno.\n• Advanced: Parametric EQ, Loudness con objetivo −14/−16/−18 LUFS (nivela el volumen entre series), Dynamics (compresor suave que empareja explosiones y susurros), Bass Extension con su Bass amount (graves con armónicos controlados, no un simple subidón), Transient con su amount (ataque de percusión), Harmonic Enhancement con su amount (calidez sutil) y Auto Headroom (evita saturación al ecualizar).\n• Speaker voicing (TV / parlantes sencillos): OFF (transparente), LIGHT, MEDIUM o STRONG; da cuerpo y presencia a bocinas pequeñas.\n• Crossfeed (auriculares): OFF, LOW, MEDIUM o HIGH; mezcla un poco el canal contrario para que no suene todo «dentro de la cabeza».\n• True Peak Protection: techo de −0.5, −1.0, −1.5 o −2.0 dBTP para que nunca distorsione.\n• A/B: alterna entre Procesado y Bypass (original) para comparar al instante.\n• Prueba ABX (¿oyes la diferencia?): test ciego de 8 ensayos con A, B y X incógnita que te dice si la diferencia es audible o casualidad.\n• Copiar reporte del DSP: copia el resumen técnico completo.\n• SmartLite Monitor: medidores en vivo (pico de entrada y salida, true-peak, LUFS, rango dinámico, correlación estéreo y CPU del DSP)."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="14dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="LIMPIAR BOCINA"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="En Configuración, grupo Mantenimiento, tienes «Limpiar bocina»: reproduce un barrido de frecuencias de 50 Hz a 18 kHz durante 15 segundos para expulsar polvo y suciedad del parlante. Pulsa Iniciar, deja el equipo sobre una superficie estable, verás el progreso («Limpiando... N%») y al final el aviso «Limpieza completada». Puedes detenerlo cuando quieras."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
                     android:text="KARIN LINK (CONECTAR DISPOSITIVOS)"
                     android:textColor="@color/accent"
                     android:textSize="12sp"
@@ -282,7 +407,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Con KARIN Link puedes ver lo mismo en dos pantallas a la vez, o mandar un video de un dispositivo a otro:\n• Misma red (LAN): si tu teléfono y tu TV están conectados al mismo wifi, la app los encuentra solos. Eliges el dispositivo y listo.\n• Internet (sala): si están en redes distintas, creas una sala y te conectas con un código QR o un enlace.\n• Compartir un episodio: desde cualquier serie, toca Compartir y elige el otro dispositivo: el episodio se reproduce allá al instante."
+                    android:text="Con KARIN Link conectas tus equipos en la misma red wifi para compartir video y controlarlos a distancia:\n• Abre 📡 Link. Si está apagado verás «KARIN Link desactivado»; enciéndelo con el interruptor («KARIN Link encendido»).\n• Pulsa Actualizar y verás «Buscando dispositivos...». Cada equipo aparece con su nombre y su dirección; tócalo para conectarte («Conectando a...» y luego «Conectado a...»). Si no hay ninguno, dice «No se encontraron dispositivos».\n• Compartir un episodio: desde la ventana de servidores toca 📺 («Enviar a TV por Karin Link») y se abre «📡 Enviar a TV»: elige el equipo y allá verás «Recibido:...» y empezará a reproducirse.\n• Control remoto (🎮): convierte tu celular en mando del otro equipo: touchpad («1 dedo: mover / tocar = clic · 2 dedos: scroll»), cruceta con OK, Atrás, Inicio, botones −10s y +10s, volumen (Vol −, silencio, Vol +) y Enviar.\n• Configuración de KARIN Link (botón ?): Nombre del dispositivo (cómo te ven en la red) con Guardar nombre; Acceso remoto a archivos (permite que otros equipos exploren y reproduzcan tus archivos); Red de Windows en el explorador (muestra tus servidores SMB guardados en el gestor); Token de acceso a archivos con Regenerar token; y tu ID del dispositivo.\n• Si entras con KARIN Link apagado desde la principal, verás «KARIN Link apagado: actívalo en Ajustes»."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -299,7 +424,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="CONFIGURACIÓN"
+                    android:text="CONFIGURACIÓN (AJUSTES)"
                     android:textColor="@color/accent"
                     android:textSize="12sp"
                     android:textStyle="bold"
@@ -309,7 +434,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="En Ajustes puedes personalizar tu experiencia:\n• Reproducción automática: que el siguiente episodio empiece solo.\n• Reproducir ahora: abrir directamente el video sin preguntar qué servidor usar.\n• Servidor alternativo: si el que elegiste falla, que pruebe con otro automáticamente.\n• Mejoras de imagen y sonido: activarlas o desactivarlas según prefieras.\n• KARIN Link: encender o apagar la conexión entre dispositivos.\nTodo lo que cambies se guarda con el botón Guardar."
+                    android:text="Toca ⚙️ para abrir «Configuración». Todo se guarda con el botón Guardar («Configuración guardada»):\n• Grupo Reproducción:\n  - Fallback de servidores: si un servidor falla, probar el siguiente automáticamente (recomendado activado).\n  - Continuar Episodio: reanudar y saltar solo al siguiente capítulo con cuenta atrás de 5 segundos.\n  - Auto Play: abrir directamente el video cuando hay un solo enlace, sin preguntar.\n  - Códec ExoPlayer: cómo decodifica el video. Hardware (chip) rinde más y gasta menos batería; Software (Google) es compatible con más formatos pero consume más; Auto deja que el sistema elija. Si ves «Esta TV no tiene decodificador para este video», prueba cambiarlo aquí o cambiar de servidor.\n  - Modo ultra económico: tope 480p, sin efectos ni fondos, sonido básico y poca memoria, todo de un toque. Para equipos débiles.\n  - Pantalla de carga: muestra la animación de inicio al abrir la app.\n• Grupo Reproductor del Sistema: Activar como Reproductor de Video pone a KarinFLiX como reproductor predeterminado de Android.\n• Grupo KARIN Link: enciende o apaga la conexión entre dispositivos.\n• Grupo Mantenimiento: Limpiar bocina (barrido 50 Hz–18 kHz) y Galería Karin (todas las imágenes de fondo de la app)."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"
@@ -326,6 +451,44 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:text="GESTOR DE ARCHIVOS"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="El botón 📁 Archivos abre el «Explorador de archivos», y desde ahí puedes pasar al «Gestor de archivos». Son dos pantallas encadenadas:\n\nEXPLORADOR (para ver y reproducir):\n• Muestra «Todos los videos» de tu equipo en una rejilla de 3 columnas, con miniatura, título, carpeta y duración.\n• Barra superior: Buscar (muestra el campo «Buscar archivo...»), Carpetas (alterna entre vista de carpetas y de videos), Ordenar (alterna A→Z y Z→A), Vista (alterna rejilla y lista) y el botón de paneles («Gestor de archivos (copiar/pegar/red)») que abre el gestor.\n• Botón + (Añadir red o nube): abre «Añadir almacenamiento» con SMB / Red (Windows, Linux), Red de Windows (SMB), NAS (Synology, QNAP...), Dropbox y Google Drive. Para red pide IP, puerto (445), usuario y contraseña («Conectar a red SMB»); para la nube pide pegar tu token («Token de...», con ayuda de «Cómo obtener el token»).\n• Toca un video y se abre en el reproductor ExoPlayer con todas sus mejoras. Si pide permiso de almacenamiento, concédelo una vez; en Smart TV puede usar el modo de medios sin permiso total.\n\nGESTOR (para organizar y copiar):\n• Pantalla «Gestor de archivos» con dos paneles: Izquierda y Derecha. La línea de estado dice «Panel activo:... | Seleccionados: N» y el portapapeles («Portapapeles: N (copiar)»).\n• Inicio muestra tus almacenamientos: Almacenamiento interno, Tarjeta SD o Almacenamiento extraíble, con su espacio («... usados · ... libres · ... total»).\n• Botones: Red (conectar SMB), Copiar, Pegar, Borrar (rojo), Renombrar (un elemento a la vez), Nueva carp. y Buscar (con casilla Subcarpetas, busca hasta 10 niveles).\n• Para copiar: mantén pulsado un archivo (clic largo) para seleccionarlo —verás «Selecciona archivos (OK para entrar, click largo para seleccionar)»—, toca Copiar («N elemento(s) en el portapapeles. Navega al destino y pulsa Pegar.»), navega al destino y toca Pegar. Si hay archivos con el mismo nombre elige «Pegar (sobrescribir)» o «Pegar (omitir existentes)», con barra de «Copiando archivos...» cancelable y resumen final («Completado: N archivos, N carpetas»).\n• Borrar pide «¿Borrar N elemento(s)?»; Renombrar y Nueva carpeta piden el nombre con Aceptar/Crear y confirman («Renombrado», «Carpeta creada», «Borrado completado»).\n• Cada archivo muestra su icono por tipo: video, audio, imagen, documento, APK, comprimido (zip, rar, 7z...) u otro. Solo los videos se abren en el reproductor."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="CONSEJOS PARA EQUIPOS LENTOS"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Si el video se traba o va a tirones:\n1. En Configuración, activa el Modo ultra económico (tope 480p y todo lo pesado apagado).\n2. Si prefieres afinar a mano: en el reproductor usa MotionX2 en ⏻ Apagado o DOUBLING, y apaga Upscaler y Restore Boost.\n3. En el DSP, el preset Automático ya limita los efectos pesados según tu salida; evita subir mucho la Potencia.\n4. Si el servidor se corta, cambia de servidor en la ventana de servidores o deja el Fallback activado.\n5. La ventana Estadísticas te dice qué filtros se omitieron por límite de GPU y cuánta CPU/GPU estás usando."
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="22dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
                     android:text="RESUMEN RÁPIDO"
                     android:textColor="@color/accent"
                     android:textSize="12sp"
@@ -336,7 +499,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="1. Elige un sitio o busca lo que quieres ver.\n2. Entra a la serie y elige el episodio.\n3. Dale play y, si algo no funciona, cambia de servidor.\n4. La app guarda tu progreso: retoma cuando quieras.\n5. ¿Otra pantalla? Conecta tus dispositivos con KARIN Link."
+                    android:text="1. Elige un sitio o busca en todos a la vez.\n2. Filtra por género, año o página hasta encontrar tu serie.\n3. Entra a la ficha, elige el episodio y el servidor.\n4. Dale play: si algo falla, cambia de servidor o deja que el Fallback lo haga.\n5. Ajusta imagen (Opciones Avanzadas), sonido (DSP) y aspecto a tu gusto; compara con la Demo.\n6. ¿Otra pantalla? Manda el episodio con KARIN Link o contrólala con el 🎮.\n7. ¿Archivos propios? Ábrelos con 📁 Archivos y organízalos en el Gestor."
                     android:textColor="@color/text_primary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="5dp"

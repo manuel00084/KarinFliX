@@ -18,27 +18,27 @@ import androidx.media3.effect.GlShaderProgram
  *  - **FSR** (default): AMD FidelityFX Super Resolution v1.0.2, EASU
  *    (edge-adaptive spatial upsampling, 12 taps) seguido de RCAS (robust
  *    contrast adaptive sharpening, 3x3). Portado a GLES 2.0 sin `gather`
- *    (camino texOff), con el anÃ¡lisis y los pesos guiados por luma y
+ *    (camino texOff), con el análisis y los pesos guiados por luma y
  *    aplicados a RGB (aprox. 16 fetches vec4, equivalente en coste a
  *    Light Boost). RCAS de un solo pase usa vecinos bilineales del origen
- *    como aproximaciÃ³n de la salida EASU (estÃ¡ndar en FSR single-pass).
+ *    como aproximación de la salida EASU (estándar en FSR single-pass).
  *    Mejor calidad por consumo del lote (sin halos ni exceso de suavizado):
- *    sustituye al viejo BicÃºbico Catmull-Rom.
+ *    sustituye al viejo Bicúbico Catmull-Rom.
  *
- *  - **Anime4K rÃ¡pido**: unsharp por difference-of-Gaussians sobre el
+ *  - **Anime4K rápido**: unsharp por difference-of-Gaussians sobre el
  *    bilineal GL_LINEAR (cruz 1px + anillo 2px, 9 taps), tuneado para
  *    contenido anime; sin CNN (no son tiempo real en Mali).
  *
  * Sizing: devuelve el doble de ancho/alto. Modo `restorePass` (cuando
- * sustituye la pasada de restauraciÃ³n de Light Boost half-res) restaura la
- * resoluciÃ³n completa de la fuente (tope 2160p); modo independiente
+ * sustituye la pasada de restauración de Light Boost half-res) restaura la
+ * resolución completa de la fuente (tope 2160p); modo independiente
  * (el propio upscaler como efecto) re-escala 2x con tope 1080p.
  *
  * Nitidez en vivo via [updateSharpness]: en FSR/Anime4K baja el "sharpness"
- * de RCAS (mÃ¡s valor = mÃ¡s afilado).
+ * de RCAS (más valor = más afilado).
  *
  * GLES2 compatible (GLSL ES 1.00: sin uintBitsToFloat/gather/textureSize,
- * rcp/inversesqrt genÃ©ricos, min/max de 2 argumentos, highp).
+ * rcp/inversesqrt genéricos, min/max de 2 argumentos, highp).
  */
 class SuperResolutionEffect(
     private val mode: Int = MODE_FSR,
@@ -79,10 +79,10 @@ class SuperResolutionEffect(
         /** Tope de re-escala de calidad 2x (efecto independiente). */
         const val MAX_UPSCALE_HEIGHT = 1080
 
-        /** Tope al restaurar la resoluciÃ³n completa tras half-res de Light Boost. */
+        /** Tope al restaurar la resolución completa tras half-res de Light Boost. */
         const val MAX_RESTORE_HEIGHT = 2160
 
-        /** ResoluciÃ³n de salida real del upscaler para unas dimensiones de
+        /** Resolución de salida real del upscaler para unas dimensiones de
          *  entrada; espejo de [SuperResProgram.configure] (2x con tope). */
         fun outputSizeFor(inputWidth: Int, inputHeight: Int, restorePass: Boolean): Size {
             // Entrada degenerada (p. ej. 0x0 durante una reconfiguración):
@@ -171,7 +171,7 @@ class SuperResProgram(
                 glProgram.setFloatsUniform("uTexelSize", floatArrayOf(1f / inputWidth, 1f / inputHeight))
                 glProgram.setFloatsUniform("uInputSize", floatArrayOf(inputWidth.toFloat(), inputHeight.toFloat()))
                 if (!separateRcas) {
-                    // Pase Ãºnico EASU+RCAS: RCAS lee vecinos del origen.
+                    // Pase único EASU+RCAS: RCAS lee vecinos del origen.
                     glProgram.setFloatsUniform("uOutputTexelSize", floatArrayOf(1f / outputWidth, 1f / outputHeight))
                 }
             }
@@ -207,7 +207,7 @@ class SuperResProgram(
          * FSR 1.0.2 (EASU + RCAS) en un solo pase adaptado a GLES 2.0.
          * Camino sin gather (texOff): los taps usan posiciones exactas de
          * texel ((fp + 0.5) * uTexelSize) y son exactos aunque la textura
-         * se muestree con GL_LINEAR. AnÃ¡lisis y pesos guiados por luma
+         * se muestree con GL_LINEAR. Análisis y pesos guiados por luma
          * (vec3) y aplicados a los tres canales a la vez.
          */
         private val FRAGMENT_FSR = ShaderBlobs.superresFsr
@@ -216,13 +216,13 @@ class SuperResProgram(
          * FSR EASU solo (sin RCAS dentro). Cuando se activa la pasada RCAS
          * separada (estilo madVR, dos pases: primero escalar, luego afilar el
          * resultado real), la nitidez se aplica en un segundo efecto que
-         * muestrea los pÃ­xeles YA escalados. AsÃ­ RCAS no lee vecinos bilineales
+         * muestrea los píxeles YA escalados. Así RCAS no lee vecinos bilineales
          * del origen sino la salida EASU verdadera.
          */
         private val FRAGMENT_FSR_EASU = ShaderBlobs.superresFsrEasu
 
         /**
-         * Anime4K rÃ¡pido (sin CNN, tiempo real en Mali): upscale bilineal
+         * Anime4K rápido (sin CNN, tiempo real en Mali): upscale bilineal
          * GL_LINEAR + unsharp por difference-of-Gaussians. Cruz a 1px
          * (radio fino) y anillo a 2px (radio amplio), guiado por luma para
          * no amplificar ruido en zonas lisas ni extremos de luminancia.

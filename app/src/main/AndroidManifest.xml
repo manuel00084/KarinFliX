@@ -28,6 +28,8 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -49,7 +51,7 @@
             android:name=".ui.SplashActivity"
             android:exported="true"
             android:screenOrientation="landscape"
-            android:configChanges="orientation|screenSize"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode"
             android:theme="@style/Theme.KarinFLiX">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -59,59 +61,59 @@
         </activity>
 
         <activity android:name=".ui.MainActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.SiteBrowserActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.SeriesDetailActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.SettingsActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.FileExplorerActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <!-- Gestor dual-pane con copiar/pegar (ExploreKF): se abre desde el
              botón "Gestor" del explorador de archivos. Sin orientación fija:
              en TV/tablet van las 2 columnas, en móvil angosto una con
              pestañas (ver applyPaneMode). -->
         <activity android:name=".ui.ExploreKF" android:exported="false"
-            android:configChanges="orientation|screenSize" />
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.CalendarActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.CreditsActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.TermsAndConditionsActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.TutorialActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.GlassesTutorialActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.GaleriaKarinActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.EmbedWebViewActivity" android:exported="true"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize"
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode"
             android:theme="@style/Theme.KarinFLiX"
             android:hardwareAccelerated="true" />
 
         <activity android:name=".ui.ErrorActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".ui.OnboardingActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".player.ExoPlayerActivity" android:exported="false"
             android:launchMode="singleTop"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode"
             android:theme="@style/Theme.KarinFLiX" />
 
         <!-- El reproductor del sistema es un activity-alias: el toggle "Activar
@@ -131,23 +133,23 @@
         </activity-alias>
 
         <activity android:name=".karinlink.KarinLinkActivity" android:exported="true"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".karinlink.KarinLinkConfigActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
     <activity android:name=".karinlink.RemoteControlActivity" android:exported="false"
-        android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+        android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
     <activity android:name=".karinlink.KarinLinkQueueActivity" android:exported="false"
-        android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+        android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <activity android:name=".karinlink.KarinLinkSendActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <!-- Emision DLNA/Cast: se abre desde el boton "Emitir" del reproductor. -->
         <activity android:name=".cast.KarinLinkCastActivity" android:exported="false"
-            android:screenOrientation="landscape" android:configChanges="orientation|screenSize" />
+            android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|density|layoutDirection|uiMode" />
 
         <!-- Framework de Cast: el punto de entrada de la configuracion. -->
         <meta-data

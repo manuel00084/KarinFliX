@@ -13,16 +13,16 @@ import androidx.media3.effect.GlShaderProgram
 private const val TAG = "MotionX2BoostEffect"
 
 /**
- * MotionX2 Boost: hace que el video SE VEA mÃ¡s fluido (efecto telenovela).
+ * MotionX2 Boost: hace que el video SE VEA más fluido (efecto telenovela).
  *
  * Guarda el cuadro anterior REAL en una textura propia (FBO) para mezclar.
- * Nota honesta: el shader es 1:1 (entra 1 cuadro, sale 1), asÃ­ que no emite
- * cuadros extra; DOUBLING muestra cada cuadro nÃ­tido sin mezcla y la
- * repeticiÃ³n visible la hace el panel solo.
+ * Nota honesta: el shader es 1:1 (entra 1 cuadro, sale 1), así que no emite
+ * cuadros extra; DOUBLING muestra cada cuadro nítido sin mezcla y la
+ * repetición visible la hace el panel solo.
  *
  * Modos:
- * - HYBRID (recomendado): cuadro nÃ­tido + micro-mezcla del anterior. Mejor balance.
- * - DOUBLING: Frame x2, cada cuadro tal cual, sin mezcla. MÃ¡s ligero, menos suave.
+ * - HYBRID (recomendado): cuadro nítido + micro-mezcla del anterior. Mejor balance.
+ * - DOUBLING: Frame x2, cada cuadro tal cual, sin mezcla. Más ligero, menos suave.
  * - BLEND: mezcla suave entre anterior y actual. Suave, pero puede verse fantasma.
  */
 enum class MotionX2Mode(val label: String) {
@@ -35,10 +35,11 @@ enum class MotionX2Mode(val label: String) {
     ECO60("ECO60 (60fps liviano · bajo consumo)");
 
     companion object {
-        /** True si el ordinal guardado en prefs emite cuadros intermedios (fps reales extra). */
+        /** True si el ordinal guardado en prefs emite cuadros intermedios (fps reales extra).
+         *  DOUBLING es passthrough 1:1 (el panel repite): NO genera frames, no va por render propio. */
         fun isRealFps(ordinal: Int): Boolean =
             ordinal == INTERP.ordinal || ordinal == REAL60.ordinal ||
-                ordinal == ECO60.ordinal || ordinal == DOUBLING.ordinal
+                ordinal == ECO60.ordinal
 
         /**
          * Resuelve el ordinal guardado en prefs al modo efectivo. El modo
@@ -54,10 +55,11 @@ enum class MotionX2Mode(val label: String) {
     }
 }
 
-/** True si el modo emite cuadros intermedios (fps reales extra). */
+/** True si el modo emite cuadros intermedios (fps reales extra).
+ *  DOUBLING es 1:1 passthrough (x2 por repetición del panel, 0 costo): no es fps real. */
 fun MotionX2Mode.isRealFps(): Boolean =
     this == MotionX2Mode.INTERP || this == MotionX2Mode.REAL60 ||
-        this == MotionX2Mode.ECO60 || this == MotionX2Mode.DOUBLING
+        this == MotionX2Mode.ECO60
 
 class MotionX2BoostEffect(
     private var mode: MotionX2Mode = MotionX2Mode.HYBRID,

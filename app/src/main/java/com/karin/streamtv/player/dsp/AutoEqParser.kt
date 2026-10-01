@@ -1,4 +1,4 @@
-package com.karin.streamtv.player.dsp
+﻿package com.karin.streamtv.player.dsp
 
 /**
  * Parser de curvas paramétricas de ecualización automática (formato que
@@ -19,8 +19,8 @@ object AutoEqParser {
         RegexOption.IGNORE_CASE
     )
 
-    fun parse(text: String, maxBands: Int = 16): List<AudioEnhanceConfig.ParamBand>? {
-        val bands = ArrayList<AudioEnhanceConfig.ParamBand>()
+    fun parse(text: String, maxBands: Int = 16): List<ParamBand>? {
+        val bands = ArrayList<ParamBand>()
         for (raw in text.lines()) {
             if (bands.size >= maxBands) break
             val line = raw.trim()
@@ -33,7 +33,7 @@ object AutoEqParser {
             val q = m.groupValues[4].toFloatOrNull() ?: 0.707f
             if (freq == null || gain == null || freq <= 0f || q <= 0f) continue
             bands.add(
-                AudioEnhanceConfig.ParamBand(
+                ParamBand(
                     freqHz = freq,
                     gainDb = gain.coerceIn(-20f, 20f),
                     q = q.coerceIn(0.2f, 20f),
@@ -46,7 +46,7 @@ object AutoEqParser {
         return bands
     }
 
-    fun countLabel(bands: List<AudioEnhanceConfig.ParamBand>?): String =
+    fun countLabel(bands: List<ParamBand>?): String =
         if (bands.isNullOrEmpty()) "ninguna" else "${bands.size} bandas"
 
     private fun detectKind(token: String): BiquadFilter.Kind = when (token.uppercase()) {

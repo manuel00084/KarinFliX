@@ -21,6 +21,16 @@ object ScraperRegistry {
         scrapers[scraper.name] = scraper
     }
 
+    /** Registra (o reutiliza) un scraper genérico para una página temporal. */
+    fun registerTempSite(name: String, url: String): BaseScraper {
+        ensureInitialized()
+        return scrapers.getOrPut(name) { TempScraper(name, url) }
+    }
+
+    fun unregister(name: String) {
+        scrapers.remove(name)
+    }
+
     fun getScraper(siteName: String): BaseScraper? {
         ensureInitialized()
         return scrapers[siteName]

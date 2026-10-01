@@ -3,6 +3,7 @@ package com.karin.streamtv.enhancer
 import android.content.SharedPreferences
 import com.karin.streamtv.player.ExoPlayerSettingsHelper
 import com.karin.streamtv.player.SuperResolutionEffect
+import kotlin.math.pow
 
 /**
  * Puente entre prefs y RestoreBoostEffect: una sola intensidad maestra
@@ -53,9 +54,26 @@ object RestoreBoostController {
     }
 
     /**
-     * Deriva las 3 etapas desde el master. En gama baja, limpieza y
-     * reconstrucción se topan a 0.8 (igual que antes); el detalle se atenúa
-     * solo si el upscaler ya afila (FSR/Anime4K duplicarían halos).
+     * Deriva las 3 etapas desde el master con curvas perceptuales.
+     *
+     * El 1:1:1 lineal anterior ponía el detalle demasiado caliente en la
+     * zona media (master 0.6 -> detail 0.6 = dientes en contornos) y la
+     * limpieza demasiado tímida donde más ayuda. Ahora:
+     *  - limpieza: sube rápido y satura (m^0.8): 0.6 -> ~0.67. Incluso
+     *    intensidades bajas limpian bloques/ruido sin llegar a empastar.
+ *  - reconstrucción: lineal suave ×0.9 (0.6 -> 0.54). El line-darken
+ *    a 1.0 aplasta líneas finas; topado queda en zona segura. Incluye
+ *    coherencia de píxel inspirada en CRT (0.35x de retro, solo luma,
+ *    sin scanlines/máscara/glow) antes del detalle.
+     *  - detalle: m^1.4 (0.6 -> ~0.49). El RCAS puro resultaba invisible;
+     *    el detalle ahora es unsharp direccional con clamp estrecho (el filo
+     *    se ve) y esta curva solo lo modera para no llegar al crudeza. Con el
+     *    clamp fijo de 0.015 el exceso no crea dientes, asi que no hace falta
+     *    frenar tan fuerte.
+     * En gama baja, además del tope 0.8 en limpieza/reconstrucción, el
+     * detalle se topa a 0.5 (protege batería y evita empastar en Mali
+     * lentos). El detalle se atenúa solo si el upscaler ya afila
+     * (FSR/Anime4K/Karin duplicarían halos).
      */
     fun stagesFor(
         master: Float,
@@ -64,12 +82,13 @@ object RestoreBoostController {
         lowEnd: Boolean,
     ): Stages {
         val m = master.coerceIn(0f, 1f)
-        var dep = m
-        var ret = m
-        var det = m
+        var dep = m.pow(0.8f)
+        var ret = m * 0.9f
+        var det = m.pow(1.4f)
         if (lowEnd) {
             dep = dep.coerceIn(0f, 0.8f)
             ret = ret.coerceIn(0f, 0.8f)
+            det = det.coerceIn(0f, 0.5f)
         }
         if (upscalerOn) {
             if (upscalerMode == SuperResolutionEffect.MODE_FSR) det *= 0.55f
@@ -84,9 +103,11 @@ object RestoreBoostController {
     }
 
     /**
-     * Etapas efectivas para la cadena: modo vinculado (derivan del master)
-     * o personalizado (cada etapa lee su pref; el usuario manda, sin factor
-     * upscaler). Siempre con topes de gama baja.
+     * Etapas efectivas para la cadena: modo vinculado (curvas perceptuales
+     * del master, con topes de gama baja y factor upscaler) o personalizado
+     * (cada etapa lee su pref; el usuario manda, sin factor upscaler pero
+     * con topes de gama baja). Los fallbacks del modo fino reflejan el
+     * punto dulce nuevo (55/50/45 en vez del 60/60/70 caliente de antes).
      */
     fun stagesFromPrefs(
         prefs: SharedPreferences,
@@ -101,17 +122,20 @@ object RestoreBoostController {
         var det: Float
         if (custom) {
             dep = prefs.getInt(ExoPlayerSettingsHelper.KEY_DEPIXEL_STRENGTH, 60) / 100f
-            ret = prefs.getInt(ExoPlayerSettingsHelper.KEY_RETRO_STRENGTH, 60) / 100f
-            det = prefs.getInt(ExoPlayerSettingsHelper.KEY_DETAIL_BOOST_STRENGTH, 70) / 100f
+            ret = prefs.getInt(ExoPlayerSettingsHelper.KEY_RETRO_STRENGTH, 55) / 100f
+            det = prefs.getInt(ExoPlayerSettingsHelper.KEY_DETAIL_BOOST_STRENGTH, 55) / 100f
         } else {
-            val s = stagesFor(master, upscalerOn, upscalerMode, lowEnd = false)
+            val s = stagesFor(master, upscalerOn, upscalerMode, lowEnd)
             dep = s.depixel
             ret = s.retro
             det = s.detail
         }
         if (lowEnd) {
+            // El modo vinculado ya viene topado desde stagesFor; esto
+            // protege además al personalizado en Mali lentos.
             dep = dep.coerceIn(0f, 0.8f)
             ret = ret.coerceIn(0f, 0.8f)
+            det = det.coerceIn(0f, 0.5f)
         }
         return Stages(
             depixel = dep.coerceIn(0f, 1f),

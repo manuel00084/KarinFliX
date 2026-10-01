@@ -28,8 +28,10 @@ object MundoDonghuaScraper : GenericScraper() {
     override val name = "MundoDonghua"
     override val baseUrl = "https://www.mundodonghua.com"
 
+    // El buscador del sitio navega a /busquedas/{texto} como ruta
+    // (ver js/funciones.js): ?donghua= es ignorado por el servidor.
     override fun buildSearchUrl(query: String): String =
-        "${baseUrl}/busquedas/?donghua=${java.net.URLEncoder.encode(query, "UTF-8")}"
+        "${baseUrl}/busquedas/${encodePathSegment(query)}"
 
     override suspend fun getLatestEpisodes(): List<Episode> {
         val doc = fetchDocument() ?: return emptyList()

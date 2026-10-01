@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
     id 'kotlin-parcelize'
+    // Required for the @Serializable annotations in karinlink/protocol.
+    // The dependency (kotlinx-serialization-json) was already present, but the
+    // compiler plugin was not, so those annotations would not have generated
+    // serializers.
+    id 'org.jetbrains.kotlin.plugin.serialization'
 }
 
 android {
@@ -55,6 +60,10 @@ android {
 
     testOptions {
         unitTests.includeAndroidResources = true
+        // KARIN Link protocol tests are plain JVM: they hit android.util.Log
+        // (not mocked) and must not need Robolectric. Return defaults instead of
+        // throwing, so pure-logic code can be tested without an emulator.
+        unitTests.returnDefaultValues = true
     }
 
     buildFeatures {
@@ -68,13 +77,6 @@ android {
             excludes += 'META-INF/*.SF'
             excludes += 'META-INF/*.DSA'
             excludes += 'META-INF/*.RSA'
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path "src/main/cpp/CMakeLists.txt"
-            version "3.22.1"
         }
     }
 }
@@ -91,11 +93,16 @@ dependencies {
     implementation 'androidx.leanback:leanback-preference:1.0.0'
     implementation 'androidx.tvprovider:tvprovider:1.0.0'
 
+    // DLNA/Cast: descubrimiento de receptores y envío de vídeo.
+    // MediaRouter aporta la lista de rutas; el framework de Cast, la sesión.
+    implementation 'androidx.mediarouter:mediarouter:1.7.0'
+    implementation 'com.google.android.gms:play-services-cast-framework:21.5.0'
+
 
     // HTTP
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
-    // jcifs-ng (SMB client for network file sharing) - used by KarinLink/SmbClient
+    // jcifs-ng (SMB client for network file sharing) - used by the file explorer
     implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
 
     // HTML Parser (replaces fragile regex extraction)
@@ -125,9 +132,16 @@ dependencies {
     implementation 'androidx.media3:media3-datasource-cronet:1.11.0'
     implementation 'androidx.media3:media3-datasource:1.11.0'
     implementation 'androidx.media3:media3-database:1.11.0'
+    // KARIN Link: remux/transcode tier when the TV cannot decode a stream.
+    // Also pulls in media3-exoplayer + media3-common at the same version.
+    implementation 'androidx.media3:media3-transformer:1.11.0'
 
     // Unit tests
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
+    // Real HTTP/WebSocket server for KARIN Link transport tests, replacing the
+    // placeholder assertTrue(true) suite.
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
 }

@@ -17,6 +17,14 @@ abstract class GenericScraper : BaseScraper {
     protected open fun buildSearchUrl(query: String): String =
         "${baseUrl}/?s=${java.net.URLEncoder.encode(query, "UTF-8")}"
 
+    /**
+     * Codifica para segmento de ruta (/buscar/{q}): URLEncoder deja los
+     * espacios como `+`, válido en query strings pero literal en rutas
+     * (el servidor buscaría "once+piece" en vez de "once piece").
+     */
+    protected fun encodePathSegment(query: String): String =
+        java.net.URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
+
     protected suspend fun fetchDocument(url: String? = null, forceFresh: Boolean = false): Document? {
         val target = url ?: baseUrl
         val cacheKey = "${name}::${target.hashCode()}"

@@ -110,8 +110,20 @@ class CalendarActivity : AppCompatActivity() {
 
                 showDay(selectedDayIndex)
 
-                if (isTvDevice() && rvDays.childCount > selectedDayIndex) {
-                    rvDays.getChildAt(selectedDayIndex)?.requestFocus()
+                // El foco solo existe tras el layout: se pide en post y, si
+                // la tira aún no midió, se reintenta una vez.
+                if (isTvDevice()) {
+                    rvDays.post {
+                        val target = rvDays.layoutManager
+                            ?.findViewByPosition(selectedDayIndex)
+                            ?: rvDays.getChildAt(selectedDayIndex)
+                        if (target?.requestFocus() != true) {
+                            rvDays.post {
+                                (rvDays.layoutManager?.findViewByPosition(selectedDayIndex)
+                                    ?: rvDays.getChildAt(0))?.requestFocus()
+                            }
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("CalendarActivity", "loadCalendar error: ${e.message}", e)
@@ -168,6 +180,20 @@ class CalendarActivity : AppCompatActivity() {
         if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
             finish()
             return true
+        }
+        // Puentes D-pad entre tira de días y grid (los adapters no los traen).
+        if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && rvDays.hasFocus()) {
+            val first = (rvSeries.layoutManager as? LinearLayoutManager)
+                ?.findViewByPosition(0)
+            if (first?.requestFocus() == true) return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP && rvSeries.hasFocus()) {
+            val lm = rvSeries.layoutManager as? LinearLayoutManager
+            if ((lm?.findFirstVisibleItemPosition() ?: 0) == 0) {
+                val day = rvDays.layoutManager?.findViewByPosition(selectedDayIndex)
+                    ?: rvDays.getChildAt(0)
+                if (day?.requestFocus() == true) return true
+            }
         }
         return super.onKeyDown(keyCode, event)
     }

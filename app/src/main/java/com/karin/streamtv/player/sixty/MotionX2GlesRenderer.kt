@@ -57,6 +57,30 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
     private var demoSplit: Boolean = false
     private var aspectProvider: () -> Int = { ExoPlayerSettingsHelper.MODE_ORIGINAL }
 
+    /** La actividad lo asigna: se invoca UNA vez en el hilo principal cuando el
+     *  render propio no puede dibujar (EGL o FBO rotos en GPU débil). */
+    var onFatalError: (() -> Unit)? = null
+    private var fatalFired = false
+    /** Cascada térmica sin cortes: REAL60→ECO60→DOUBLING (passthrough) sin recreate. */
+    var onThermalDowngrade: ((MotionX2Mode) -> Unit)? = null
+    private var overheatStrikes = 0
+    private var downgradeFired = false
+
+    private fun fatal(where: String, e: Throwable?) {
+        if (e != null) Log.e(TAG, "render propio fatal ($where)", e)
+        else Log.e(TAG, "render propio fatal ($where)")
+        if (fatalFired || released) return
+        fatalFired = true
+        try {
+            stopLoop()
+        } catch (_: Exception) {
+        }
+        try {
+            mainHandler.post { try { onFatalError?.invoke() } catch (_: Exception) {} }
+        } catch (_: Exception) {
+        }
+    }
+
     private val choreographer = Choreographer.getInstance()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -75,6 +99,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
     private var decoderST: SurfaceTexture? = null
     private var inputSurface: Surface? = null
     private val stTransform = FloatArray(16)
+    private var eglCurrent = false
 
     private var progCopyOes: MiniProg? = null
     private var progCopy: MiniProg? = null
@@ -126,6 +151,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         released = false
         output.holder.addCallback(this)
         val surf = output.holder.surface
+        fatalFired = false
         if (surf != null && surf.isValid) {
             surfaceCreated(output.holder)
             val fw = output.width
@@ -180,6 +206,8 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
     fun setMode(mode: MotionX2Mode) {
         if (mode == interpMode && eglReady) return
         interpMode = mode
+        downgradeFired = false
+        overheatStrikes = 0
         if (!eglReady) return
         try {
             ensureCurrent()
@@ -254,7 +282,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         try {
             initEgl(holder.surface)
         } catch (e: Exception) {
-            Log.e(TAG, "initEgl falló", e)
+            fatal("initEgl", e)
         }
         if (playing) startLoop()
     }
@@ -454,6 +482,20 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
             val avgDrawUs = drawNsAcc / DRAW_LOG_EVERY / 1000L
             val avgCopyUs = if (copyCountAcc > 0) copyNsAcc / copyCountAcc / 1000L else -1L
             Log.d(TAG, "DRAW n=$drawCount slot=$drawnSlot prev=$drawnPrev f=$drawnF avgMs=$avg hist=$histSize [$histN0..$histN1] off=$clockOffsetUs glDrawUs=$avgDrawUs glCopyUs=$avgCopyUs/copies=$copyCountAcc")
+            // Guard térmico exigente: >14ms 2 logs seguidos = no da para 60Hz
+            if (avgDrawUs > 14_000L) overheatStrikes++ else overheatStrikes = 0
+            if (overheatStrikes >= 2 && !downgradeFired && !released) {
+                downgradeFired = true
+                val next = when (interpMode) {
+                    MotionX2Mode.REAL60 -> MotionX2Mode.ECO60
+                    MotionX2Mode.ECO60 -> MotionX2Mode.DOUBLING
+                    else -> null
+                }
+                if (next != null) {
+                    Log.w(TAG, "Guard térmico: $interpMode -> $next (avgDraw ${avgDrawUs}us)")
+                    try { mainHandler.post { try { onThermalDowngrade?.invoke(next) } catch (_: Exception) {} } } catch (_: Exception) {}
+                }
+            }
             drawNsAcc = 0L
             copyNsAcc = 0L
             copyCountAcc = 0L
@@ -769,15 +811,18 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
     }
 
     private fun ensureCurrent() {
+        if (eglCurrent) return
         if (display != EGL14.EGL_NO_DISPLAY && windowSurface != EGL14.EGL_NO_SURFACE &&
             context != EGL14.EGL_NO_CONTEXT
         ) {
             EGL14.eglMakeCurrent(display, windowSurface, windowSurface, context)
+            eglCurrent = true
         }
     }
 
     private fun teardownGl() {
         eglReady = false
+        eglCurrent = false
         try {
             progCopyOes?.delete()
             progCopy?.delete()
@@ -845,6 +890,11 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
         }
         ringIdx = 0
         frames.clear()
+        // Sin slots no hay cuadros que dibujar (pantalla negra con audio):
+        // se deriva al grafo normal en vez de quedarse en negro silencioso.
+        if (pool.isEmpty() && eglReady && !released) {
+            fatal("pool vacío ${poolW}x$poolH", null)
+        }
     }
 
     private fun createSlot(): PSlot? {
@@ -1060,7 +1110,7 @@ class MotionX2GlesRenderer : Choreographer.FrameCallback,
                 "    float f = clamp(uFactor, 0.0, 1.0);\n" +
                 "    float mot = length(c - p);\n" +
                 "    float m = smoothstep(0.03, 0.20, mot);\n" +
-                "    vec3 rgb = clamp(mix(c, p, clamp(m * f, 0.0, 1.0)), min(p, c), max(p, c));\n" +
+                "    vec3 rgb = clamp(mix(p, c, clamp(m * f, 0.0, 1.0)), min(p, c), max(p, c));\n" +
                 "    if (uDemoSplit == 1 && vTexCoord.x < 0.5) { rgb = c; }\n" +
                 "    gl_FragColor = vec4(rgb, 1.0);\n" +
                 "}\n"

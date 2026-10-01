@@ -38,7 +38,7 @@ object JKAnimeScraper : GenericScraper() {
     private const val MAX_EPISODE_PAGES = 30
 
     override fun buildSearchUrl(query: String): String =
-        "${baseUrl}/buscar/${java.net.URLEncoder.encode(query, "UTF-8")}/"
+        "${baseUrl}/buscar/${encodePathSegment(query)}/"
 
     override suspend fun getLatestEpisodes(): List<Episode> {
         val doc = fetchDocument() ?: return emptyList()

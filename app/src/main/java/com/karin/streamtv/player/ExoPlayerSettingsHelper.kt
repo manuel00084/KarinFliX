@@ -1,6 +1,7 @@
 package com.karin.streamtv.player
 
 import android.app.Activity
+import android.content.Intent
 import android.content.SharedPreferences
 import android.view.Gravity
 import android.widget.Button
@@ -12,12 +13,16 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.media3.exoplayer.ExoPlayer
+import com.karin.streamtv.R
 import com.karin.streamtv.enhancer.KarinLightBoostController
 import com.karin.streamtv.enhancer.RestoreBoostController
 import com.karin.streamtv.enhancer.parameters.KarinLightBoostParameters
+import com.karin.streamtv.ui.GlassesTutorialActivity
 import com.karin.streamtv.util.DeviceProfile
+import com.karin.streamtv.util.onActionKey
 
 object ExoPlayerSettingsHelper {
 
@@ -36,22 +41,28 @@ object ExoPlayerSettingsHelper {
     const val SHADER_CRT = 1
     const val SHADER_CINE = 2
     const val SHADER_BW = 3
+    const val SHADER_ANIME = 4
+    const val SHADER_SHARPEN = 5
+    const val SHADER_GRAIN = 6
 
     fun shaderTypeName(type: Int): String = when (type) {
-        SHADER_CRT -> "CRT"
+        SHADER_CRT -> "CRT pantalla plana"
         SHADER_CINE -> "Cine"
         SHADER_BW -> "B/N"
+        SHADER_ANIME -> "Anime"
+        SHADER_SHARPEN -> "Sharpen"
+        SHADER_GRAIN -> "Grain"
         else -> "Off"
     }
 
     /**
-     * Selección actual: tipo (0=off, 1=CRT, 2=Cine, 3=B/N) + intensidad.
-     * Migra una vez las prefs legacy del CRT.
+     * Selección actual: tipo (0=off, 1=CRT, 2=Cine, 3=B/N, 4=Anime,
+     * 5=Sharpen, 6=Grain) + intensidad. Migra una vez las prefs legacy del CRT.
      */
     fun shaderSelection(prefs: SharedPreferences): Pair<Int, Float> {
         if (prefs.contains(KEY_SHADER_EN)) {
             if (!prefs.getBoolean(KEY_SHADER_EN, false)) return SHADER_OFF to 0f
-                val t = prefs.getInt(KEY_SHADER_TYPE, SHADER_CRT).coerceIn(0, 3)
+                val t = prefs.getInt(KEY_SHADER_TYPE, SHADER_CRT).coerceIn(0, 6)
             val s = prefs.getInt(KEY_SHADER_STRENGTH, 50) / 100f
             return t to s.coerceIn(0f, 1f)
         }
@@ -75,10 +86,10 @@ object ExoPlayerSettingsHelper {
     const val KEY_RESTORE_CUSTOM = "restore_custom"
     const val KEY_RETRO_EN = "retro_enabled"
     const val KEY_RETRO_STRENGTH = "retro_strength"
-    const val KEY_DEBAND_STRENGTH = "deband_strength" // (legacy, sin UI: el debanding es automático)
     const val KEY_CINE_EN = "cine_enabled"
     const val KEY_CINE_STRENGTH = "cine_strength"
     const val KEY_CINE_MODE = "cine_mode"
+    const val KEY_CINE_FAKEHDR = "cine_fakehdr"
     const val KEY_RANGE_MODE = "cine_range_mode"
     const val KEY_COLORS_EN = "colors_enabled"
     const val KEY_COLORS_STRENGTH = "colors_strength"
@@ -150,7 +161,37 @@ object ExoPlayerSettingsHelper {
         fun onOff(en: Boolean) = if (en) "ON" else "OFF"
         fun dp(v: Int) = (v * activity.resources.displayMetrics.density).toInt()
         val cineEn = prefs.getBoolean(KEY_CINE_EN, false)
-        val colorsEn = prefs.getBoolean(KEY_COLORS_EN, false)
+        // KEY_COLORS_EN ya no se lee aquí: el switch maestro de Light Boost
+        // guarda el grupo entero, así que la fila depende solo de KEY_CINE_EN.
+
+        // Refresco de las etiquetas ON/OFF. BUG QUE SE ARREGLA AQUI: el
+        // sub-dialogo se abre con AlertDialog.show(), que es ASINCRONO
+        // (retorna de inmediato). Antes, la fila releia prefs justo despues
+        // de invoke(), o sea ANTES de que el usuario tocara nada, y nunca
+        // volvia a releer -> la etiqueta se quedaba en el estado viejo
+        // (seguia marcando OFF aunque activaras la opcion). Ahora se
+        // relee cuando el sub-dialogo APLICA los cambios.
+        val rowViews = mutableListOf<Pair<FeatureEntry, TextView>>()
+        // Ultra económico: los efectos están apagados aunque el ajuste diga
+        // ON (se conservan para al apagar el modo). Las filas se muestran en
+        // gris, sin acción, con la etiqueta forzada a OFF.
+        val ultraOff = try {
+            com.karin.streamtv.util.AppPreferences.isUltraEconomyMode()
+        } catch (_: Exception) { false }
+        fun displayLabel(entry: FeatureEntry): String {
+            val base = entry.label()
+            if (!ultraOff) return base
+            return base.replace("• ON", "• OFF")
+        }
+        fun refreshRows() {
+            for ((entry, tv) in rowViews) tv.text = displayLabel(entry)
+        }
+        // Envuelve onEffectsChanged: todos los sub-dialogos lo llaman al
+        // aplicar, asi que es el punto fiable para refrescar las filas.
+        val onEffectsChangedWrapped: (ExoPlayer) -> Unit = { p ->
+            onEffectsChanged(p)
+            refreshRows()
+        }
 
         // Orden = orden real del pipeline en ExoPlayerActivity para evitar confusión.
         val entries = listOf(
@@ -161,14 +202,14 @@ object ExoPlayerSettingsHelper {
                     "1. Restore Boost • ${onOff(prefs.getBoolean(KEY_RESTORE_EN, false))}" +
                         if (prefs.getBoolean(KEY_RESTORE_CUSTOM, false)) " (fino)" else ""
                 },
-                "Restaura en una sola pasada: limpia bloques/ruido/bandas, reconstruye bordes estilo emulador y afila micro-detalle sin reintroducir pixelado. Intensidad maestra + ajuste fino opcional.",
-                android.R.drawable.ic_menu_revert,
+                "Restaura en una sola pasada: limpia bloques/ruido/bandas, reconstruye bordes con coherencia de pixel inspirada en CRT (sin scanlines/mascara/glow) y afila micro-detalle sin reintroducir pixelado. Intensidad maestra + ajuste fino opcional.",
+                R.drawable.ic_image,
             ) {
                 showRestoreDialog(
                     activity = activity,
                     prefs = prefs,
                     player = player,
-                    onEffectsChanged = onEffectsChanged,
+                    onEffectsChanged = onEffectsChangedWrapped,
                     onMasterLive = { v -> onStrengthChanged("restore", v) },
                     onStagesLive = { d, r, t -> onRestoreChanged(d, r, t) },
                 )
@@ -177,15 +218,18 @@ object ExoPlayerSettingsHelper {
             // 2. Light Boost: brillo dinámico, contraste inteligente y color.
             //    Una sola intensidad, Manual o AUTO.
             FeatureEntry(
-                { "2. Light Boost • ${onOff(cineEn || colorsEn || prefs.getInt(KEY_RANGE_MODE, 0) != 0)}" },
-                "Una sola intensidad automática: luz, contraste y color juntos. Modo Manual o AUTO (la escena decide).",
-                android.R.drawable.ic_menu_day,
+                {
+                    "2. Light Boost • ${onOff(cineEn)}" +
+                        if (cineEn && !prefs.getBoolean(KEY_CINE_FAKEHDR, true)) " (sin HDR)" else ""
+                },
+                "Una sola intensidad automática: luz, contraste y color juntos. Modo Manual o AUTO (la escena decide). El interruptor gobierna el grupo completo: al apagar se anulan luz, color y rango.",
+                R.drawable.ic_sun,
             ) {
                 showKarinLightBoostDialog(
                     activity = activity,
                     prefs = prefs,
                     player = player,
-                    onEffectsChanged = onEffectsChanged,
+                    onEffectsChanged = onEffectsChangedWrapped,
                     onKarinChanged = onKarinChanged,
                 )
             },
@@ -193,13 +237,13 @@ object ExoPlayerSettingsHelper {
             FeatureEntry(
                 { "3. MotionX2 • ${onOff(prefs.getBoolean(KEY_MOTIONX2_EN, false))}" },
                 "Suavizado de movimiento: mezcla temporal o 60 fps reales por interpolación. Va después del Upscaler para trabajar a resolución de pantalla final.",
-                android.R.drawable.ic_menu_slideshow,
+                R.drawable.ic_forward,
             ) {
                 showMotionX2Dialog(
                     activity = activity,
                     prefs = prefs,
                     player = player,
-                    onEffectsChanged = onEffectsChanged,
+                    onEffectsChanged = onEffectsChangedWrapped,
                 )
             },
             // 4. Upscaler de calidad (sustituye el restore bilineal; gratis
@@ -207,13 +251,13 @@ object ExoPlayerSettingsHelper {
             FeatureEntry(
                 { "4. Upscaler • ${onOff(prefs.getBoolean(KEY_UPSCALER_EN, false))}" },
                 "Reescala el video (KarinSuperRes, FSR o Anime4K) con afilado propio. En gama alta, Karin HiRes y FSR afilan el resultado real en 2 pases; en media/baja usan un solo pase para mantener los fps.",
-                android.R.drawable.ic_menu_zoom,
+                R.drawable.ic_aspect_ratio,
             ) {
                 showUpscalerDialog(
                     activity = activity,
                     prefs = prefs,
                     player = player,
-                    onEffectsChanged = onEffectsChanged,
+                    onEffectsChanged = onEffectsChangedWrapped,
                     onLiveSharp = { v -> onStrengthChanged("upscaler_sharp", v) },
                     videoInputHeight = videoInputHeight,
                 )
@@ -224,14 +268,14 @@ object ExoPlayerSettingsHelper {
                     val (t, _) = shaderSelection(prefs)
                     "5. Shader ${shaderTypeName(t)} • ${onOff(t != SHADER_OFF)}"
                 },
-                "Acabado estético final tras MotionX2: CRT retro, Cine (viñeta+grano) o Blanco y negro. Un tipo a la vez.",
-                android.R.drawable.ic_menu_gallery,
+                "Acabado estético final tras MotionX2: CRT, Cine, B/N, Anime, Sharpen o Grain. Un tipo a la vez.",
+                R.drawable.ic_video,
             ) {
                 showShaderDialog(
                     activity = activity,
                     prefs = prefs,
                     player = player,
-                    onEffectsChanged = onEffectsChanged,
+                    onEffectsChanged = onEffectsChangedWrapped,
                     onLiveChange = { v -> onStrengthChanged("shader", v) },
                 )
             },
@@ -239,7 +283,7 @@ object ExoPlayerSettingsHelper {
             FeatureEntry(
                 { "6. Demo split-screen • ${onOff(prefs.getBoolean(KEY_DEMO_EN, false))}" },
                 "Comparación split-screen: izquierda el video original, derecha con mejoras, separadas por una línea blanca vertical. Ambos lados muestran el mismo instante.",
-                android.R.drawable.ic_menu_view,
+                R.drawable.ic_stats_compare,
             ) {
                 showToggleDialog(
                     activity = activity,
@@ -251,7 +295,7 @@ object ExoPlayerSettingsHelper {
                     getEnabled = { prefs.getBoolean(KEY_DEMO_EN, false) },
                     onSave = { en ->
                         prefs.edit().putBoolean(KEY_DEMO_EN, en).apply()
-                        player?.let { onEffectsChanged(it) }
+                        player?.let { onEffectsChangedWrapped(it) }
                     },
                 )
             },
@@ -261,38 +305,54 @@ object ExoPlayerSettingsHelper {
             orientation = LinearLayout.VERTICAL
             setPadding(28, 12, 28, 8)
         }
+        if (ultraOff) {
+            list.addView(TextView(activity).apply {
+                text = "☘️ Ultra económico activo: efectos apagados. " +
+                    "Apágalo en Configuración para usarlos."
+                textSize = 13f
+                setTextColor(0xFF9E9E9E.toInt())
+                setPadding(16, 12, 16, 16)
+            })
+        }
+        var firstRow: LinearLayout? = null
         entries.forEach { entry ->
             val labelView = TextView(activity).apply {
-                text = entry.label()
+                text = displayLabel(entry)
                 textSize = 16f
-                setTextColor(0xFFECEFF1.toInt())
+                setTextColor(if (ultraOff) 0xFF616161.toInt() else 0xFFECEFF1.toInt())
             }
+            rowViews += entry to labelView
             val row = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(16, 16, 16, 16)
-                isFocusable = true
-                isClickable = true
+                isFocusable = !ultraOff
+                isClickable = !ultraOff
                 addView(ImageView(activity).apply {
                     setImageResource(entry.iconRes)
-                    setColorFilter(0xFFB0BEC5.toInt())
+                    setColorFilter(if (ultraOff) 0xFF616161.toInt() else 0xFFB0BEC5.toInt())
                     layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply {
                         marginEnd = dp(16)
                     }
                 })
                 addView(labelView)
-                setOnClickListener {
-                    entry.action?.invoke()
-                    // Al volver del sub-diálogo, re-evaluar el título de la fila
-                    // con las prefs en vivo (si no, sigue marcando OFF aunque se
-                    // haya activado la opción).
-                    labelView.text = entry.label()
+                if (!ultraOff) {
+                    setOnClickListener {
+                        // Abre el sub-diálogo (asíncrono). El refresco real de
+                        // la etiqueta ocurre en onEffectsChangedWrapped, cuando
+                        // el usuario aplique el cambio; esta llamada solo sincroniza
+                        // el estado actual por si el sub-diálogo se cerrara sin
+                        // tocar nada.
+                        entry.action?.invoke()
+                        labelView.text = displayLabel(entry)
+                    }
                 }
             }
             list.addView(row)
+            if (firstRow == null && !ultraOff) firstRow = row
         }
         AlertDialog.Builder(activity)
-            .setTitle("Opciones Avanzadas de Video")
+            .setTitle(if (ultraOff) "Opciones Avanzadas de Video (apagadas ☘️)" else "Opciones Avanzadas de Video")
             .setView(ScrollView(activity).apply {
                 addView(
                     list,
@@ -303,7 +363,12 @@ object ExoPlayerSettingsHelper {
                 )
             })
             .setNegativeButton("Cerrar", null)
-            .show()
+            .create()
+            .apply {
+                // TV/D-pad: el foco debe empezar en la primera fila, no en Cerrar.
+                setOnShowListener { firstRow?.requestFocus() }
+                show()
+            }
     }
 
     /**
@@ -323,32 +388,27 @@ object ExoPlayerSettingsHelper {
         var type = curType
         var strength = curStrength
 
-        val desc = TextView(activity).apply {
-            textSize = 13f
-            setPadding(0, 16, 0, 8)
-        }
-        fun typeDesc(t: Int) = when (t) {
-            SHADER_CRT -> "CRT retro: curvatura + scanlines + rejilla RGB + viñeta."
-            SHADER_CINE -> "Cine: viñeta suave + grano de película animado."
-            SHADER_BW -> "Blanco y negro con contraste."
-            else -> "Sin acabado (imagen tal cual sale de la cadena)."
-        }
         fun pct(v: Float) = "Intensidad: ${(v * 100).toInt()}%"
         val valueLabel = TextView(activity).apply { text = pct(strength) }
         val seek = SeekBar(activity).apply {
             max = 100
             progress = (strength * 100).toInt()
         }
-        val rbOff = RadioButton(activity).apply { text = "Apagado" }
-        val rbCrt = RadioButton(activity).apply { text = "CRT" }
-        val rbCine = RadioButton(activity).apply { text = "Cine" }
-        val rbBw = RadioButton(activity).apply { text = "B/N" }
+
+        // Cada tipo con su descripción debajo (como Upscaler/MotionX2): el
+        // detalle va pegado a su opción, no en un bloque de texto arriba.
+        val shaderDefs = listOf(
+            SHADER_OFF to ("Apagado" to "Sin acabado (imagen tal cual sale de la cadena)."),
+            SHADER_CRT to ("CRT pantalla plana" to "TV retro: curvatura + scanlines + rejilla RGB + viñeta."),
+            SHADER_CINE to ("Cine" to "Aspecto cinematográfico: viñeta suave + grano de película animado."),
+            SHADER_BW to ("B/N" to "Blanco y negro monocromático con contraste."),
+            SHADER_ANIME to ("Anime" to "Mejora de líneas para anime: define bordes y limpia el cel."),
+            SHADER_SHARPEN to ("Sharpen" to "Nitidez inteligente: afila sin halos, respeta zonas ya nítidas."),
+            SHADER_GRAIN to ("Grain" to "Textura cinematográfica: grano animado, más en medios tonos."),
+        )
+        val radios = mutableListOf<RadioButton>()
         fun syncRadios() {
-            rbOff.isChecked = type == SHADER_OFF
-            rbCrt.isChecked = type == SHADER_CRT
-            rbCine.isChecked = type == SHADER_CINE
-            rbBw.isChecked = type == SHADER_BW
-            desc.text = typeDesc(type)
+            radios.forEachIndexed { i, r -> r.isChecked = shaderDefs[i].first == type }
         }
         fun pick(t: Int) {
             type = t
@@ -359,16 +419,29 @@ object ExoPlayerSettingsHelper {
             }
             syncRadios()
         }
-        rbOff.setOnClickListener { pick(SHADER_OFF) }
-        rbCrt.setOnClickListener { pick(SHADER_CRT) }
-        rbCine.setOnClickListener { pick(SHADER_CINE) }
-        rbBw.setOnClickListener { pick(SHADER_BW) }
-        val typeRow = LinearLayout(activity).apply {
+        val typeBox = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            addView(rbOff)
-            addView(rbCrt)
-            addView(rbCine)
-            addView(rbBw)
+        }
+        shaderDefs.forEach { (t, pair) ->
+            val (title, descText) = pair
+            val rb = RadioButton(activity).apply {
+                text = title
+                isChecked = t == type
+            }
+            radios.add(rb)
+            val sub = TextView(activity).apply {
+                text = descText
+                textSize = 12f
+                setPadding(56, 0, 0, 12)
+            }
+            val row = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(rb)
+                addView(sub)
+            }
+            rb.setOnClickListener { pick(t) }
+            row.setOnClickListener { pick(t) }
+            typeBox.addView(row)
         }
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -385,8 +458,7 @@ object ExoPlayerSettingsHelper {
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
-            addView(typeRow)
-            addView(desc)
+            addView(typeBox)
             addView(valueLabel)
             addView(seek)
             addView(TextView(activity).apply {
@@ -404,7 +476,7 @@ object ExoPlayerSettingsHelper {
                     .putInt(KEY_SHADER_TYPE, type)
                     .putInt(KEY_SHADER_STRENGTH, (strength * 100).toInt())
                     .apply()
-                player?.let { onEffectsChanged(it) }
+                applyWithIncompatibilityGuard(activity, prefs, player, onEffectsChanged)
             }
             .setNegativeButton("Cancelar", null)
             .show()
@@ -428,18 +500,24 @@ object ExoPlayerSettingsHelper {
         var master = RestoreBoostController.masterAndEnabled(prefs).first.coerceIn(0f, 1f)
         var custom = prefs.getBoolean(KEY_RESTORE_CUSTOM, false)
 
-        fun detailFactor(): Float {
-            if (!prefs.getBoolean(KEY_UPSCALER_EN, false)) return 1f
-            val mode = prefs.getInt(KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
-            if (mode == SuperResolutionEffect.MODE_FSR) return 0.55f
-            if (mode == SuperResolutionEffect.MODE_ANIME4K) return 0.5f
-            if (mode == SuperResolutionEffect.MODE_KARIN) return 0.55f
-            return 1f
+        fun linkedStages(m: Float): Triple<Float, Float, Float> {
+            val upOn = prefs.getBoolean(KEY_UPSCALER_EN, false)
+            val upMode = prefs.getInt(KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
+            // Preview sin topes de gama (la cadena los aplica al confirmar).
+            val s = RestoreBoostController.stagesFor(m, upOn, upMode, lowEnd = false)
+            return Triple(s.depixel, s.retro, s.detail)
         }
-        var dep = if (custom) prefs.getInt(KEY_DEPIXEL_STRENGTH, 60) / 100f else master
-        var ret = if (custom) prefs.getInt(KEY_RETRO_STRENGTH, 60) / 100f else master
-        var det = if (custom) prefs.getInt(KEY_DETAIL_BOOST_STRENGTH, 70) / 100f
-        else (master * detailFactor()).coerceIn(0f, 1f)
+        var dep: Float
+        var ret: Float
+        var det: Float
+        if (custom) {
+            dep = prefs.getInt(KEY_DEPIXEL_STRENGTH, 60) / 100f
+            ret = prefs.getInt(KEY_RETRO_STRENGTH, 55) / 100f
+            det = prefs.getInt(KEY_DETAIL_BOOST_STRENGTH, 55) / 100f
+        } else {
+            val (d, r, t) = linkedStages(master)
+            dep = d; ret = r; det = t
+        }
 
         fun pct(name: String, v: Float) = "$name: ${(v * 100).toInt()}%"
         val switch = Switch(activity).apply {
@@ -488,9 +566,10 @@ object ExoPlayerSettingsHelper {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
                 master = progress / 100f
-                dep = master
-                ret = master
-                det = (master * detailFactor()).coerceIn(0f, 1f)
+                val (d, r, t) = linkedStages(master)
+                dep = d
+                ret = r
+                det = t
                 custom = false
                 masterLabel.text = pct("Intensidad", master)
                 syncFine()
@@ -522,8 +601,8 @@ object ExoPlayerSettingsHelper {
             setPadding(48, 24, 48, 8)
             addView(switch)
             addView(TextView(activity).apply {
-                text = "Limpieza + reconstrucción + detalle en un solo pase: " +
-                    "cada píxel se suaviza O se afila, nunca ambas."
+                text = "Limpieza + reconstrucción con coherencia CRT sutil + detalle en un solo pase: " +
+                    "la reconstrucción cohesiona píxeles vecinos y luego el detalle afila encima."
                 textSize = 13f
                 setPadding(0, 16, 0, 8)
             })
@@ -656,32 +735,52 @@ object ExoPlayerSettingsHelper {
             }
         }
 
-        val modeKarin = RadioButton(activity).apply {
-            text = "KarinSuperRes (Experimental)"
-            isChecked = mode == SuperResolutionEffect.MODE_KARIN
-        }
-        val modeFsr = RadioButton(activity).apply {
-            text = "FSR"
-            isChecked = mode == SuperResolutionEffect.MODE_FSR
-        }
-        val modeAnime = RadioButton(activity).apply {
-            text = "Anime4K"
-            isChecked = mode == SuperResolutionEffect.MODE_ANIME4K
-        }
+        // Cada modo con su descripción debajo (como MotionX2): arriba solo
+        // una línea, el detalle va pegado a su opción.
+        val modeDefs = listOf(
+            Triple(
+                SuperResolutionEffect.MODE_KARIN,
+                "KarinSuperRes (Experimental)",
+                "Upscaler propio: nítido sin halos ni ruido, DRS-aware, variante por gama (ECO/CRISP/HiRes).",
+            ),
+            Triple(
+                SuperResolutionEffect.MODE_FSR,
+                "FSR",
+                "AMD edge-adaptive con afilado adaptativo. El default estable.",
+            ),
+            Triple(
+                SuperResolutionEffect.MODE_ANIME4K,
+                "Anime4K",
+                "Afilado rápido tuneado para anime.",
+            ),
+        )
+        val radios = mutableListOf<RadioButton>()
         fun selectMode(m: Int) {
             mode = m
-            modeKarin.isChecked = m == SuperResolutionEffect.MODE_KARIN
-            modeFsr.isChecked = m == SuperResolutionEffect.MODE_FSR
-            modeAnime.isChecked = m == SuperResolutionEffect.MODE_ANIME4K
+            radios.forEachIndexed { i, r -> r.isChecked = modeDefs[i].first == m }
         }
-        modeKarin.setOnClickListener { selectMode(SuperResolutionEffect.MODE_KARIN) }
-        modeFsr.setOnClickListener { selectMode(SuperResolutionEffect.MODE_FSR) }
-        modeAnime.setOnClickListener { selectMode(SuperResolutionEffect.MODE_ANIME4K) }
-        val modeRow = LinearLayout(activity).apply {
+        val modeBox = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            addView(modeKarin)
-            addView(modeFsr)
-            addView(modeAnime)
+        }
+        modeDefs.forEach { (m, title, desc) ->
+            val rb = RadioButton(activity).apply {
+                text = title
+                isChecked = m == mode
+            }
+            radios.add(rb)
+            val sub = TextView(activity).apply {
+                text = desc
+                textSize = 12f
+                setPadding(56, 0, 0, 12)
+            }
+            val row = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(rb)
+                addView(sub)
+            }
+            rb.setOnClickListener { selectMode(m) }
+            row.setOnClickListener { selectMode(m) }
+            modeBox.addView(row)
         }
 
         val valueLabel = TextView(activity).apply {
@@ -708,16 +807,7 @@ object ExoPlayerSettingsHelper {
             addView(switch)
             addView(
                 TextView(activity).apply {
-                    text = "Reescala 2x con calidad:\n" +
-                        "· FSR de AMD (default): edge-adaptive con afilado adaptativo.\n" +
-                        "· KarinSuperRes (experimental): upscaler propio, nitido, sin halos " +
-                        "ni ruido, DRS-aware, variante por gama (ECO/CRISP/HiRes).\n" +
-                        "· Anime4K rápido: afilado tuneado para anime.\n" +
-                        "Al restaurar la pasada de Light Boost a media resolución, " +
-                        "este upscaler la sustituye sin pases extra; solo (sin Light " +
-                        "Boost) cuenta dentro del presupuesto de efectos pesados.\n" +
-                        "En el demo split-screen se muestra neutro para que la " +
-                        "comparación sea fiel."
+                    text = "Reescala 2x con calidad, tope 1080p."
                     textSize = 13f
                     setPadding(0, 16, 0, 8)
                 },
@@ -734,21 +824,29 @@ object ExoPlayerSettingsHelper {
                     },
                 )
             }
-            addView(modeRow)
+            addView(modeBox)
             addView(valueLabel)
             addView(seek)
+            addView(
+                TextView(activity).apply {
+                    text = "Con Light Boost sustituye su pasada sin costo extra; " +
+                        "solo cuenta del presupuesto. En demo se muestra neutro."
+                    textSize = 13f
+                    setPadding(0, 16, 0, 8)
+                },
+            )
         }
 
         AlertDialog.Builder(activity)
             .setTitle("Upscaler")
-            .setView(layout)
+            .setView(ScrollView(activity).apply { addView(layout) })
             .setPositiveButton("Aplicar") { _, _ ->
                 prefs.edit()
                     .putBoolean(KEY_UPSCALER_EN, enabled)
                     .putInt(KEY_UPSCALER_MODE, mode)
                     .putInt(KEY_UPSCALER_SHARP, (sharpness * 100).toInt())
                     .apply()
-                player?.let { onEffectsChanged(it) }
+                applyWithIncompatibilityGuard(activity, prefs, player, onEffectsChanged)
             }
             .setNegativeButton("Cancelar", null)
             .show()
@@ -774,12 +872,21 @@ object ExoPlayerSettingsHelper {
         var mode = prefs.getInt(KEY_CINE_MODE, KarinLightBoostController.MODE_MANUAL)
         var strength = prefs.getInt(KEY_CINE_STRENGTH, 50) / 100f
         // Una sola intensidad maestra: el color deriva de ella (simple y
-        // automático). Sin segundo slider que apile ni confunda.
-        fun derivedColor(s: Float) = (0.15f + 0.75f * s).coerceIn(0f, 1f)
+        // automático). Sin segundo slider que apile ni confunda. El factor
+        // 1.05 mantiene la respuesta del punto medio (0.5 -> 52%, igual que
+        // el 0.15+0.75 anterior) pero permite llegar a 0 real: con suelo, el
+        // color nunca se apagaba y la opción quedaba siempre ON.
+        fun derivedColor(s: Float) = (1.05f * s).coerceIn(0f, 1f)
         var colorStrength = derivedColor(strength)
         var rangeMode = prefs.getInt(KEY_RANGE_MODE, 0).coerceIn(0, 2)
+        var fakeHdrOn = prefs.getBoolean(KEY_CINE_FAKEHDR, true)
 
         fun push() {
+            // El switch es el maestro de TODO el grupo (luz + color + rango),
+            // igual que lo trata el resto de la app: al apagar se anulan los
+            // tres, así el OFF es un OFF de verdad y no un "medio apagado".
+            val effColor = if (enabled) colorStrength else 0f
+            val effRange = if (enabled) rangeMode else 0
             // Espejo de KarinLightBoostController.fromPrefs(): con luz apagada
             // la luz es neutra (el shader la salta) y solo previsualizan
             // color y rango.
@@ -801,25 +908,16 @@ object ExoPlayerSettingsHelper {
             }
             onKarinChanged(
                 base.copy(
-                    enabled = enabled || colorStrength > 0f || rangeMode != 0,
+                    enabled = enabled,
                     autoMode = mode == KarinLightBoostController.MODE_AUTO,
-                    colorStrength = colorStrength.coerceIn(0f, 1f),
-                    rangeMode = rangeMode,
+                    colorStrength = effColor.coerceIn(0f, 1f),
+                    rangeMode = effRange,
+                    fakeHdr = fakeHdrOn,
                 ),
             )
         }
 
 
-
-        val switch = Switch(activity).apply {
-            text = if (enabled) "Activado" else "Desactivado"
-            isChecked = enabled
-            setOnCheckedChangeListener { _: CompoundButton, isChecked ->
-                enabled = isChecked
-                text = if (isChecked) "Activado" else "Desactivado"
-                push()
-            }
-        }
 
         val modeManual = RadioButton(activity).apply {
             text = "Manual"
@@ -850,15 +948,15 @@ object ExoPlayerSettingsHelper {
         // Compensación de rango para streams mal etiquetados (solo esos:
         // en video bien etiquetado se deja en Original o se rompe el negro).
         val rangeOrig = RadioButton(activity).apply {
-            text = "Original"
+            text = "Original Sin cambios"
             isChecked = rangeMode == 0
         }
         val rangeExpand = RadioButton(activity).apply {
-            text = "Expandir"
+            text = "Completo (16-235 → 0-255)"
             isChecked = rangeMode == 1
         }
         val rangeCompress = RadioButton(activity).apply {
-            text = "Comprimir"
+            text = "Limitado (0-255 → 16-235)"
             isChecked = rangeMode == 2
         }
         fun setRange(m: Int) {
@@ -872,7 +970,9 @@ object ExoPlayerSettingsHelper {
         rangeExpand.setOnClickListener { setRange(1) }
         rangeCompress.setOnClickListener { setRange(2) }
         val rangeRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
+            // Vertical: las etiquetas técnicas son largas y en horizontal se
+            // cortan o se enciman.
+            orientation = LinearLayout.VERTICAL
             addView(rangeOrig)
             addView(rangeExpand)
             addView(rangeCompress)
@@ -896,6 +996,43 @@ object ExoPlayerSettingsHelper {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
+
+        // Interruptor del HDR simulado (curva tonal + clarity). Apagado: la
+        // luz no toca brillo/contraste y solo aplican color y rango. Se
+        // declara antes de syncEnabledUi para que este lo atenúe con el grupo.
+        val fakeHdrSwitch = Switch(activity).apply {
+            text = if (fakeHdrOn) "HDR simulado: ON" else "HDR simulado: OFF"
+            isChecked = fakeHdrOn
+            setOnCheckedChangeListener { _: CompoundButton, isChecked ->
+                fakeHdrOn = isChecked
+                text = if (isChecked) "HDR simulado: ON" else "HDR simulado: OFF"
+                push()
+            }
+        }
+
+        // El switch es el maestro de todo el grupo (luz + color + rango): con
+        // el grupo apagado se atenúan los controles que no aplican, para que
+        // quede claro que no están haciendo nada. Se declara aquí porque su
+        // listener usa modeManual/rangeRow/seek, ya declarados; el orden en
+        // que se añaden al layout no depende del orden de declaración.
+        fun syncEnabledUi() {
+            listOf(modeManual, modeAuto).forEach { it.isEnabled = enabled }
+            listOf(rangeOrig, rangeExpand, rangeCompress).forEach { it.isEnabled = enabled }
+            rangeRow.alpha = if (enabled) 1f else 0.4f
+            seek.isEnabled = enabled
+            valueLabel.alpha = if (enabled) 1f else 0.4f
+            fakeHdrSwitch.isEnabled = enabled
+        }
+        val switch = Switch(activity).apply {
+            text = if (enabled) "Activado" else "Desactivado"
+            isChecked = enabled
+            setOnCheckedChangeListener { _: CompoundButton, isChecked ->
+                enabled = isChecked
+                text = if (isChecked) "Activado" else "Desactivado"
+                syncEnabledUi()
+                push()
+            }
+        }
 
         fun applyPreset(master: Float) {
             mode = KarinLightBoostController.MODE_MANUAL
@@ -924,52 +1061,164 @@ object ExoPlayerSettingsHelper {
             })
         }
 
+        // Encabezado de bloque: el diálogo se lee por secciones
+        // (maestro → modo → HDR → intensidad → rango), no como lista revuelta.
+        fun header(t: String): TextView = TextView(activity).apply {
+            text = t
+            textSize = 12f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setPadding(0, 20, 0, 4)
+        }
+        fun hint(t: String): TextView = TextView(activity).apply {
+            text = t
+            textSize = 13f
+            setPadding(0, 4, 0, 4)
+        }
+
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
             addView(switch)
-            addView(TextView(activity).apply {
-                text = "Realza la imagen según la escena: sombras con detalle, " +
-                    "blancos sin quemar y color vivo.\n" +
-                    "MANUAL: intensidad fija. AUTO: la escena decide y la " +
-                    "intensidad actúa como maestro."
-                textSize = 13f
-                setPadding(0, 16, 0, 8)
-            })
+            addView(hint("Luz, contraste y color en una sola intensidad."))
+            addView(header("MODO DE INTENSIDAD"))
             addView(modeRow)
+            addView(hint("Manual: intensidad fija. Auto: la escena decide; " +
+                "la intensidad sigue mandando como maestro."))
             addView(presetRow)
             addView(valueLabel)
             addView(seek)
-            addView(TextView(activity).apply {
-                text = "La intensidad mueve luz y color juntos (automático)."
-                textSize = 13f
-                setPadding(0, 16, 0, 8)
-            })
-            addView(TextView(activity).apply {
-                text = "Rango (solo streams mal etiquetados): Expandir arregla " +
-                    "negros lavados (limitado tratado como completo); " +
-                    "Comprimir doma negros aplastados. En video normal: Original."
-                textSize = 13f
-                setPadding(0, 16, 0, 8)
-            })
+            addView(hint("Mueve luz y color juntos."))
+            addView(header("HDR SIMULADO"))
+            addView(fakeHdrSwitch)
+            addView(hint("Curva tonal + clarity. Apagado: la luz no toca " +
+                "brillo/contraste; solo aplican color y rango."))
+            addView(header("RANGO"))
+            addView(hint("Rango de colores."))
             addView(rangeRow)
         }
+        syncEnabledUi()
 
         AlertDialog.Builder(activity)
             .setTitle("Light Boost")
-            .setView(layout)
+            .setView(ScrollView(activity).apply { addView(layout) })
             .setPositiveButton("Aplicar") { _, _ ->
+                // El switch manda sobre el grupo entero: si está off se
+                // guardan luz, color y rango neutros. Antes el color quedaba
+                // siempre a 15% y el rango sobrevive, así que la opción
+                // reaparecía como ON en el menú tras apagar.
+                val saveColor = if (enabled) colorStrength else 0f
+                val saveRange = if (enabled) rangeMode else 0
                 prefs.edit()
                     .putBoolean(KEY_CINE_EN, enabled)
                     .putInt(KEY_CINE_MODE, mode)
                     .putInt(KEY_CINE_STRENGTH, (strength * 100).toInt())
-                    .putBoolean(KEY_COLORS_EN, colorStrength > 0f)
-                    .putInt(KEY_COLORS_STRENGTH, (colorStrength * 100).toInt())
-                    .putInt(KEY_RANGE_MODE, rangeMode)
+                    .putBoolean(KEY_COLORS_EN, saveColor > 0f)
+                    .putInt(KEY_COLORS_STRENGTH, (saveColor * 100).toInt())
+                    .putInt(KEY_RANGE_MODE, saveRange)
+                    .putBoolean(KEY_CINE_FAKEHDR, fakeHdrOn)
                     .apply()
-                player?.let { onEffectsChanged(it) }
+                applyWithIncompatibilityGuard(activity, prefs, player, onEffectsChanged)
             }
             .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // ------------------------------------------------------------------
+    // COMPATIBILIDAD ENTRE OPCIONES (3D vs filtros)
+    // ------------------------------------------------------------------
+
+    /** Un conflicto real entre dos funciones que no pueden estar activas a la vez. */
+    private data class Incompatibility(
+        val optA: String,
+        val optB: String,
+        val reason: String,
+        /** Conservar A (optA): desactiva la opción B y reconstruye. */
+        val keepA: () -> Unit,
+        /** Conservar B (optB): desactiva la opción A y reconstruye. */
+        val keepB: () -> Unit,
+    )
+
+    /**
+     * Detecta el primer conflicto MORTAL (⛔) en el estado actual de prefs.
+     * Solo bloquean los que destruyen el efecto (diálogo de elección):
+     *  - Anaglifo + Shader B/N  (sin color no hay separación de ojos).
+     *  - Pulfrich + MotionX2    (la mezcla temporal anula el retardo entre ojos).
+     * El resto (estéreo+MotionX2/Upscaler, anaglifo+Light) solo degrada
+     * (fantasma/halo/diafonía): avisa con ⚠ en compatWarnings(), nunca
+     * apaga nada solo. Antes el Light bloqueaba al anaglifo y el "Conservar
+     * Light Boost" apagaba el 3D en silencio ("no se aplica").
+     */
+    private fun findIncompatibility(prefs: SharedPreferences): Incompatibility? {
+        val mode = Karin3DController.currentMode(prefs)
+        if (!Karin3DController.isActive(prefs)) return null
+        val anaglifo = mode == Karin3DController.MODE_ANAGLYPH
+        val pulfrich = mode == Karin3DController.MODE_PULFRICH
+        val shaderBw = prefs.getBoolean(KEY_SHADER_EN, false) &&
+            prefs.getInt(KEY_SHADER_TYPE, SHADER_OFF) == SHADER_BW
+        val motionOn = prefs.getBoolean(KEY_MOTIONX2_EN, false)
+
+        fun turnOff3D() { prefs.edit().putBoolean(KEY_3D_EN, false).apply() }
+        fun turnOffShader() {
+            prefs.edit().putBoolean(KEY_SHADER_EN, false).putInt(KEY_SHADER_TYPE, SHADER_OFF).apply()
+        }
+        fun turnOffMotion() { prefs.edit().putBoolean(KEY_MOTIONX2_EN, false).apply() }
+
+        return when {
+            anaglifo && shaderBw -> Incompatibility(
+                optA = "3D Anaglifo",
+                optB = "Shader B/N",
+                reason = "El blanco y negro destruye los canales de color que separan los ojos del anaglifo.",
+                keepA = { turnOffShader() },
+                keepB = { turnOff3D() },
+            )
+            pulfrich && motionOn -> Incompatibility(
+                optA = "3D Pulfrich",
+                optB = "MotionX2",
+                reason = "La mezcla temporal de MotionX2 destruye el retardo entre ojos del que vive Pulfrich (se aplana a 2D).",
+                keepA = { turnOffMotion() },
+                keepB = { turnOff3D() },
+            )
+            else -> null
+        }
+    }
+
+    /**
+     * Aplica los cambios (ya escritos en prefs) protegiendo contra
+     * incompatibilidades reales: si el estado resultante tiene un conflicto
+     * ⛔, en lugar de aplicar en silencio muestra una ventana que avisa que
+     * las dos funciones no pueden trabajar en conjunto y DEJA ELEGIR cuál
+     * conservar; la otra se desactiva automáticamente. Sin conflicto, llama
+     * [onEffectsChanged] directo. Se resuelven en cascada (varios a la vez).
+     */
+    private fun applyWithIncompatibilityGuard(
+        activity: Activity,
+        prefs: SharedPreferences,
+        player: ExoPlayer?,
+        onEffectsChanged: (ExoPlayer) -> Unit,
+        onResolved: () -> Unit = {},
+    ) {
+        val conflict = findIncompatibility(prefs)
+        if (conflict == null) {
+            player?.let { onEffectsChanged(it) }
+            onResolved()
+            return
+        }
+        AlertDialog.Builder(activity)
+            .setTitle("Opciones incompatibles")
+            .setMessage(
+                "«${conflict.optA}» y «${conflict.optB}» no pueden funcionar en conjunto.\n\n" +
+                    conflict.reason +
+                    "\n\nElige cuál conservar: la otra se desactivará automáticamente.",
+            )
+            .setPositiveButton("Conservar ${conflict.optA}") { _, _ ->
+                conflict.keepA()
+                applyWithIncompatibilityGuard(activity, prefs, player, onEffectsChanged, onResolved)
+            }
+            .setNegativeButton("Conservar ${conflict.optB}") { _, _ ->
+                conflict.keepB()
+                applyWithIncompatibilityGuard(activity, prefs, player, onEffectsChanged, onResolved)
+            }
+            .setCancelable(false)
             .show()
     }
 
@@ -1010,13 +1259,15 @@ object ExoPlayerSettingsHelper {
     }
 
     /**
-     * TECNOLOGÍA 3D: diálogo del botón lentes (btn_3d) de la barra del
-     * reproductor. Modos visibles: Anaglifo (3 variantes de lente),
-     * VR Cardboard y Pulfrich, con profundidad (pseudo-3D / realce
-     * Pulfrich), ojo intercambiable (anaglifo estéreo) y fuente
-     * estéreo (2D/SBS) para el anaglifo y el VR. Cada modo muestra
-     * solo sus controles. La profundidad previsualiza en vivo si el
-     * 3D ya está activo; el modo se aplica al confirmar.
+      * TECNOLOGÍA 3D: diálogo del botón lentes (btn_3d) de la barra del
+      * reproductor. Modos visibles: Anaglifo (3 variantes de lente),
+      * VR duplicado (compatibilidad Cardboard, sin profundidad) y
+      * Pulfrich temporal (retardo real de 1 cuadro), con profundidad
+      * (pseudo-3D experimental / mezcla temporal Pulfrich), ojo
+      * intercambiable y fuente estéreo (2D/SBS) para el anaglifo y el
+      * VR. Cada modo muestra solo sus controles. La profundidad
+      * previsualiza en vivo si el 3D ya está activo; el modo se aplica
+      * al confirmar.
      */
     fun show3DDialog(
         activity: Activity,
@@ -1063,13 +1314,13 @@ object ExoPlayerSettingsHelper {
         }
         val titles = arrayOf(
             "Anaglifo (lentes bicolor)",
-            "VR Cardboard (2D → SBS)",
-            "Pulfrich (Fabulojos 1997)",
+            "VR duplicado (Cardboard, sin profundidad)",
+            "Pulfrich temporal (movimiento → profundidad)",
         )
         val descs = arrayOf(
-            "Con SBS mezcla ambos ojos; con 2D genera pseudo-3D. Elige tus lentes abajo.",
-            "Con 2D lo duplica para el visor; con SBS lo deja tal cual. Sin seguimiento de cabeza.",
-            "Homenaje Fabulojos: ponte un lente oscuro en un ojo y busca movimiento lateral. Sin lentes se ve normal.",
+            "Con SBS mezcla ambos ojos reales (3D real); con 2D genera pseudo-3D experimental por luma. Elige tus lentes abajo.",
+            "Compatibilidad: con 2D lo duplica para el visor (disparidad 0, no es 3D); con SBS lo deja tal cual. Sin seguimiento de cabeza.",
+            "Retardo real de 1 cuadro (L=actual, R=previo) con lentes bicolor. En quieto se ve normal; depth=0 → 2D puro para lente oscuro físico.",
         )
         val radios = mutableListOf<RadioButton>()
         // pending es ÍNDICE visible (0..2); modeValues lo traduce a MODE_*.
@@ -1099,7 +1350,7 @@ object ExoPlayerSettingsHelper {
         }
         // Se asigna tras crear fuente/swap/profundidad: muestra solo lo
         // que el modo pendiente usa (VR ignora profundidad y swap;
-        // Pulfrich ignora fuente, lentes y swap).
+        // Pulfrich ignora fuente y lentes solo tiñen la síntesis).
         var refreshModeExtras: (() -> Unit)? = null
         fun syncRadios() {
             radios.forEachIndexed { i, r -> r.isChecked = i == pending }
@@ -1149,7 +1400,7 @@ object ExoPlayerSettingsHelper {
             textSize = 13f
             setPadding(0, 16, 0, 4)
         }
-        val inputNames = arrayOf("2D (pseudo-3D)", "SBS (lado-a-lado)")
+        val inputNames = arrayOf("2D (pseudo-3D experimental)", "SBS (lado-a-lado)")
         val inputRadios = mutableListOf<RadioButton>()
         fun syncInput() {
             inputRadios.forEachIndexed { i, r -> r.isChecked = i == inputKind }
@@ -1171,7 +1422,7 @@ object ExoPlayerSettingsHelper {
         }
 
         fun pct(v: Float) =
-            "Profundidad: ${(v * 100).toInt()}% (pseudo-3D desde 2D / realce Pulfrich)"
+            "Profundidad: ${(v * 100).toInt()}% (pseudo-3D experimental / mezcla temporal Pulfrich)"
         val depthLabel = TextView(activity).apply { text = pct(depth) }
         val depthSeek = SeekBar(activity).apply {
             max = 100
@@ -1189,25 +1440,26 @@ object ExoPlayerSettingsHelper {
         })
 
         val swapBox = Switch(activity).apply {
-            text = "Swap: ojo derecho (solo anaglifo con fuente estéreo)"
+            text = "Swap: ojo derecho (anaglifo estéreo / ojo retardado Pulfrich)"
             isChecked = swapEye
             setOnCheckedChangeListener { _, isChecked -> swapEye = isChecked }
         }
 
         // Solo se muestra lo que el modo pendiente usa: la fuente aplica
         // a Anaglifo (y a VR para no duplicar un SBS); la profundidad a
-        // Anaglifo 2D y Pulfrich; el swap solo al anaglifo estéreo.
+        // Anaglifo 2D y Pulfrich; el swap al anaglifo estéreo y a Pulfrich.
         refreshModeExtras = {
             val m = modeValues[pending.coerceIn(modeValues.indices)]
             val isAnag = m == Karin3DController.MODE_ANAGLYPH
             val isVr = m == Karin3DController.MODE_VR_SBS
+            val isPul = m == Karin3DController.MODE_PULFRICH
             val showInput = if (isAnag || isVr) android.view.View.VISIBLE else android.view.View.GONE
             inputTitle.visibility = showInput
             inputBox.visibility = showInput
             val showDepth = if (isVr) android.view.View.GONE else android.view.View.VISIBLE
             depthLabel.visibility = showDepth
             depthSeek.visibility = showDepth
-            swapBox.visibility = if (isAnag) android.view.View.VISIBLE else android.view.View.GONE
+            swapBox.visibility = if (isAnag || isPul) android.view.View.VISIBLE else android.view.View.GONE
         }
         refreshModeExtras?.invoke()
 
@@ -1236,6 +1488,21 @@ object ExoPlayerSettingsHelper {
             setPadding(0, 8, 0, 0)
         } else null
 
+        // Tutorial de fabricación de gafas (anaglifo / Pulfrich / Cardboard):
+        // materiales, dónde conseguirlos, medidas, plano y armado paso a paso.
+        val glassesLink = TextView(activity).apply {
+            text = "📖 Gafas 3D caseras: cómo fabricarlas (anaglifo, Pulfrich, Cardboard)"
+            textSize = 13f
+            setTextColor(android.graphics.Color.parseColor("#6C63FF"))
+            setPadding(0, 16, 0, 0)
+            isFocusable = true
+            isClickable = true
+            setOnClickListener {
+                activity.startActivity(Intent(activity, GlassesTutorialActivity::class.java))
+            }
+            onActionKey { performClick() }
+        }
+
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
@@ -1254,6 +1521,7 @@ object ExoPlayerSettingsHelper {
             addView(depthSeek)
             addView(swapBox)
             legacyView?.let { addView(it) }
+            addView(glassesLink)
             addView(warnView)
         }
 
@@ -1266,12 +1534,18 @@ object ExoPlayerSettingsHelper {
                     prefs, enabled && finalMode != Karin3DController.MODE_OFF,
                     finalMode, depth, swapEye, inputKind, anaglyph,
                 )
-                player?.let { onEffectsChanged(it) }
-                val post = Karin3DController.compatWarnings(prefs)
-                if (post.any { it.startsWith("⛔") }) {
-                    android.widget.Toast.makeText(
-                        activity, post.first { it.startsWith("⛔") }, android.widget.Toast.LENGTH_LONG,
-                    ).show()
+                // Incompatibilidad mortal (p. ej. B/N + Anaglifo, MotionX2 +
+                // Pulfrich): ventana que deja elegir cuál conservar en vez del
+                // cambio silencioso. Al resolver se avisa con Toast del estado
+                // real (antes el 3D podía quedar apagado sin decir nada).
+                applyWithIncompatibilityGuard(activity, prefs, player, onEffectsChanged) {
+                    val msg = if (Karin3DController.isActive(prefs)) {
+                        val d = (prefs.getInt(KEY_3D_DEPTH, Karin3DController.DEFAULT_DEPTH))
+                        "3D aplicado: ${Karin3DController.chainLabel(prefs)} · ${d}%"
+                    } else {
+                        "3D apagado"
+                    }
+                    Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Cancelar", null)
@@ -1287,28 +1561,32 @@ object ExoPlayerSettingsHelper {
         player: ExoPlayer?,
         onEffectsChanged: (ExoPlayer) -> Unit,
     ) {
-        // Ordenados de menor a mayor consumo, cada uno con su explicación simple.
+        // Ordenados de MEJOR rendimiento (arriba) al más pesado (abajo).
+        // Coste real medido en pases de GPU: DOUBLING no entra al render
+        // propio (0 pases), HYBRID/BLEND son 1 pase con 2 muestras, y
+        // ECO60/REAL60 arrancan el render propio a 60fps (historial a media
+        // y a resolución completa respectivamente).
         val titles = mutableListOf(
             "⏻ Apagado",
-            "DOUBLING (Frame x2)",
-            "BLEND (Suavizado)",
-            "HYBRID (Doubling + Micro-Blend)",
-            "ECO60 (60fps liviano)",
-            "60 fps reales (GRID)",
+            "DOUBLING (Frame x2) · sin coste",
+            "HYBRID (Doubling + Micro-Blend) · recomendado",
+            "BLEND (Suavizado) · mezcla fuerte",
+            "ECO60 (60fps liviano) · historial a media res",
+            "60 fps reales (GRID) · el más pesado",
         )
         val descs = mutableListOf(
             "No hace nada. Video original.",
-            "Nativo + intermedio: doble fps real. Liviano.",
-            "Mezcla cuadros. Suave, puede dar fantasma.",
-            "Cuadro nítido + mezcla leve. El balance.",
-            "60 fps con mezcla liviana e historial a mitad de resolución. Para equipos modestos.",
-            "Cuadros intermedios en grid 60Hz real con anti-fantasma. Máxima calidad (más consumo que ECO60).",
+            "Muestra cada cuadro nítido tal cual y lo repite el panel. 0 pases de GPU: el más rápido.",
+            "Cuadro nítido + micro-mezcla (25%). Un solo pase. Mejor balance de fluidez y coste.",
+            "Mezcla cuadro anterior y actual al 50%. Un solo pase: más fluido, pero puede verse fantasma.",
+            "Render propio a 60fps con historial a media resolución. Para equipos modestos.",
+            "Cuadros intermedios en grid 60Hz real con anti-fantasma. Máxima fluidez, máximo consumo.",
         )
         // Fila -> ordinal MotionX2Mode legacy (el 3/SPIKE ya no se ofrece).
-        val dialogToLegacy = mutableListOf(-1, 1, 2, 0, MotionX2Mode.ECO60.ordinal, MotionX2Mode.REAL60.ordinal)
+        val dialogToLegacy = mutableListOf(-1, 1, 0, 2, MotionX2Mode.ECO60.ordinal, MotionX2Mode.REAL60.ordinal)
         // Ordinal MotionX2Mode -> fila. El 3 (INTERP/SPIKE eliminado) se muestra
         // como REAL60; en ejecución resolveStored lo migra de todos modos.
-        val legacyToDialog = intArrayOf(3, 1, 2, 5, 5, 4)
+        val legacyToDialog = intArrayOf(2, 1, 3, 5, 5, 4)
         val maxStored = MotionX2Mode.ECO60.ordinal
         val checkedIndex = if (prefs.getBoolean(KEY_MOTIONX2_EN, false)) {
             legacyToDialog[prefs.getInt(KEY_MOTIONX2_MODE, 0).coerceIn(0, maxStored)]
@@ -1325,8 +1603,10 @@ object ExoPlayerSettingsHelper {
                 .putBoolean(KEY_MOTIONX2_EN, on)
                 .putInt(KEY_MOTIONX2_MODE, if (on) dialogToLegacy[which.coerceIn(1, dialogToLegacy.lastIndex)] else 0)
                 .apply()
-            player?.let { onEffectsChanged(it) }
             dialog?.dismiss()
+            // MotionX2 puede chocar con el 3D Pulfrich o estéreo: ventana de
+            // elección (conservar uno desactiva el otro).
+            applyWithIncompatibilityGuard(activity, prefs, player, onEffectsChanged)
         }
 
         // Filas con título + explicación; selección única manual (sin RadioGroup

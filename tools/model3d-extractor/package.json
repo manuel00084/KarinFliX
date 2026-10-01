@@ -1,0 +1,17 @@
+{
+  "name": "model3d-extractor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Extractor de modelos 3D (.glb/.gltf/.fbx/obj...) de paginas web con three.js/WebGL via Playwright",
+  "bin": {
+    "m3d": "./extract.mjs"
+  },
+  "scripts": {
+    "start": "node extract.mjs",
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

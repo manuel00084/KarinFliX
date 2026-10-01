@@ -18,6 +18,22 @@ object TvDialogHelper {
         }
     }
 
+    /** Variante para diálogos de AppCompat (misma conducta D-pad). */
+    fun makeListTvReady(
+        dialog: androidx.appcompat.app.AlertDialog,
+        listView: ListView?,
+        context: Context,
+    ) {
+        if (!DeviceUtils.isTvDevice(context)) return
+        if (listView == null) return
+        listView.isFocusable = true
+        listView.isFocusableInTouchMode = false
+        dialog.setOnShowListener {
+            listView.requestFocus()
+            if (listView.count > 0) listView.setSelection(0)
+        }
+    }
+
     /**
      * Habilita navegación con control remoto entre el ListView y los botones
      * de navegación (anterior / capítulos / siguiente) del diálogo.
@@ -77,6 +93,125 @@ object TvDialogHelper {
                         true
                     }
                     else -> false
+                }
+            }
+        }
+    }
+
+    /**
+     * Diálogo genérico usable con mando: enfoca el primer botón visible y
+     * cablea LEFT/RIGHT entre botones + UP/DOWN hacia la lista si existe.
+     * Llamar después de show() o desde setOnShowListener.
+     */
+    fun makeButtonsTvReady(
+        dialog: AlertDialog,
+        context: Context,
+        listView: ListView? = null,
+    ) {
+        if (!DeviceUtils.isTvDevice(context)) return
+        dialog.setOnShowListener {
+            val buttons = listOf(
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE),
+                dialog.getButton(AlertDialog.BUTTON_NEGATIVE),
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL),
+            ).filter { it != null && it.visibility == View.VISIBLE && it.isFocusable }
+            buttons.forEach { b ->
+                b.isFocusable = true
+                b.isFocusableInTouchMode = false
+            }
+            listView?.let {
+                it.isFocusable = true
+                it.isFocusableInTouchMode = false
+            }
+            // Foco inicial: lista si hay, si no primer botón.
+            if (listView != null && listView.count > 0) {
+                listView.requestFocus()
+                listView.setSelection(0)
+            } else {
+                buttons.firstOrNull()?.requestFocus()
+            }
+            buttons.forEachIndexed { index, btn ->
+                btn.setOnKeyListener { _, keyCode, event ->
+                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            if (index > 0) buttons[index - 1].requestFocus()
+                            else listView?.requestFocus()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            if (index < buttons.lastIndex) buttons[index + 1].requestFocus()
+                            else listView?.requestFocus()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            if (listView != null) { listView.requestFocus(); true } else false
+                        }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (listView != null) { listView.requestFocus(); true } else false
+                        }
+                        else -> false
+                    }
+                }
+            }
+            listView?.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    if (listView.lastVisiblePosition >= listView.count - 1) {
+                        buttons.firstOrNull()?.requestFocus()
+                        return@setOnKeyListener true
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /** Variante AppCompat del helper genérico de botones. */
+    fun makeButtonsTvReady(
+        dialog: androidx.appcompat.app.AlertDialog,
+        context: Context,
+        listView: ListView? = null,
+    ) {
+        if (!DeviceUtils.isTvDevice(context)) return
+        dialog.setOnShowListener {
+            val buttons = listOf(
+                dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE),
+                dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEGATIVE),
+                dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL),
+            ).filter { it != null && it.visibility == View.VISIBLE && it.isFocusable }
+            buttons.forEach { b ->
+                b.isFocusable = true
+                b.isFocusableInTouchMode = false
+            }
+            listView?.let {
+                it.isFocusable = true
+                it.isFocusableInTouchMode = false
+            }
+            if (listView != null && listView.count > 0) {
+                listView.requestFocus()
+                listView.setSelection(0)
+            } else {
+                buttons.firstOrNull()?.requestFocus()
+            }
+            buttons.forEachIndexed { index, btn ->
+                btn.setOnKeyListener { _, keyCode, event ->
+                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            if (index > 0) buttons[index - 1].requestFocus()
+                            else listView?.requestFocus()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            if (index < buttons.lastIndex) buttons[index + 1].requestFocus()
+                            else listView?.requestFocus()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (listView != null) { listView.requestFocus(); true } else false
+                        }
+                        else -> false
+                    }
                 }
             }
         }

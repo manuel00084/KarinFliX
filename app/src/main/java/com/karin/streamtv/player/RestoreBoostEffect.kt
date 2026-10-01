@@ -21,7 +21,7 @@ import androidx.media3.effect.GlShaderProgram
  *  - plano con ruido/bloques -> suavizar (depixel: grano, grilla 4px,
  *    croma, debanding),
  *  - checkerboard/líneas -> reconstruir (retro: de-dither, xBR-lite,
- *    line-darken),
+ *    line-darken + coherencia CRT sutil antes del detalle),
  *  - borde real NO suavizado -> afilar (detail direccional con clamp).
  *
  * La clave de calidad: el afilado se frena por píxel según cuánto se
@@ -303,18 +303,39 @@ class RestoreBoostShaderProgram(
                         lCcur = luma(outc);
                     }
 
-                    // 2b) xBR-lite: borde horizontal -> mezcla L/R, borde
-                    // vertical -> mezcla U/D. Planos y esquinas intactos.
+                    // 2b) xBR-lite: en un borde HORIZONTAL (gradiente
+                    // vertical, gV grande) el pixel se reconstruye desde el
+                    // par VERTICAL (U/D, del mismo lado del borde); en un
+                    // borde VERTICAL, desde el par horizontal (L/R).
+                    // ANTES estaba invertido: `horiz` (alto con gV) mezclaba
+                    // con avgH y `vert` con avgV, o sea reconstruia CRUZANDO
+                    // el borde -> lo difuminaba en vez de Afilarlo.
                     float gH = abs(lL - lR);
                     float gV = abs(lU - lD);
                     float edge = max(gH, gV);
                     float gate = smoothstep(0.02, 0.09, edge);
-                    float horiz = smoothstep(0.15, 0.6, (gV - gH) / (edge + 1.0e-4));
-                    float vert = smoothstep(0.15, 0.6, (gH - gV) / (edge + 1.0e-4));
+                    float horizEdge = smoothstep(0.15, 0.6, (gV - gH) / (edge + 1.0e-4));
+                    float vertEdge = smoothstep(0.15, 0.6, (gH - gV) / (edge + 1.0e-4));
                     vec3 avgH = (l1 + r1) * 0.5;
                     vec3 avgV = (u1 + d1) * 0.5;
-                    vec3 edgeRgb = mix(outc, avgH, horiz);
-                    edgeRgb = mix(edgeRgb, avgV, vert);
+                    vec3 edgeRgb = mix(outc, avgH, vertEdge);
+                    edgeRgb = mix(edgeRgb, avgV, horizEdge);
+                    // 2b-bis) Diagonales: cuando el gradiente diagonal domina
+                    // (borde a 45°, muy comun en anime) horizEdge/vertEdge caen
+                    // a ~0 y no se reconstruia nada. Se usa la pareja
+                    // diagonal de MENOR gradiente, que es la que corre a lo
+                    // largo del borde. Sin coste extra: las diagonales ya
+                    // estan leidas para el de-dither.
+                    if (fullPath) {
+                        float gD1 = abs(lNW - lSE);
+                        float gD2 = abs(lNE - lSW);
+                        float gAxis = max(gH, gV);
+                        float gDiag = max(gD1, gD2);
+                        float diagDom = smoothstep(0.10, 0.45,
+                            (gDiag - gAxis) / max(gDiag + gAxis, 0.0001));
+                        vec3 avgD = (gD1 > gD2) ? ((ne + sw) * 0.5) : ((nw + se) * 0.5);
+                        edgeRgb = mix(edgeRgb, avgD, diagDom);
+                    }
                     outc = mix(outc, edgeRgb, clamp(gate * sA * 0.5, 0.0, 1.0));
 
                     // 2c) Line-darken: línea oscura fina rodeada de claro.
@@ -329,77 +350,92 @@ class RestoreBoostShaderProgram(
                     if (lOut > 0.001) {
                         outc = outc * (targetL / lOut);
                     }
+
+                    // 2d) Coherencia de pixel inspirada en CRT (sutil):
+                    // los pixeles no son cuadrados perfectos aislados, se
+                    // mezclan ligeramente entre si y suavizan transiciones.
+                    // Solo luma, sin scanlines / mascara / glow / curvatura.
+                    // Corre ANTES del Detail para que el detalle afile encima.
+                    // 0 fetches extra: reusa l1/r1/u1/d1 y edge/gate/sA.
+                    {
+                        float crtK = sA * 0.35;
+                        // Solo donde hay estructura (no en plano: ya lo limpio
+                        // Depixel) y con techo para no empastar texturas.
+                        float crtGate = gate * (1.0 - isDark * isThin * flatCap);
+                        if (crtK > 0.001 && crtGate > 0.001) {
+                            // Mezcla lateral tipo Trinitron (mas peso H que V),
+                            // reconstruida desde los pares ya calculados.
+                            vec3 crtRgb = mix(outc, avgH, 0.6);
+                            crtRgb = mix(crtRgb, avgV, 0.25);
+                            float crtL = luma(crtRgb);
+                            float curL = luma(outc);
+                            float w = clamp(crtGate * crtK * 0.5, 0.0, 1.0);
+                            outc = setLumaPreservingHue(outc, mix(curL, crtL, w));
+                        }
+                    }
                 }
 
-                // ================= 3) DETAIL: afilado dirigido =================
-                // Decisión conjunta: donde se limpió (smoothK alto) el afilado
-                // se frena solo; donde no, actúa completo. Así nunca se
-                // reintroduce el pixelado que se acaba de quitar.
+                // ================= 3) DETAIL: capa aditiva de detalle =================
+                // BUG QUE SE ARREGLA AQUI: las dos versiones previas median
+                // el detalle sobre `outc` (ya suavizado por depixel/retro) y
+                // ademas con la formula "centro - promedio del par a lo
+                // largo del borde", que vale CERO en un borde simetrico (el
+                // caso mas comun). Peor aun: retro 2b ya mueve outc hacia ese
+                // mismo promedio, asi que las dos etapas se anulaban y el
+                // efecto era invisible.
+                // Ahora: la SENAL se toma de la entrada ORIGINAL (lc contra
+                // el promedio de los vecinos originales) y se SUMA sobre la
+                // salida de las otras etapas. Asi el detalle es una capa
+                // aditiva real que las etapasPrevious no pueden borrar.
+                // Anti-dientes: guarda de escalon (jaggyW) + overshoot
+                // acotado (min(0.03, 20% del rango)) -> filo sin halos.
                 if (uDetail > 0.0) {
-                    float lCcur = luma(outc);
-                    if (lCcur >= 0.005 && lCcur <= 0.995) {
-                        float vgate = smoothstep(0.0006, 0.004, max(var4, 0.0));
-                        float crisp = smoothstep(0.015, 0.09, range4);
-                        float adapt = mix(1.25, 0.55, crisp);
-                        float zone = smoothstep(0.02, 0.15, lCcur)
-                            * (1.0 - smoothstep(0.85, 0.98, lCcur));
+                    float lOut = luma(outc);
+                    if (lOut >= 0.005 && lOut <= 0.995) {
+                        float mnL = min(min(lL, lR), min(lU, lD));
+                        float mxL = max(max(lL, lR), max(lU, lD));
+                        float rangeC = max(mxL - mnL, 0.0001);
                         float gx = abs(lR - lL);
                         float gy = abs(lU - lD);
-                        float dirW = gy / max(gx + gy, 0.0001);
-                        float dv = lc - (lU + lD) * 0.5;
-                        float dh = lc - (lL + lR) * 0.5;
-                        float dirDetail = dv * dirW + dh * (1.0 - dirW);
-                        // HQ DIAGONAL (rejilla rotada): si el borde va en
-                        // diagonal, afilar A LO LARGO del trazo en vez de
-                        // cruzarlo (no remarca el diente). La diagonal con
-                        // MENOR gradiente corre a lo largo del borde: el
-                        // centro se reconstruye desde ella. Si las diagonales
-                        // no se pidieron (valen 0), diagDom da 0: no-op.
-                        float gD1 = abs(lNW - lSE);
-                        float gD2 = abs(lNE - lSW);
-                        float gAxis = max(gx, gy);
-                        float gDiag = max(gD1, gD2);
-                        float diagDom = smoothstep(0.10, 0.45,
-                            (gDiag - gAxis) / max(gDiag + gAxis, 0.0001));
-                        float alongEdge = (gD1 > gD2)
-                            ? (lNE + lSW) * 0.5
-                            : (lNW + lSE) * 0.5;
-                        float diagDetail = mix(dirDetail, lc - alongEdge, diagDom);
+                        // Guarda anti-diente (escalon 1px en diagonal): cruz
+                        // activa en ambos ejes + diagonales dispares.
+                        float stair = 0.0;
+                        if (fullPath) {
+                            float gD1 = abs(lNW - lSE);
+                            float gD2 = abs(lNE - lSW);
+                            float axisM = max(gx, gy);
+                            float axism = min(gx, gy);
+                            float diagM = max(gD1, gD2);
+                            stair = clamp(axism / max(axisM, 0.0001), 0.0, 1.0)
+                                * clamp(abs(gD1 - gD2) / max(diagM, 0.0001), 0.0, 1.0)
+                                * smoothstep(0.01, 0.05, rangeC);
+                        }
+                        float jaggyW = 1.0 - 0.7 * clamp(stair, 0.0, 1.0);
+                        // SENAL original: lc (centro original) menos la media
+                        // de los vecinos originales. No se toca outc aqui, asi
+                        // que depixel/retro no pueden cancelarla.
+                        float mean4 = (lL + lR + lU + lD) * 0.25;
+                        float lap = lc - mean4;
+                        // Puertas (solo atenúan, nunca anulan del todo):
+                        float gate = smoothstep(0.002, 0.015, rangeC);
+                        float vgate = smoothstep(0.0003, 0.0025, max(var4, 0.0));
+                        float zone = smoothstep(0.02, 0.15, lOut)
+                            * (1.0 - smoothstep(0.85, 0.98, lOut));
                         float rmg = outc.r - outc.g;
                         float rmb = outc.r - outc.b;
                         float skin = smoothstep(0.02, 0.1, rmg) * smoothstep(0.01, 0.08, rmb);
                         skin *= smoothstep(0.25, 0.45, outc.r) * (1.0 - smoothstep(0.7, 0.85, outc.r));
                         skin *= smoothstep(0.15, 0.3, outc.g) * (1.0 - smoothstep(0.6, 0.75, outc.g));
                         skin = clamp(skin, 0.0, 1.0);
-                        float detailAmt;
-                        float minK = minC;
-                        float maxK = maxC;
-                        if (fullPath) {
-                            minK = min(minK, min(min(lNW, lNE), min(lSW, lSE)));
-                            maxK = max(maxK, max(max(lNW, lNE), max(lSW, lSE)));
-                            float lap = 8.0 * lc - (lL + lR + lU + lD + lNW + lNE + lSW + lSE);
-                            detailAmt = (diagDetail * 1.5 + lap * 0.06) * adapt * mix(1.0, 0.25, skin);
-                        } else {
-                            detailAmt = diagDetail * adapt * mix(1.0, 0.3, skin);
-                        }
-                        // CAS (contrast-adaptive): mordida extra proporcional al
-                        // contraste local de la cruz. Más filo justo en bordes
-                        // reales, nada en plano (puerta por pico). Sin fetches
-                        // nuevos (reusa lL/lR/lU/lD/lc) y ~8 ALU: cabe en el
-                        // mismo pase, tiempo real intacto. Las máscaras (zona,
-                        // piel, vgate, sharpK) y el clamp anti-halo de abajo
-                        // aplican igual: solo sube el techo, no el riesgo.
-                        float casMn = min(min(lL, lR), min(lU, lD));
-                        float casMx = max(max(lL, lR), max(lU, lD));
-                        float casPeak = max(casMx - lc, lc - casMn);
-                        float casGate = smoothstep(0.004, 0.03, casPeak);
-                        float casAmt = (lc - (casMx + casMn) * 0.5) *
-                            (1.5 + 2.0 * clamp(casPeak * 8.0, 0.0, 1.0));
-                        detailAmt += casAmt * casGate * mix(1.0, 0.25, skin);
-                        float sharpK = 1.0 - 0.65 * clamp(smoothK, 0.0, 1.0);
-                        float over = range4 * 0.25 * uDetail;
-                        float newLuma = clamp(lCcur + detailAmt * uDetail * 1.5 * vgate * zone * sharpK,
-                            minK - over, maxK + over);
+                        // Donde se limpio este pixel, menos filo (smoothK).
+                        float sharpK = 1.0 - 0.35 * clamp(smoothK, 0.0, 1.0);
+                        float gain = uDetail * 3.0 * jaggyW * sharpK * mix(1.0, 0.3, skin);
+                        float boost = lap * gain * gate * vgate * zone;
+                        // Overshoot acotado: maximo 0.03 absoluto y nunca mas
+                        // del 20% del rango local (borde de bajo contraste no
+                        // se debe disparar). Antes era 25% -> colmillos/halos.
+                        float ringEps = min(0.03, rangeC * 0.2);
+                        float newLuma = clamp(lOut + boost, mnL - ringEps, mxL + ringEps);
                         outc = setLumaPreservingHue(outc, newLuma);
                     }
                 }

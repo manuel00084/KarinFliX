@@ -1278,7 +1278,8 @@ class ExploreKF : AppCompatActivity() {
                 pane.load()
             }
             else -> {
-                if (entry.fileType == FileEntry.FileType.VIDEO) {
+                val type = entry.fileType
+                if (type == FileEntry.FileType.VIDEO || type == FileEntry.FileType.AUDIO) {
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastPlayMs < 1000) return
                     lastPlayMs = now
@@ -1292,6 +1293,7 @@ class ExploreKF : AppCompatActivity() {
                     val intent = Intent(this, ExoPlayerActivity::class.java).apply {
                         putExtra("video_url", url)
                         putExtra("video_title", entry.name)
+                        putExtra("audio_only", type == FileEntry.FileType.AUDIO)
                     }
                     try { startActivity(intent) } catch (e: Exception) { /* no player */ }
                 } else {

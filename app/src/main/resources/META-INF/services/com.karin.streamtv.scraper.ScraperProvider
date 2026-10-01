@@ -5,3 +5,6 @@ com.karin.streamtv.scraper.MundoDonghuaScraperProvider
 com.karin.streamtv.scraper.LaCartoonsScraperProvider
 com.karin.streamtv.scraper.DoramaYtScraperProvider
 com.karin.streamtv.scraper.RetroTVEscraperProvider
+com.karin.streamtv.scraper.AnimeFlvScraperProvider
+com.karin.streamtv.scraper.DonghuaLifeScraperProvider
+com.karin.streamtv.scraper.PandramaScraperProvider

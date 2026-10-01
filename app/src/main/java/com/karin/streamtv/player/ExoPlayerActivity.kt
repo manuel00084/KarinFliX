@@ -51,6 +51,14 @@ class ExoPlayerActivity : AppCompatActivity() {
         const val LAST_GOOD_PREFS = "last_good_video_prefs"
         /** Error de procesado de video (GPU/efectos/formato) con fallback. */
         const val ERROR_GPU_EFFECTS = 7001
+        /** Extensiones tratadas como solo-audio (música local). */
+        val AUDIO_EXTENSIONS = setOf(
+            "mp3", "wav", "flac", "aac", "ogg", "m4a", "opus", "wma", "mid", "midi", "amr"
+        )
+        /** Tope ultra económico: 480p con bitrate acorde. */
+        const val ULTRA_MAX_WIDTH = 854
+        const val ULTRA_MAX_HEIGHT = 480
+        const val ULTRA_MAX_BITRATE = 1_500_000
     }
 
     private var player: ExoPlayer? = null
@@ -63,6 +71,12 @@ class ExoPlayerActivity : AppCompatActivity() {
     private var glesRenderer: MotionX2GlesRenderer? = null
 
     private var currentVideoUrl: String? = null
+
+    /** True si el contenido es solo audio (música): sin grafo de video. */
+    private var isAudioOnly: Boolean = false
+
+    /** Modo ultra económico: tope 480p, sin efectos, sonido básico. */
+    private var ultraEconomy: Boolean = false
 
     private var autoplayNextHandled = false
 
@@ -120,14 +134,34 @@ private val queueItemId: String? by lazy {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // La pantalla no se apaga mientras se ve video.
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        ultraEconomy = AppPreferences.isUltraEconomyMode()
+        if (ultraEconomy) {
+            // Al entrar a reproducir se libera caché y se calma la red.
+            try {
+                com.karin.streamtv.util.DiskImageCache.setUltraMode(true)
+                com.karin.streamtv.scraper.ScrapingEngine.setMaxConcurrent(2)
+            } catch (_: Exception) { }
+        }
+        // Audio local (música): layout normal y sin grafo de video ni render
+        // propio; el DSP de audio sigue activo y el usuario puede elegir el
+        // preset MUSIC en los ajustes de sonido.
+        val declaredAudio = intent.getBooleanExtra("audio_only", false)
+        val sniffUrl = intent.getStringExtra("video_url") ?: intent.data?.toString().orEmpty()
+        isAudioOnly = declaredAudio || isAudioUrl(sniffUrl)
+        val isTv = DeviceUtils.isTvDevice(this)
+        // Ultra + música + celular: se permite que la pantalla se apague.
+        // En TV/caja o con video, la pantalla se queda encendida como siempre.
+        if (!(ultraEconomy && isAudioOnly && !isTv)) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         // Modos MotionX2 de 60 fps reales (INTERP/REAL60): layout con TextureView
         // propio + PlayerView sin superficie. Sin gate de gama: el render propio
         // es más barato que el grafo (<=2 pases por vsync) y se honra el modo
         // pedido explícito. El resto de modos usa el layout original.
+        // En ultra económico el render propio queda fuera (todo apagado).
         val mxOrdinal = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
-        ownRenderActive = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false) &&
+        ownRenderActive = !isAudioOnly && !ultraEconomy &&
+            prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false) &&
             MotionX2Mode.resolveStored(mxOrdinal).isRealFps()
         setContentView(
             if (ownRenderActive) R.layout.activity_exo_player_motionx2
@@ -184,13 +218,33 @@ private val queueItemId: String? by lazy {
         mediaItemRef = mediaItem
 
         setupPlaylistButtons(playerView)
-        // DSP completo (perfiles, EQ 10 bandas, IR, binaural, compresor...) como
-        // AudioProcessor propio inyectado al AudioSink.
-        val dsp = AudioEnhanceProcessor(this)
-        this.dsp = dsp
-        player = ExoPlayer.Builder(this, CodecSelectorFactory.renderersFactoryWithAudio(this, arrayOf(dsp)))
+        // Ultra + música + celular: decodificación dedicada (offload). El audio
+        // va directo al chip, sin DSP propio: máxima batería, sonido plano.
+        // Requiere build SIN procesadores de audio, o el offload no aplica.
+        val ultraAudioOffload = ultraEconomy && isAudioOnly &&
+            !DeviceUtils.isTvDevice(this)
+        val renderersFactory = if (ultraAudioOffload) {
+            CodecSelectorFactory.renderersFactoryOffload(this)
+        } else {
+            // DSP completo (perfiles, EQ 10 bandas, IR, binaural, compresor...)
+            // como AudioProcessor propio inyectado al AudioSink.
+            val dsp = AudioEnhanceProcessor(this)
+            this.dsp = dsp
+            CodecSelectorFactory.renderersFactoryWithAudio(this, arrayOf(dsp))
+        }
+        val builder = ExoPlayer.Builder(this, renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
-            .build().also {
+        if (ultraEconomy) {
+            // Tope 480p: variante 480p o menor cuando el servidor la ofrece.
+            val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(this)
+            trackSelector.setParameters(
+                trackSelector.buildUponParameters()
+                    .setMaxVideoSize(ULTRA_MAX_WIDTH, ULTRA_MAX_HEIGHT)
+                    .setMaxVideoBitrate(ULTRA_MAX_BITRATE)
+            )
+            builder.setTrackSelector(trackSelector)
+        }
+        player = builder.build().also {
             it.setMediaItem(mediaItem)
             it.setVolume(AppPreferences.getPlayerVolume().coerceIn(0f, 1f))
             applyVideoEffects(it)
@@ -319,7 +373,20 @@ private val queueItemId: String? by lazy {
         }
         // Botón lentes: TECNOLOGÍA 3D. Abre el diálogo 3D directo con
         // rebuildEffects/liveRoute (misma ruta que los ajustes avanzados).
+        // En ultra va en gris y deshabilitado (el efecto no se montaría).
         pv.findViewById<ImageButton>(R.id.btn_3d)?.apply {
+            if (ultraEconomy) {
+                alpha = 0.35f
+                contentDescription = "Modo 3D (apagado por ultra económico)"
+                setOnClickListener {
+                    Toast.makeText(
+                        this@ExoPlayerActivity,
+                        "3D apagado por ultra económico",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return@apply
+            }
             isEnabled = true
             isClickable = true
             isFocusable = true
@@ -335,17 +402,31 @@ private val queueItemId: String? by lazy {
                 )
             }
         }
-        pv.findViewById<ImageButton>(R.id.btn_vision)?.setOnClickListener {
+        pv.findViewById<ImageButton>(R.id.btn_vision)?.apply {
             // Botón de anteojos: Asistencia de visión y audición (visión a la
             // cadena GL del reproductor, audición al DSP; no vive dentro de las
-            // Opciones Avanzadas de Video).
-            VisionAssistHelper.showVisionDialog(
-                activity = this@ExoPlayerActivity,
-                prefs = prefs,
-                player = player,
-                onEffectsChanged = { rebuildEffects(it) },
-                onLive = { cfg -> visionEffect?.update(cfg) },
-            )
+            // Opciones Avanzadas de Video). En ultra va en gris y deshabilitado.
+            if (ultraEconomy) {
+                alpha = 0.35f
+                contentDescription = "Ayudas visuales (apagadas por ultra económico)"
+                setOnClickListener {
+                    Toast.makeText(
+                        this@ExoPlayerActivity,
+                        "Ayudas visuales apagadas por ultra económico",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return@apply
+            }
+            setOnClickListener {
+                VisionAssistHelper.showVisionDialog(
+                    activity = this@ExoPlayerActivity,
+                    prefs = prefs,
+                    player = player,
+                    onEffectsChanged = { rebuildEffects(it) },
+                    onLive = { cfg -> visionEffect?.update(cfg) },
+                )
+            }
         }
         pv.findViewById<ImageButton>(R.id.btn_dsp)?.setOnClickListener {
             openSoundSettings()
@@ -355,7 +436,19 @@ private val queueItemId: String? by lazy {
             // la cadena real construida (activos/omitidos) para que las
             // estadísticas no mientan cuando la GPU omite un filtro.
             val realIn = if (osdInputW > 0) osdInputW to osdInputH else null
-            val realOut = if (osdOutputW > 0) osdOutputW to osdOutputH else null
+            // En ultra se reporta la pista de video REALMENTE elegida (no lo
+            // pedido): si el servidor solo trae 1080p único, se dice tal cual.
+            val selH = if (ultraEconomy) selectedVideoTrackHeight(player) else 0
+            val realOut = when {
+                osdOutputW > 0 -> osdOutputW to osdOutputH
+                selH > 0 && osdInputW > 0 && osdInputH > 0 ->
+                    ((selH * osdInputW / osdInputH) and 1.inv()) to selH
+                else -> null
+            }
+            val chainForStats = chainActive.toMutableList()
+            if (ultraEconomy && selH > ULTRA_MAX_HEIGHT) {
+                chainForStats.add("Fuente ${selH}p sin variante 480p (se muestra tal cual)")
+            }
             VideoStatsHelper.showStatsDialog(
                 activity = this,
                 player = player,
@@ -363,13 +456,14 @@ private val queueItemId: String? by lazy {
                 videoUrl = currentVideoUrl,
                 realInput = realIn,
                 realOutput = realOut,
-                chainActive = chainActive.toList(),
+                chainActive = chainForStats.toList(),
                 chainOmitted = chainOmitted.toList(),
                 chainMotionLabel = chainMotionLabel.ifBlank { null },
                 chainUpscalerLabel = (chainUpscalerLabel.ifBlank { osdLabel }).ifBlank { null },
                 aspectLabel = ExoPlayerSettingsHelper.aspectRatioLabel(ExoPlayerSettingsHelper.getAspectRatioMode(prefs)),
                 aspectRatioMode = ExoPlayerSettingsHelper.getAspectRatioMode(prefs),
                 dsp = dsp,
+                ultra = ultraEconomy,
             )
         }
         pv.findViewById<ImageButton>(R.id.btn_close)?.setOnClickListener {
@@ -651,6 +745,28 @@ private val queueItemId: String? by lazy {
         visionEffect = null
     }
 
+    /** Detecta audio por extensión (respaldo cuando el llamante no marcó audio_only). */
+    /** Altura de la pista de video REALMENTE elegida (0 si no hay). */
+    private fun selectedVideoTrackHeight(p: ExoPlayer?): Int {
+        return try {
+            val tracks = p?.currentTracks ?: return 0
+            for (group in tracks.groups) {
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSelected(i)) continue
+                    val f = group.getTrackFormat(i)
+                    if ((f.sampleMimeType ?: "").startsWith("video/") && f.height > 0) {
+                        return f.height
+                    }
+                }
+            }
+            0
+        } catch (_: Exception) { 0 }
+    }    private fun isAudioUrl(url: String): Boolean {
+        val clean = url.substringBefore('?').substringBefore('#')
+        val ext = clean.substringAfterLast('.', "").substringAfterLast('/').lowercase()
+        return ext in AUDIO_EXTENSIONS
+    }
+
     private fun applyVideoEffects(exoPlayer: ExoPlayer) {
         // Limpia la caché: si no, los sliders actualizan efectos viejos fuera de la cadena.
         clearCachedEffects()
@@ -666,6 +782,17 @@ private val queueItemId: String? by lazy {
         chainOmitted.clear()
         chainMotionLabel = ""
         chainUpscalerLabel = ""
+        // Solo audio o ultra económico: no se monta grafo de video (ahorra
+        // GPU/batería); el audio pasa igual por el DSP con el preset que
+        // elija el usuario (en ultra, recortado a básico).
+        if (isAudioOnly || ultraEconomy) {
+            chainActive.add(
+                if (isAudioOnly) "Audio (efectos de imagen omitidos)"
+                else "Ultra económico (efectos de imagen apagados)"
+            )
+            Log.d("ExoPlayerActivity", "Sin efectos de video (audio=$isAudioOnly ultra=$ultraEconomy)")
+            return
+        }
         // Render propio GLES2 (modos INTERP/REAL60): el decodificador vuelca
         // directo a nuestro SurfaceTexture y el vsync dibuja los 60 fps. NO se
         // llama a setVideoEffects ni siquiera con lista vacía: una lista vacía
@@ -959,9 +1086,9 @@ private val queueItemId: String? by lazy {
         try {
             if (DeviceProfile.get(this).tier == DeviceProfile.Tier.LOW) return true
         } catch (_: Throwable) { }
-        // Manual override desde ajustes (modo low-end forzado).
+        // Manual override desde ajustes (modo ultra económico).
         try {
-            if (AppPreferences.getPrefs()?.getBoolean(AppPreferences.KEY_LOW_END, false) == true) return true
+            if (AppPreferences.isUltraEconomyMode()) return true
         } catch (_: Throwable) { }
         val activityManager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
         val memInfo = android.app.ActivityManager.MemoryInfo()
@@ -1016,9 +1143,15 @@ private val queueItemId: String? by lazy {
     }
 
     override fun onPause() {
+        // Ultra + música + celular: la música sigue con la pantalla apagada.
+        // En cualquier otro caso se pausa como siempre.
+        val keepPlaying = ultraEconomy && isAudioOnly &&
+            !DeviceUtils.isTvDevice(this)
         wasPlayingBeforePause = player?.playWhenReady == true
-        player?.playWhenReady = false
-        abandonPlayerAudioFocus()
+        if (!keepPlaying) {
+            player?.playWhenReady = false
+        }
+        if (!keepPlaying) abandonPlayerAudioFocus()
         glesRenderer?.onActivityPause()
         playerView.onPause()
         super.onPause()
@@ -1029,8 +1162,11 @@ private val queueItemId: String? by lazy {
     /** Teclas del mando (play/pausa/avance/retroceso): PlayerView no las
      *  garantiza en todas las TV, así que se manejan aquí. */
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        // Mapeo gamepad -> D-pad antes de procesar.
+        val mapped = com.karin.streamtv.util.GamepadHelper.mapGamepadToDpad(event.keyCode)
+        val keyCode = if (mapped != event.keyCode && event.action == android.view.KeyEvent.ACTION_DOWN) mapped else event.keyCode
         if (event.action == android.view.KeyEvent.ACTION_DOWN) {
-            when (event.keyCode) {
+            when (keyCode) {
                 android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                     if (remoteTogglePlay()) return true
                 }
@@ -1047,9 +1183,56 @@ private val queueItemId: String? by lazy {
                 android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> {
                     if (remoteSeekBy(-10_000L)) return true
                 }
+                // D-pad puro en TV: OK = play/pausa, LEFT/RIGHT = ±10s,
+                // UP/DOWN = mostrar controles y dar foco al play.
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER,
+                android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                    // Solo si los controles están visibles o no hay foco en
+                    // botones (evita doble disparo con el click del botón).
+                    if (!isControllerFocused()) {
+                        if (remoteTogglePlay()) return true
+                    }
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (!isControllerFocused()) {
+                        if (remoteSeekBy(-10_000L)) return true
+                    }
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (!isControllerFocused()) {
+                        if (remoteSeekBy(10_000L)) return true
+                    }
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_UP,
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    try {
+                        if (!playerView.isControllerFullyVisible) playerView.showController()
+                    } catch (_: Exception) { }
+                    // Dejar que el foco baje a la botonera.
+                }
+                android.view.KeyEvent.KEYCODE_PAGE_UP -> {
+                    if (remoteSeekBy(-30_000L)) return true
+                }
+                android.view.KeyEvent.KEYCODE_PAGE_DOWN -> {
+                    if (remoteSeekBy(30_000L)) return true
+                }
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    private fun isControllerFocused(): Boolean {
+        return try {
+            val v = currentFocus
+            var p: android.view.View? = v
+            while (p != null) {
+                if (p == playerView) return true
+                p = p.parent as? android.view.View
+            }
+            v != null && (v.tag == "exo_controller" || v.id != android.view.View.NO_ID &&
+                    resources.getResourceEntryName(v.id)?.startsWith("exo_") == true)
+        } catch (_: Exception) { false }
     }
 
     private val audioFocusListener =

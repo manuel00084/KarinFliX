@@ -16,6 +16,9 @@ object SiteBranding {
         "LaCartoons" to Color.parseColor("#E91E63"),
         "DoramasYT" to Color.parseColor("#00BCD4"),
         "FrikiSeries" to Color.parseColor("#1B5E20"),
+        "AnimeFLV" to Color.parseColor("#01BCF3"),
+        "DonghuaLife" to Color.parseColor("#E53935"),
+        "Pandrama" to Color.parseColor("#FF417D"),
     )
 
     val siteLogos: Map<String, String> = mapOf(
@@ -26,6 +29,9 @@ object SiteBranding {
         "LaCartoons" to "https://www.lacartoons.com/wp-content/uploads/2024/01/cropped-lacartoons-favicon-32x32.png",
         "DoramasYT" to "https://www.doramasyt.com/img/logo6.png?v=1718135438",
         "FrikiSeries" to "https://www.frikiserie.com/assets/icon/favicon.png",
+        "AnimeFLV" to "https://vww.animeflv.one/cdn/img/favicon.ico",
+        "DonghuaLife" to "https://donghualife.com/sites/default/files/IcoPrueba.png",
+        "Pandrama" to "https://www.pandrama.tv/favicon/icon-144x144.png",
     )
 
     fun generateLogoBitmap(name: String, color: Int, size: Int = 200): Bitmap {

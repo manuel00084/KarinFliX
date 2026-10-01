@@ -20,7 +20,9 @@ import com.karin.streamtv.enhancer.parameters.KarinLightBoostParameters
  *  - Reempaque conservador 0.75..1.6 (la v1 llegaba a 2.2 y revelaba el
  *    ruido del negro).
  *  - UN SOLO cálculo de color (base + extra combinados, un pivote, un
- *    clamp) con gate único sobre el luma ORIGINAL (anti-morado).
+ *    clamp) con gate único sobre el luma ORIGINAL (anti-morado). El techo
+ *    de mezcla es 1.9: con 1.35 el slider de intensidad se aplanaba del 50%
+ *    al 100% (la ganancia pedida ya excedía el tope y se desperdiciaba).
  *  - Sin tinte cálido: la v1 lo metía atado al boost y discutía con la
  *    saturación.
  *  - uWhiteBoost por fin cableado (en la v1 era parámetro muerto):
@@ -104,6 +106,7 @@ class KarinLightBoostShaderProgram(
             glProgram.use()
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             glProgram.setFloatUniform("uPrefValue", params.prefValue)
+            glProgram.setFloatUniform("uFakeHdr", if (params.fakeHdr) 1f else 0f)
             glProgram.setFloatUniform("uShadowLift", params.shadowBoost)
             glProgram.setFloatUniform("uBlackCorr", params.blackLevel)
             glProgram.setFloatUniform("uWhiteBoost", params.whiteBoost)
@@ -155,6 +158,7 @@ class KarinLightBoostShaderProgram(
             uniform float uSceneRadius;
             uniform int uAutoMode;
             uniform float uPrefValue;
+            uniform float uFakeHdr;
             uniform float uShadowLift;
             uniform float uBlackCorr;
             uniform float uWhiteBoost;
@@ -182,9 +186,10 @@ class KarinLightBoostShaderProgram(
             void main() {
                 vec3 c = tap(vTexCoord);
                 // 0) COMPENSACION DE RANGO (opcional, antes de todo): para
-                //    streams mal etiquetados. Expandir recupera negros
-                //    lavados (16-235 tratados como 0-255); comprimir doma
-                //    negros aplastados. Todo el analisis posterior ya la ve.
+                //    streams mal etiquetados. Limitado->Completo recupera
+                //    negros lavados (16-235 tratados como 0-255);
+                //    Completo->Limitado doma negros aplastados.
+                //    Todo el analisis posterior ya la ve.
                 if (uRangeMode == 1) {
                     c = clamp((c - vec3(0.0627)) * 1.1644, 0.0, 1.0);
                 } else if (uRangeMode == 2) {
@@ -237,7 +242,11 @@ class KarinLightBoostShaderProgram(
 
                 vec3 outRgb = c;
                 if (boost > 0.001 || uColorStrength > 0.001) {
-                    if (boost > 0.001) {
+                    // El HDR simulado (etapas 1-6) tiene interruptor propio:
+                    // en AUTO el boost nunca baja de 0.18, así que la
+                    // intensidad 0 no lo apaga. Con uFakeHdr en 0 se salta la
+                    // curva tonal y solo aplican color y rango.
+                    if (uFakeHdr > 0.5 && boost > 0.001) {
                         // 1) LIFT ANCLADO (sin pow): 0 en Y=0 (el negro puro
                         //    no se mueve), pico en sombras bajas, ~0 en luces.
                         //    Calibrado: a boost 1 y slider 0.7 sube ~0.21 max.
@@ -283,6 +292,11 @@ class KarinLightBoostShaderProgram(
                     //    (R-G/G-B): la piel real queda protegida, los apagados
                     //    ganan vida. Gate unico sobre el luma ORIGINAL:
                     //    en negro puro no se satura el ruido (anti-morado).
+                    //
+                    //    El techo es 1.9 (no 1.35): con 1.35 la ganancia pedida
+                    //    ya lo superaba al ~50% de intensidad, asi que el slider
+                    //    se aplana de 50% a 100% y subirlo no hacia NADA por
+                    //    arriba. Ahora la respuesta es monotonica hasta ~95%.
                     float lOut = luma(outRgb);
                     float mx = max(outRgb.r, max(outRgb.g, outRgb.b));
                     float mn = min(outRgb.r, min(outRgb.g, outRgb.b));
@@ -294,17 +308,24 @@ class KarinLightBoostShaderProgram(
                         * (1.0 - smoothstep(0.10, 0.22, dg))
                         * smoothstep(0.06, 0.16, lOut)
                         * (1.0 - smoothstep(0.75, 0.92, lOut));
-                    float satDef = 1.0 - clamp((mx - mn) * 2.0, 0.0, 1.0);
+                    float sat = clamp((mx - mn) * 2.0, 0.0, 1.0);
                     float toneW = smoothstep(0.02, 0.18, lOut)
                         * (1.0 - smoothstep(0.75, 0.98, lOut));
-                    float drive = clamp(satDef * (0.35 + 0.65 * toneW), 0.0, 1.0)
+                    float drive = clamp((1.0 - sat) * (0.35 + 0.65 * toneW), 0.0, 1.0)
                         * (1.0 - skin * 0.85);
                     float gBase = (uSaturation - 1.0) * (0.55 + 0.45 * (1.0 - chroma))
                         + uVibrance * 0.55 * (1.0 - chroma) * (1.0 - 0.75 * skin);
-                    float gExtra = uColorStrength * (0.25 + drive)
-                        + 0.35 * uColorStrength * drive * (1.0 - clamp((mx - mn) * 1.5, 0.0, 1.0));
-                    float g = (gBase + gExtra) * smoothstep(0.012, 0.06, Y);
-                    outRgb = mix(vec3(lOut), outRgb, clamp(1.0 + g, 0.0, 1.35));
+                    // Pesos recalibrados al nuevo techo: el extra ya no se
+                    // desperdicia contra el clamp, asi que baja de 0.25 a 0.08
+                    // la base y el empuje real va a los colores apagados.
+                    float gExtra = uColorStrength * (0.08 + 0.62 * drive)
+                        + 0.22 * uColorStrength * drive * (1.0 - sat);
+                    // Freno extra de piel: drive solo atenua el extra, no la
+                    // saturacion base, y con el techo mas alto la carne se
+                    // iba a naranja. Este -45% sobre la ganancia total lo evita.
+                    float g = (gBase + gExtra) * smoothstep(0.012, 0.06, Y)
+                        * (1.0 - 0.45 * skin);
+                    outRgb = mix(vec3(lOut), outRgb, clamp(1.0 + g, 0.0, 1.9));
                     outRgb = clamp(outRgb, 0.0, 1.0);
 
                     // 8) DITHER Bayer unico en luma (anti-bandas 8-bit,
