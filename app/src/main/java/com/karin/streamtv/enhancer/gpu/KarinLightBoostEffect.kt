@@ -272,11 +272,20 @@ class KarinLightBoostShaderProgram(
 
                         // 4) CLARITY LOCAL: Y + k*(Y-media). En plano no hace
                         //    nada (sin velo); en bordes define. Gateado para
-                        //    no tocar negro puro ni blanco puro.
+                        //    no tocar negro puro ni blanco puro. Tope por rango
+                        //    local (idea Anime4K Clamp_Highlights + ringEps del
+                        //    Detail: nunca mas del 50% del rango ni 0.08 abs).
+                        //    0 fetches extra (reusa los 8 taps), solo min/max.
                         float kL = min(0.42 * uLocalContrast * (0.30 + 0.70 * boost), 0.55);
                         float gate = smoothstep(0.02, 0.12, Y3)
                             * (1.0 - smoothstep(0.85, 0.99, Y3));
-                        float Y4 = clamp(Y3 + kL * (Y3 - muLocal) * gate, 0.0, 1.0);
+                        float minL = min(min(min(tN, tS), min(tE, tW)), min(min(min(tNE, tNW), min(tSE, tSW)), Y));
+                        float maxL = max(max(max(tN, tS), max(tE, tW)), max(max(max(tNE, tNW), max(tSE, tSW)), Y));
+                        float rangeL = maxL - minL;
+                        float push = kL * (Y3 - muLocal);
+                        float lim = min(0.08, rangeL * 0.5 + 0.005);
+                        push = clamp(push, -lim, lim);
+                        float Y4 = clamp(Y3 + push * gate, 0.0, 1.0);
 
                         // 5) GAMMA del usuario (unico pow del pase).
                         float Yg = pow(max(Y4, 0.0001), uGammaInv);

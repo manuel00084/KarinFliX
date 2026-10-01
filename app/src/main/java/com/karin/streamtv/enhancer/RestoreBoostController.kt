@@ -23,8 +23,28 @@ object RestoreBoostController {
         val depixel: Float,
         val retro: Float,
         val detail: Float,
+        val depth: Float = 0f,
     ) {
-        val anyOn: Boolean get() = depixel > 0f || retro > 0f || detail > 0f
+        val anyOn: Boolean get() = depixel > 0f || retro > 0f || detail > 0f || depth > 0f
+    }
+
+    /** Auto por fuente (KEY_RESTORE_AUTO, default true): SD limpia más, HD casi no toca. */
+    fun autoFromPrefs(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(ExoPlayerSettingsHelper.KEY_RESTORE_AUTO, true)
+
+    /**
+     * Auto por fuente: escala el master según la altura real del video.
+     * SD sucio necesita limpieza fuerte; HD limpio se empasta con lo mismo.
+     * 0 = altura desconocida -> neutro. Solo Kotlin (una vez por video),
+     * 0 pases/taps extra en GPU.
+     */
+    fun autoScale(videoHeight: Int): Float = when {
+        videoHeight <= 0 -> 1f
+        videoHeight <= 480 -> 1.2f
+        videoHeight <= 540 -> 1.15f
+        videoHeight <= 720 -> 1.1f
+        videoHeight <= 1080 -> 0.85f
+        else -> 0.6f
     }
 
     /** Master 0..1 + enabled, migrando prefs legacy si hace falta. */
@@ -80,25 +100,36 @@ object RestoreBoostController {
         upscalerOn: Boolean,
         upscalerMode: Int,
         lowEnd: Boolean,
+        videoHeight: Int = 0,
+        auto: Boolean = true,
     ): Stages {
-        val m = master.coerceIn(0f, 1f)
+        var m = master.coerceIn(0f, 1f)
+        // 1) Auto por fuente: SD sube, HD baja. Antes de las curvas para que
+        // los topes de gama baja y el factor upscaler sigan mandando después.
+        if (auto && videoHeight > 0) m = (m * autoScale(videoHeight)).coerceIn(0f, 1f)
         var dep = m.pow(0.8f)
         var ret = m * 0.9f
         var det = m.pow(1.4f)
+        // Profundidad/pop: recomendada ~0.3 con master 0.6 (m*0.6). 0 fetches
+        // extra (reusa el vecindario), solo ALU: segura en gama baja.
+        var depth = m * 0.6f
         if (lowEnd) {
             dep = dep.coerceIn(0f, 0.8f)
             ret = ret.coerceIn(0f, 0.8f)
             det = det.coerceIn(0f, 0.5f)
+            depth = depth.coerceIn(0f, 0.3f)
         }
         if (upscalerOn) {
             if (upscalerMode == SuperResolutionEffect.MODE_FSR) det *= 0.55f
             if (upscalerMode == SuperResolutionEffect.MODE_ANIME4K) det *= 0.5f
             if (upscalerMode == SuperResolutionEffect.MODE_KARIN) det *= 0.55f
+            depth *= 0.7f
         }
         return Stages(
             depixel = dep.coerceIn(0f, 1f),
             retro = ret.coerceIn(0f, 1f),
             detail = det.coerceIn(0f, 1f),
+            depth = depth.coerceIn(0f, 1f),
         )
     }
 
@@ -114,6 +145,7 @@ object RestoreBoostController {
         upscalerOn: Boolean,
         upscalerMode: Int,
         lowEnd: Boolean,
+        videoHeight: Int = 0,
     ): Stages {
         val (master, _) = masterAndEnabled(prefs)
         val custom = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_RESTORE_CUSTOM, false)
@@ -121,26 +153,36 @@ object RestoreBoostController {
         var ret: Float
         var det: Float
         if (custom) {
+            // Personalizado: el usuario manda por etapa (sin auto ni factor
+            // upscaler), solo topes de gama baja abajo. Profundidad aparte.
             dep = prefs.getInt(ExoPlayerSettingsHelper.KEY_DEPIXEL_STRENGTH, 60) / 100f
             ret = prefs.getInt(ExoPlayerSettingsHelper.KEY_RETRO_STRENGTH, 55) / 100f
             det = prefs.getInt(ExoPlayerSettingsHelper.KEY_DETAIL_BOOST_STRENGTH, 55) / 100f
         } else {
-            val s = stagesFor(master, upscalerOn, upscalerMode, lowEnd)
+            val s = stagesFor(
+                master, upscalerOn, upscalerMode, lowEnd,
+                videoHeight, autoFromPrefs(prefs),
+            )
             dep = s.depixel
             ret = s.retro
             det = s.detail
         }
+        // Profundidad: opción aparte (mismo pase, 0 costo). No la mueve el
+        // master ni el modo fino: slider propio con default 30.
+        var depth = prefs.getInt(ExoPlayerSettingsHelper.KEY_RESTORE_DEPTH, 30) / 100f
         if (lowEnd) {
             // El modo vinculado ya viene topado desde stagesFor; esto
             // protege además al personalizado en Mali lentos.
             dep = dep.coerceIn(0f, 0.8f)
             ret = ret.coerceIn(0f, 0.8f)
             det = det.coerceIn(0f, 0.5f)
+            depth = depth.coerceIn(0f, 0.3f)
         }
         return Stages(
             depixel = dep.coerceIn(0f, 1f),
             retro = ret.coerceIn(0f, 1f),
             detail = det.coerceIn(0f, 1f),
+            depth = depth.coerceIn(0f, 1f),
         )
     }
 }

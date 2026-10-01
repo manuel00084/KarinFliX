@@ -37,6 +37,12 @@ import androidx.media3.effect.GlShaderProgram
  * Nitidez en vivo via [updateSharpness]: en FSR/Anime4K baja el "sharpness"
  * de RCAS (más valor = más afilado).
  *
+ * Demo split-screen ([demoSplit]): la mitad izquierda conserva el upscale
+ * bilineal del hardware (muestreo directo con GL_LINEAR, sin calidad) y la
+ * derecha el upscale real. Sin costo extra: early-out antes de los taps.
+ * Es lo que permite comparar en videos SD/720p, donde este efecto sí
+ * trabaja (en 1080p+ es no-op y el demo de la cadena ya funcionaba).
+ *
  * GLES2 compatible (GLSL ES 1.00: sin uintBitsToFloat/gather/textureSize,
  * rcp/inversesqrt genéricos, min/max de 2 argumentos, highp).
  */
@@ -49,12 +55,13 @@ class SuperResolutionEffect(
     /** Reporta en runtime los tamaños REALES de entrada/salida del pase GL
      *  (lo que Media3 configuró), para el OSD y el diálogo de stats. */
     private val onConfigured: ((inW: Int, inH: Int, outW: Int, outH: Int) -> Unit)? = null,
+    private val demoSplit: Boolean = false,
 ) : GlEffect {
 
     private var program: SuperResProgram? = null
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return SuperResProgram(context, useHdr, mode, sharpness, restorePass, separateRcas, onConfigured, karinVariant).also {
+        return SuperResProgram(context, useHdr, mode, sharpness, restorePass, separateRcas, onConfigured, karinVariant, demoSplit).also {
             program = it
         }
     }
@@ -110,6 +117,7 @@ class SuperResProgram(
     private val separateRcas: Boolean = false,
     private val onConfigured: ((inW: Int, inH: Int, outW: Int, outH: Int) -> Unit)? = null,
     private val karinVariant: Int = SuperResolutionEffect.KARIN_CRISP,
+    private val demoSplit: Boolean = false,
 ) : BaseGlShaderProgram(useHdr, 1) {
 
     private val glProgram: GlProgram
@@ -125,8 +133,15 @@ class SuperResProgram(
                 else FRAGMENT_KARIN
             else -> if (separateRcas) FRAGMENT_FSR_EASU else FRAGMENT_FSR
         }
+        // Demo split (ver withDemoSplit): si el fragmento no trae los
+        // marcadores, el efecto sigue sin demo (aviso en log, sin crash:
+        // setear un uniform inexistente hace NPE en Media3).
+        val demoFragment = withDemoSplit(fragment)
+        if (demoFragment == null) {
+            Log.w("SuperResolutionEffect", "fragmento sin punto de demo (mode=$mode): split no disponible")
+        }
         try {
-            glProgram = GlProgram(VERTEX_SHADER, fragment)
+            glProgram = GlProgram(VERTEX_SHADER, demoFragment ?: fragment)
         } catch (e: GlUtil.GlException) {
             throw VideoFrameProcessingException(e)
         }
@@ -137,6 +152,9 @@ class SuperResProgram(
         )
         glProgram.setFloatsUniform("uTransformationMatrix", GlUtil.create4x4IdentityMatrix())
         glProgram.setFloatsUniform("uTexTransformationMatrix", GlUtil.create4x4IdentityMatrix())
+        if (demoFragment != null) {
+            glProgram.setIntUniform("uDemoSplit", if (demoSplit) 1 else 0)
+        }
     }
 
     fun updateSharpness(v: Float) {
@@ -234,6 +252,32 @@ class SuperResProgram(
         private val FRAGMENT_KARIN = ShaderBlobs.superresKarin
 
         private val FRAGMENT_KARIN_EASU = ShaderBlobs.superresKarinEasu
+
+        private const val DEMO_SAMPLER_MARK = "uniform sampler2D uTexSampler;"
+        private const val DEMO_MAIN_MARK = "void main() {"
+
+        /**
+         * Inyecta el split demo en un fragmento del upscaler: declara
+         * `uDemoSplit` y un early-out al inicio del main() que conserva la
+         * mitad izquierda con upscale bilineal del hardware (muestreo
+         * directo; la textura de entrada es GL_LINEAR, ver comentario FSR).
+         * Devuelve null si el fragmento no trae los marcadores.
+         *
+         * Es función pura (sin GL) para poder probarla en JVM: los 6
+         * fragmentos comparten una sola declaración del sampler y un solo
+         * main(), así que un solo punto cubre todos los modos.
+         */
+        internal fun withDemoSplit(fragment: String): String? {
+            if (!fragment.contains(DEMO_SAMPLER_MARK) || !fragment.contains(DEMO_MAIN_MARK)) return null
+            return fragment
+                .replace(DEMO_SAMPLER_MARK, "uniform sampler2D uTexSampler;\nuniform int uDemoSplit;")
+                .replace(
+                    DEMO_MAIN_MARK,
+                    "void main() {\n" +
+                        "if (uDemoSplit == 1 && vTexCoord.x < 0.5) " +
+                        "{ gl_FragColor = vec4(texture2D(uTexSampler, vTexCoord).rgb, 1.0); return; }",
+                )
+        }
 
     }
 }

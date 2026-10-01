@@ -5,10 +5,12 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.view.Gravity
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.CompoundButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
@@ -84,6 +86,8 @@ object ExoPlayerSettingsHelper {
         return SHADER_OFF to 0f
     }
     const val KEY_RESTORE_CUSTOM = "restore_custom"
+    const val KEY_RESTORE_AUTO = "restore_auto"
+    const val KEY_RESTORE_DEPTH = "restore_depth"
     const val KEY_RETRO_EN = "retro_enabled"
     const val KEY_RETRO_STRENGTH = "retro_strength"
     const val KEY_CINE_EN = "cine_enabled"
@@ -138,6 +142,28 @@ object ExoPlayerSettingsHelper {
         }
     }
 
+    /**
+     * Misma fuente que ExoPlayerActivity.isLowEndDevice (DeviceProfile +
+     * ultra económico + RAM): los previews del diálogo deben usar los mismos
+     * topes que la cadena aplica al confirmar.
+     */
+    fun isLowEndDevice(activity: Activity): Boolean {
+        try {
+            if (DeviceProfile.get(activity).tier == DeviceProfile.Tier.LOW) return true
+        } catch (_: Throwable) { }
+        try {
+            if (com.karin.streamtv.util.AppPreferences.isUltraEconomyMode()) return true
+        } catch (_: Throwable) { }
+        return try {
+            val am = activity.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            mi.totalMem < 4L * 1024 * 1024 * 1024 || am.isLowRamDevice
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     fun showAdvancedDialog(
         activity: Activity,
         prefs: SharedPreferences,
@@ -145,7 +171,7 @@ object ExoPlayerSettingsHelper {
         onEffectsChanged: (ExoPlayer) -> Unit,
         onStrengthChanged: (String, Float) -> Unit = { _, _ -> },
         onKarinChanged: (KarinLightBoostParameters) -> Unit = {},
-        onRestoreChanged: (Float, Float, Float) -> Unit = { _, _, _ -> },
+        onRestoreChanged: (Float, Float, Float, Float) -> Unit = { _, _, _, _ -> },
         videoInputHeight: Int = 0,
     ) {
         // label es una lambda para que cada fila relea prefs en vivo: al
@@ -211,7 +237,7 @@ object ExoPlayerSettingsHelper {
                     player = player,
                     onEffectsChanged = onEffectsChangedWrapped,
                     onMasterLive = { v -> onStrengthChanged("restore", v) },
-                    onStagesLive = { d, r, t -> onRestoreChanged(d, r, t) },
+                    onStagesLive = { d, r, t, dp -> onRestoreChanged(d, r, t, dp) },
                 )
             },
 
@@ -484,9 +510,10 @@ object ExoPlayerSettingsHelper {
 
     /**
      * RESTORE BOOST: intensidad maestra (vincula las 3 etapas) + ajuste fino
-     * opcional por etapa. Todo corre en el mismo pase único; el fino solo
-     * mueve los 3 uniforms. Tocar un slider fino = modo personalizado; mover
-     * el master = vuelve a vincular. Todo con preview en vivo.
+     * opcional por etapa + profundidad aparte. Todo corre en el mismo pase
+     * único (la profundidad es 0 fetches extra); el fino solo mueve uniforms.
+     * Tocar un slider fino = modo personalizado; mover el master = vuelve a
+     * vincular. La profundidad no la mueve el master. Todo con preview en vivo.
      */
     private fun showRestoreDialog(
         activity: Activity,
@@ -494,17 +521,27 @@ object ExoPlayerSettingsHelper {
         player: ExoPlayer?,
         onEffectsChanged: (ExoPlayer) -> Unit,
         onMasterLive: (Float) -> Unit,
-        onStagesLive: (Float, Float, Float) -> Unit,
+        onStagesLive: (Float, Float, Float, Float) -> Unit,
     ) {
         var enabled = prefs.getBoolean(KEY_RESTORE_EN, false)
         var master = RestoreBoostController.masterAndEnabled(prefs).first.coerceIn(0f, 1f)
         var custom = prefs.getBoolean(KEY_RESTORE_CUSTOM, false)
+        var auto = RestoreBoostController.autoFromPrefs(prefs)
 
+        // Preview fiel: mismos topes de gama baja que aplica la cadena al
+        // confirmar (antes se previsualizaba sin topes y mentía en Mali lentos).
+        // La altura real del video sale del player si ya hay formato.
+        val previewLowEnd = isLowEndDevice(activity)
+        val previewHeight: Int = try {
+            player?.videoFormat?.height ?: 0
+        } catch (_: Exception) { 0 }
         fun linkedStages(m: Float): Triple<Float, Float, Float> {
             val upOn = prefs.getBoolean(KEY_UPSCALER_EN, false)
             val upMode = prefs.getInt(KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
-            // Preview sin topes de gama (la cadena los aplica al confirmar).
-            val s = RestoreBoostController.stagesFor(m, upOn, upMode, lowEnd = false)
+            val s = RestoreBoostController.stagesFor(
+                m, upOn, upMode, lowEnd = previewLowEnd,
+                videoHeight = previewHeight, auto = auto,
+            )
             return Triple(s.depixel, s.retro, s.detail)
         }
         var dep: Float
@@ -518,6 +555,9 @@ object ExoPlayerSettingsHelper {
             val (d, r, t) = linkedStages(master)
             dep = d; ret = r; det = t
         }
+        // Profundidad: opción aparte con slider propio (mismo pase, 0 costo).
+        // No la mueve el master ni el modo fino/Linked.
+        var depth = prefs.getInt(KEY_RESTORE_DEPTH, 30) / 100f
 
         fun pct(name: String, v: Float) = "$name: ${(v * 100).toInt()}%"
         val switch = Switch(activity).apply {
@@ -547,6 +587,11 @@ object ExoPlayerSettingsHelper {
         val detSeek = SeekBar(activity).apply {
             max = 100
             progress = (det * 100).toInt()
+        }
+        val depthLabel = TextView(activity).apply { text = pct("Profundidad", depth) }
+        val depthSeek = SeekBar(activity).apply {
+            max = 100
+            progress = (depth * 100).toInt()
         }
         val modeNote = TextView(activity).apply {
             textSize = 13f
@@ -585,7 +630,7 @@ object ExoPlayerSettingsHelper {
                     set(progress / 100f)
                     custom = true
                     syncFine()
-                    onStagesLive(dep, ret, det)
+                    onStagesLive(dep, ret, det, depth)
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) {}
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -594,18 +639,46 @@ object ExoPlayerSettingsHelper {
         depSeek.setOnSeekBarChangeListener(fineListener { dep = it })
         retSeek.setOnSeekBarChangeListener(fineListener { ret = it })
         detSeek.setOnSeekBarChangeListener(fineListener { det = it })
+        depthSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                depth = progress / 100f
+                depthLabel.text = pct("Profundidad", depth)
+                // Opción aparte: no toca custom/vinculado.
+                onStagesLive(dep, ret, det, depth)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
         syncFine()
+
+        val autoCheck = CheckBox(activity).apply {
+            text = "Auto por fuente (SD limpia más, HD casi no toca)"
+            isChecked = auto
+            setOnCheckedChangeListener { _, isChecked ->
+                auto = isChecked
+                if (!custom) {
+                    val (d, r, t) = linkedStages(master)
+                    dep = d
+                    ret = r
+                    det = t
+                    syncFine()
+                    onStagesLive(dep, ret, det, depth)
+                }
+            }
+        }
 
         val layout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 8)
             addView(switch)
             addView(TextView(activity).apply {
-                text = "Limpieza + reconstrucción con coherencia CRT sutil + detalle en un solo pase: " +
-                    "la reconstrucción cohesiona píxeles vecinos y luego el detalle afila encima."
+                text = "Limpieza + reconstrucción con coherencia CRT sutil + detalle + profundidad en un solo pase: " +
+                    "la reconstrucción cohesiona píxeles vecinos, el detalle afila encima y la profundidad separa planos (0 fetches extra)."
                 textSize = 13f
                 setPadding(0, 16, 0, 8)
             })
+            addView(autoCheck)
             addView(masterLabel)
             addView(masterSeek)
             addView(TextView(activity).apply {
@@ -619,6 +692,8 @@ object ExoPlayerSettingsHelper {
             addView(retSeek)
             addView(detLabel)
             addView(detSeek)
+            addView(depthLabel)
+            addView(depthSeek)
             addView(modeNote)
         }
         AlertDialog.Builder(activity)
@@ -629,9 +704,11 @@ object ExoPlayerSettingsHelper {
                     .putBoolean(KEY_RESTORE_EN, enabled)
                     .putInt(KEY_RESTORE_STRENGTH, (master * 100).toInt())
                     .putBoolean(KEY_RESTORE_CUSTOM, custom)
+                    .putBoolean(KEY_RESTORE_AUTO, auto)
                     .putInt(KEY_DEPIXEL_STRENGTH, (dep * 100).toInt())
                     .putInt(KEY_RETRO_STRENGTH, (ret * 100).toInt())
                     .putInt(KEY_DETAIL_BOOST_STRENGTH, (det * 100).toInt())
+                    .putInt(KEY_RESTORE_DEPTH, (depth * 100).toInt())
                     .apply()
                 player?.let { onEffectsChanged(it) }
             }
@@ -1563,13 +1640,14 @@ object ExoPlayerSettingsHelper {
     ) {
         // Ordenados de MEJOR rendimiento (arriba) al más pesado (abajo).
         // Coste real medido en pases de GPU: DOUBLING no entra al render
-        // propio (0 pases), HYBRID/BLEND son 1 pase con 2 muestras, y
+        // propio (0 pases), HYBRID/BLEND/STEADY son 1 pase con 2 muestras, y
         // ECO60/REAL60 arrancan el render propio a 60fps (historial a media
         // y a resolución completa respectivamente).
         val titles = mutableListOf(
             "⏻ Apagado",
             "DOUBLING (Frame x2) · sin coste",
             "HYBRID (Doubling + Micro-Blend) · recomendado",
+            "STEADY (Nitidez + Anti-shimmer)",
             "BLEND (Suavizado) · mezcla fuerte",
             "ECO60 (60fps liviano) · historial a media res",
             "60 fps reales (GRID) · el más pesado",
@@ -1578,16 +1656,18 @@ object ExoPlayerSettingsHelper {
             "No hace nada. Video original.",
             "Muestra cada cuadro nítido tal cual y lo repite el panel. 0 pases de GPU: el más rápido.",
             "Cuadro nítido + micro-mezcla (25%). Un solo pase. Mejor balance de fluidez y coste.",
+            "Nítido en movimiento como DOUBLING, pero en zonas quietas promedia con el cuadro anterior y detiene el parpadeo. Sin fantasma. Un solo pase.",
             "Mezcla cuadro anterior y actual al 50%. Un solo pase: más fluido, pero puede verse fantasma.",
             "Render propio a 60fps con historial a media resolución. Para equipos modestos.",
             "Cuadros intermedios en grid 60Hz real con anti-fantasma. Máxima fluidez, máximo consumo.",
         )
         // Fila -> ordinal MotionX2Mode legacy (el 3/SPIKE ya no se ofrece).
-        val dialogToLegacy = mutableListOf(-1, 1, 0, 2, MotionX2Mode.ECO60.ordinal, MotionX2Mode.REAL60.ordinal)
+        val dialogToLegacy = mutableListOf(-1, 1, 0, MotionX2Mode.STEADY.ordinal, 2, MotionX2Mode.ECO60.ordinal, MotionX2Mode.REAL60.ordinal)
         // Ordinal MotionX2Mode -> fila. El 3 (INTERP/SPIKE eliminado) se muestra
         // como REAL60; en ejecución resolveStored lo migra de todos modos.
-        val legacyToDialog = intArrayOf(2, 1, 3, 5, 5, 4)
-        val maxStored = MotionX2Mode.ECO60.ordinal
+        // El 6 (STEADY) va en la fila 3, tras HYBRID.
+        val legacyToDialog = intArrayOf(2, 1, 4, 6, 6, 5, 3)
+        val maxStored = MotionX2Mode.STEADY.ordinal
         val checkedIndex = if (prefs.getBoolean(KEY_MOTIONX2_EN, false)) {
             legacyToDialog[prefs.getInt(KEY_MOTIONX2_MODE, 0).coerceIn(0, maxStored)]
         } else {

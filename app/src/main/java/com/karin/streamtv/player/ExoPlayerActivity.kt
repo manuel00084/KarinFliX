@@ -596,13 +596,21 @@ private val queueItemId: String? by lazy {
     private fun liveRoute(effectType: String, strength: Float) {
         when (effectType) {
             "restore" -> {
-                // Preview en vivo del master: mismas curvas perceptuales
+                // Preview en vivo del master: mismas curvas + auto
                 // que la cadena (no 1:1:1 lineal, que mentía en detalle).
+                // La profundidad es opción aparte: no la mueve el master,
+                // se lee del pref guardado.
                 val s = strength.coerceIn(0f, 1f)
                 val upOn = prefs.getBoolean(ExoPlayerSettingsHelper.KEY_UPSCALER_EN, false)
                 val upMode = prefs.getInt(ExoPlayerSettingsHelper.KEY_UPSCALER_MODE, SuperResolutionEffect.MODE_FSR)
-                val st = RestoreBoostController.stagesFor(s, upOn, upMode, isLowEndDevice())
-                restoreEffect?.updateStages(st.depixel, st.retro, st.detail)
+                val videoH = selectedVideoTrackHeight(player).takeIf { it > 0 } ?: osdInputH
+                val st = RestoreBoostController.stagesFor(
+                    s, upOn, upMode, isLowEndDevice(),
+                    videoH, RestoreBoostController.autoFromPrefs(prefs),
+                )
+                var depth = prefs.getInt(ExoPlayerSettingsHelper.KEY_RESTORE_DEPTH, 30) / 100f
+                if (isLowEndDevice()) depth = depth.coerceIn(0f, 0.3f)
+                restoreEffect?.updateStages(st.depixel, st.retro, st.detail, depth)
             }
             "colors" -> karinLightBoostEffect?.updateColorStrength(strength)
             "shader" -> {
@@ -869,7 +877,19 @@ private val queueItemId: String? by lazy {
             isHighEndDevice() -> 7
             else -> 5
         }
-        val maxHeavyEffects = baseBudget
+        // En gama baja, si el usuario eligió explícitamente un modo MotionX2
+        // con GL (HYBRID/BLEND/STEADY: mezcla temporal real, no DOUBLING
+        // passthrough ni render propio), se respeta con +1 de cupo en vez de
+        // omitirlo en silencio tras Restore+Light+Upscaler.
+        val explicitMotionGL = try {
+            prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false) &&
+                MotionX2Mode.resolveStored(
+                    prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0),
+                ).let { it != MotionX2Mode.DOUBLING && !it.isRealFps() }
+        } catch (_: Exception) {
+            false
+        }
+        val maxHeavyEffects = baseBudget + if (isLowEnd && explicitMotionGL) 1 else 0
         var heavyEffectCount = 0
 
         fun addHeavyEffect(label: String, effect: Effect) {
@@ -896,11 +916,17 @@ private val queueItemId: String? by lazy {
         run {
             val (_, restoreEn) = RestoreBoostController.masterAndEnabled(prefs)
             if (restoreEn) {
-                val stages = RestoreBoostController.stagesFromPrefs(prefs, upscalerOn, upscalerMode, isLowEnd)
+                // Auto por fuente: altura de la pista elegida (0 = desconocida).
+                val videoH = selectedVideoTrackHeight(player)
+                val stages = RestoreBoostController.stagesFromPrefs(prefs, upscalerOn, upscalerMode, isLowEnd, videoH)
                 if (stages.anyOn) {
                     restoreEffect = RestoreBoostEffect(
-                        stages.depixel, stages.retro, stages.detail,
-                        isLowEnd, demoEnabled,
+                        depixel = stages.depixel,
+                        retro = stages.retro,
+                        detail = stages.detail,
+                        depth = stages.depth,
+                        lowPower = isLowEnd,
+                        demoSplit = demoEnabled,
                     )
                     addHeavyEffect("Restore", restoreEffect!!)
                 } else {
@@ -978,6 +1004,7 @@ private val queueItemId: String? by lazy {
                 mode, sharpness, restorePass = false, separateRcas = twoPass,
                 karinVariant = karinVariant,
                 onConfigured = onScaled,
+                demoSplit = demoEnabled,
             )
             addHeavyEffect("Upscaler", superResolutionEffect!!)
             if (twoPass) {
@@ -998,7 +1025,11 @@ private val queueItemId: String? by lazy {
             var modeIndex = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0)
             var strength = 0.5f
             if (isLowEnd) {
-                modeIndex = MotionX2Mode.HYBRID.ordinal
+                // STEADY cuesta lo mismo que HYBRID (1 pase, 2 muestras):
+                // se respeta si el usuario lo eligió; el resto cae a HYBRID.
+                if (modeIndex != MotionX2Mode.STEADY.ordinal) {
+                    modeIndex = MotionX2Mode.HYBRID.ordinal
+                }
                 strength = 0.25f
             }
             val mode = MotionX2Mode.resolveStored(modeIndex)
@@ -1041,7 +1072,7 @@ private val queueItemId: String? by lazy {
         run {
             val cfg = VisionAssistHelper.fromPrefs(prefs)
             if (cfg.isActive && cfg.hasVision) {
-                visionEffect = VisionAssistEffect(cfg)
+                visionEffect = VisionAssistEffect(cfg, demoEnabled)
                 effects.add(visionEffect!!)
                 chainActive.add("Visión")
                 Log.d("ExoPlayerActivity", "Visión activa (${VisionAssistHelper.needsLabel(cfg)}), fuera de cupo por accesibilidad")
@@ -1279,8 +1310,8 @@ private val queueItemId: String? by lazy {
             onKarinChanged = { p ->
                 karinLightBoostEffect?.update(p)
             },
-            onRestoreChanged = { d, r, t ->
-                restoreEffect?.updateStages(d, r, t)
+            onRestoreChanged = { d, r, t, dp ->
+                restoreEffect?.updateStages(d, r, t, dp)
             },
         )
     }

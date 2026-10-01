@@ -27,13 +27,16 @@ import androidx.media3.effect.GlShaderProgram
  * La clave de calidad: el afilado se frena por píxel según cuánto se
  * suavizó ese mismo píxel (smoothK), en vez de la atenuación gruesa por
  * sliders de la cadena vieja. Todo en luma preservando tono + dither.
- * Cada etapa se apaga por uniform; las 3 en 0 = early-out total.
+ * Cada etapa se apaga por uniform; las 4 en 0 = early-out total.
  * GLES2 compatible. Coste: 5-9 taps según etapas activas y gama.
+ * La 4ª etapa (profundidad/clarity) es 0 fetches extra: reutiliza
+ * lc/blurL/var4/range ya leídos para el pop frente-fondo.
  */
 class RestoreBoostEffect(
     private var depixel: Float,
     private var retro: Float,
     private var detail: Float,
+    private var depth: Float = 0f,
     private var lowPower: Boolean = false,
     private var demoSplit: Boolean = false,
 ) : GlEffect {
@@ -41,18 +44,19 @@ class RestoreBoostEffect(
     private var program: RestoreBoostShaderProgram? = null
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return RestoreBoostShaderProgram(context, useHdr, depixel, retro, detail, lowPower, demoSplit)
+        return RestoreBoostShaderProgram(context, useHdr, depixel, retro, detail, depth, lowPower, demoSplit)
             .also { program = it }
     }
 
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean =
-        depixel <= 0f && retro <= 0f && detail <= 0f
+        depixel <= 0f && retro <= 0f && detail <= 0f && depth <= 0f
 
-    fun updateStages(newDepixel: Float, newRetro: Float, newDetail: Float) {
+    fun updateStages(newDepixel: Float, newRetro: Float, newDetail: Float, newDepth: Float = depth) {
         depixel = newDepixel.coerceIn(0f, 1f)
         retro = newRetro.coerceIn(0f, 1f)
         detail = newDetail.coerceIn(0f, 1f)
-        program?.updateStages(depixel, retro, detail)
+        depth = newDepth.coerceIn(0f, 1f)
+        program?.updateStages(depixel, retro, detail, depth)
     }
 }
 
@@ -62,6 +66,7 @@ class RestoreBoostShaderProgram(
     private var depixel: Float,
     private var retro: Float,
     private var detail: Float,
+    private var depth: Float,
     private var lowPower: Boolean,
     private var demoSplit: Boolean = false,
 ) : BaseGlShaderProgram(useHdr, 1) {
@@ -108,6 +113,7 @@ class RestoreBoostShaderProgram(
             glProgram.setFloatUniform("uDepixel", depixel)
             glProgram.setFloatUniform("uRetro", retro)
             glProgram.setFloatUniform("uDetail", detail)
+            glProgram.setFloatUniform("uDepth", depth)
             glProgram.setIntUniform("uLowPower", if (lowPower) 1 else 0)
             glProgram.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
@@ -116,10 +122,11 @@ class RestoreBoostShaderProgram(
         }
     }
 
-    fun updateStages(newDepixel: Float, newRetro: Float, newDetail: Float) {
+    fun updateStages(newDepixel: Float, newRetro: Float, newDetail: Float, newDepth: Float = depth) {
         depixel = newDepixel.coerceIn(0f, 1f)
         retro = newRetro.coerceIn(0f, 1f)
         detail = newDetail.coerceIn(0f, 1f)
+        depth = newDepth.coerceIn(0f, 1f)
     }
 
     companion object {
@@ -143,6 +150,7 @@ class RestoreBoostShaderProgram(
             uniform float uDepixel;
             uniform float uRetro;
             uniform float uDetail;
+            uniform float uDepth;
             uniform int uLowPower;
             uniform int uDemoSplit;
 
@@ -162,7 +170,7 @@ class RestoreBoostShaderProgram(
 
             void main() {
                 vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
-                if (uDepixel <= 0.0 && uRetro <= 0.0 && uDetail <= 0.0) {
+                if (uDepixel <= 0.0 && uRetro <= 0.0 && uDetail <= 0.0 && uDepth <= 0.0) {
                     gl_FragColor = vec4(c, 1.0);
                     return;
                 }
@@ -238,8 +246,16 @@ class RestoreBoostShaderProgram(
                             * (1.0 - smoothstep(b1, b2, abs(lR - lc)));
                         float betaV = (1.0 - smoothstep(b1, b2, abs(lU - lc)))
                             * (1.0 - smoothstep(b1, b2, abs(lD - lc)));
-                        gateH = max(gateH, betaH);
-                        gateV = max(gateV, betaV);
+                        // Linea fina de 1px sobre la grilla: no es bloque.
+                        // Si el centro es extremo (oscuro o claro) frente a la
+                        // cruz, el beta no debe ablandarlo. Reusa la cruz ya
+                        // leida, 0 fetches; vale tambien en lowPower.
+                        float min4b = min(min(lL, lR), min(lU, lD));
+                        float max4b = max(max(lL, lR), max(lU, lD));
+                        float thinGb = max(smoothstep(0.03, 0.10, min4b - lc),
+                            smoothstep(0.03, 0.10, lc - max4b));
+                        gateH = max(gateH, betaH * (1.0 - thinGb));
+                        gateV = max(gateV, betaV * (1.0 - thinGb));
                         vec3 filtH = (l1 + c + r1) * 0.3333333;
                         vec3 filtV = (u1 + c + d1) * 0.3333333;
                         float wH = horizW * gateH;
@@ -313,7 +329,14 @@ class RestoreBoostShaderProgram(
                     float gH = abs(lL - lR);
                     float gV = abs(lU - lD);
                     float edge = max(gH, gV);
-                    float gate = smoothstep(0.02, 0.09, edge);
+                    // Gate perceptual estilo FXAA-consola (1/16 + suelo,
+                    // 1/8 + suelo, relativo al luma local maxC): en sombra
+                    // abre antes (detecta linea oscura), en luz cierra
+                    // (menos disparos en brillos). A luma 0.5 ~= (0.031,
+                    // 0.0625). horizEdge/vertEdge no se tocan (ya relativos).
+                    float thrLo = max(0.008, maxC * 0.0625);
+                    float thrHi = max(0.030, maxC * 0.125);
+                    float gate = smoothstep(thrLo, thrHi, edge);
                     float horizEdge = smoothstep(0.15, 0.6, (gV - gH) / (edge + 1.0e-4));
                     float vertEdge = smoothstep(0.15, 0.6, (gH - gV) / (edge + 1.0e-4));
                     vec3 avgH = (l1 + r1) * 0.5;
@@ -325,15 +348,20 @@ class RestoreBoostShaderProgram(
                     // a ~0 y no se reconstruia nada. Se usa la pareja
                     // diagonal de MENOR gradiente, que es la que corre a lo
                     // largo del borde. Sin coste extra: las diagonales ya
-                    // estan leidas para el de-dither.
+                    // estan leidas para el de-dither. diagDom/avgD se reusan
+                    // abajo en el bloque CRT (idea Anime4K: direccion real del
+                    // gradiente, 0 fetches extra, solo ALU; en lowPower quedan
+                    // en 0 y no se usan).
+                    float diagDom = 0.0;
+                    vec3 avgD = vec3(0.0);
                     if (fullPath) {
                         float gD1 = abs(lNW - lSE);
                         float gD2 = abs(lNE - lSW);
                         float gAxis = max(gH, gV);
                         float gDiag = max(gD1, gD2);
-                        float diagDom = smoothstep(0.10, 0.45,
+                        diagDom = smoothstep(0.10, 0.45,
                             (gDiag - gAxis) / max(gDiag + gAxis, 0.0001));
-                        vec3 avgD = (gD1 > gD2) ? ((ne + sw) * 0.5) : ((nw + se) * 0.5);
+                        avgD = (gD1 > gD2) ? ((ne + sw) * 0.5) : ((nw + se) * 0.5);
                         edgeRgb = mix(edgeRgb, avgD, diagDom);
                     }
                     outc = mix(outc, edgeRgb, clamp(gate * sA * 0.5, 0.0, 1.0));
@@ -346,7 +374,16 @@ class RestoreBoostShaderProgram(
                     float isDark = 1.0 - smoothstep(0.18, 0.38, lOut);
                     float isThin = smoothstep(0.03, 0.10, maxN - lOut);
                     float flatCap = 1.0 - smoothstep(0.20, 0.35, maxN - minN);
-                    float targetL = lOut * (1.0 - isDark * isThin * flatCap * sA * 0.35);
+                    // Brillo fino simetrico (reflejo de pelo/ojo/metal): centro
+                    // claro rodeado de oscuro. Misma puerta que el oscuro pero
+                    // invertida y mas suave (0.25 vs 0.35) para no clipear.
+                    // Reusa minN/maxN/flatCap, ~4 ALU, 0 fetches. Mutuamente
+                    // excluyente con isDark (oscuro <0.38, brillo >0.62).
+                    float isBrightL = smoothstep(0.62, 0.82, lOut);
+                    float isThinBL = smoothstep(0.03, 0.10, lOut - minN);
+                    float targetL = lOut * (1.0 - isDark * isThin * flatCap * sA * 0.35
+                        + isBrightL * isThinBL * flatCap * sA * 0.25);
+                    targetL = min(targetL, 1.0);
                     if (lOut > 0.001) {
                         outc = outc * (targetL / lOut);
                     }
@@ -357,16 +394,44 @@ class RestoreBoostShaderProgram(
                     // Solo luma, sin scanlines / mascara / glow / curvatura.
                     // Corre ANTES del Detail para que el detalle afile encima.
                     // 0 fetches extra: reusa l1/r1/u1/d1 y edge/gate/sA.
+                    // REGLA DURA: misma orientacion que 2b, nunca mezcla fija.
+                    // 2b dice: borde HORIZONTAL (horizEdge~1) -> avgV (U/D),
+                    // borde VERTICAL (vertEdge~1) -> avgH (L/R). Este bloque
+                    // usa exactamente esos mismos pesos, no 0.6/0.25 fijos
+                    // que mezclaban AMBOS pares y cruzaban el borde siempre.
+                    // Asi no redondea lineas finas claras (cables, hakama,
+                    // pelo) despues de reconstruirlas. K=0.15 (antes 0.35
+                    // enceraba estilo Eagle X2). Linea fina (oscura O clara)
+                    // -> se salta el bloque.
                     {
-                        float crtK = sA * 0.35;
+                        float crtK = sA * 0.15;
+                        // Linea fina clara: centro claro rodeado de oscuro.
+                        // (La oscura ya existe como isDark*isThin; aqui se
+                        // cubre la polaridad que faltaba y que ablandaba
+                        // cables/pelo/hakama claros de 1px.)
+                        float isBright = smoothstep(0.62, 0.82, lOut);
+                        float isThinB = smoothstep(0.03, 0.10, lOut - minN);
+                        float thinGuard = max(isDark * isThin, isBright * isThinB);
                         // Solo donde hay estructura (no en plano: ya lo limpio
-                        // Depixel) y con techo para no empastar texturas.
-                        float crtGate = gate * (1.0 - isDark * isThin * flatCap);
+                        // Depixel). Sin flatCap aqui: una linea fuerte es justo
+                        // la que hay que proteger, no la que hay que mezclar.
+                        float crtGate = gate * (1.0 - thinGuard);
                         if (crtK > 0.001 && crtGate > 0.001) {
-                            // Mezcla lateral tipo Trinitron (mas peso H que V),
-                            // reconstruida desde los pares ya calculados.
-                            vec3 crtRgb = mix(outc, avgH, 0.6);
-                            crtRgb = mix(crtRgb, avgV, 0.25);
+                            // Direccional con la misma convencion que 2b:
+                            // horizEdge -> avgV, vertEdge -> avgH. Sin
+                            // direccion clara -> mezcla iso minima (dither).
+                            float totDir = horizEdge + vertEdge + 1.0e-4;
+                            vec3 dirRgb = (avgV * horizEdge + avgH * vertEdge) / totDir;
+                            vec3 isoRgb = (avgH + avgV) * 0.5;
+                            float dirConf = clamp(max(horizEdge, vertEdge), 0.0, 1.0);
+                            vec3 crtRgb = mix(isoRgb, dirRgb, dirConf);
+                            // Diagonal dominante (borde a 45°): misma pareja
+                            // que 2b-bis, sin fetches extra. Solo en fullPath;
+                            // en lowPower diagDom=0 y no cambia nada. Se pondera
+                            // por crtGate para no tocar lineas finas/planos.
+                            if (fullPath) {
+                                crtRgb = mix(crtRgb, avgD, clamp(diagDom * crtGate, 0.0, 1.0));
+                            }
                             float crtL = luma(crtRgb);
                             float curL = luma(outc);
                             float w = clamp(crtGate * crtK * 0.5, 0.0, 1.0);
@@ -415,11 +480,31 @@ class RestoreBoostShaderProgram(
                         // de los vecinos originales. No se toca outc aqui, asi
                         // que depixel/retro no pueden cancelarla.
                         float mean4 = (lL + lR + lU + lD) * 0.25;
-                        float lap = lc - mean4;
-                        // Puertas (solo atenúan, nunca anulan del todo):
-                        float gate = smoothstep(0.002, 0.015, rangeC);
-                        float vgate = smoothstep(0.0003, 0.0025, max(var4, 0.0));
-                        float zone = smoothstep(0.02, 0.15, lOut)
+                        // DoG selectivo (idea Anime4K, 0 fetches extra): fino
+                        // (centro vs cruz 1px) contra amplio (cruz 1px vs
+                        // diagonales ~1.4px, ya leidas). Solo afila donde ambos
+                        // coinciden en signo = linea real; el grano aislado
+                        // (fino grande, amplio ~0) se atenua solo. En lowPower
+                        // (fullPath=0) se usa el laplaciano original.
+                        float lapOrig = lc - mean4;
+                        float lap = lapOrig;
+                        if (fullPath) {
+                            float diagMean = (lNW + lNE + lSW + lSE) * 0.25;
+                            float lapWide = mean4 - diagMean;
+                            float agree = clamp(lapOrig * lapWide * 400.0, 0.0, 1.0);
+                            lap = mix(lapOrig, lapOrig * agree, 0.7);
+                        }
+                        // Puertas perceptuales estilo FXAA-consola (relativas al
+                        // luma local mxL, con suelo absoluto anti-negro): a
+                        // luma 0.5 quedan (0.005, 0.015) = como antes; en
+                        // sombra abren antes, en luz cierran. Solo atenúan.
+                        float relVar = max(var4, 0.0) / max(mean4 * mean4, 0.0001);
+                        float gate = smoothstep(max(0.0015, mxL * 0.01), max(0.006, mxL * 0.03), rangeC);
+                        float vgate = smoothstep(0.0015, 0.012, relVar);
+                        // Rodilla baja 0.01-0.10 (antes 0.02-0.15): la linea de
+                        // anime vive en 0.05-0.10 y recibia poco filo. Siguen
+                        // protegiendo el negro puro el vgate/gate de rango.
+                        float zone = smoothstep(0.01, 0.10, lOut)
                             * (1.0 - smoothstep(0.85, 0.98, lOut));
                         float rmg = outc.r - outc.g;
                         float rmb = outc.r - outc.b;
@@ -437,6 +522,50 @@ class RestoreBoostShaderProgram(
                         float ringEps = min(0.03, rangeC * 0.2);
                         float newLuma = clamp(lOut + boost, mnL - ringEps, mxL + ringEps);
                         outc = setLumaPreservingHue(outc, newLuma);
+                    }
+                }
+
+                // ================= 4) DEPTH: pop frente-fondo (0 fetches) =================
+                // Clarity local suave: lc (original) contra blurL (media de la
+                // cruz ya leida). No es 3D estereo: separa planos por
+                // micro-contraste. Se frena donde se limpio (smoothK), en
+                // linea fina (thinGuard del bloque CRT: cables/pelo de 1px) y
+                // en piel (suave), con clamp como el detalle. Solo ALU.
+                if (uDepth > 0.0) {
+                    float lOutD = luma(outc);
+                    if (lOutD > 0.005 && lOutD < 0.995) {
+                        float mnD = min(min(lL, lR), min(lU, lD));
+                        float mxD = max(max(lL, lR), max(lU, lD));
+                        float rangeD = max(mxD - mnD, 0.0001);
+                        float meanD = (lL + lR + lU + lD) * 0.25;
+                        float depthSig = lc - blurL;
+                        float dgate = smoothstep(0.004, 0.02, rangeD);
+                        float relVd = max(var4, 0.0) / max(meanD * meanD, 0.0001);
+                        float vgd = smoothstep(0.0015, 0.012, relVd);
+                        // Linea fina (misma receta que 2c/2d, 0 fetches):
+                        // centro extremo frente a la cruz = no tocar.
+                        float isDarkD = 1.0 - smoothstep(0.18, 0.38, lOutD);
+                        float isThinD = smoothstep(0.03, 0.10, mxD - lOutD);
+                        float isBrightD = smoothstep(0.62, 0.82, lOutD);
+                        float isThinBD = smoothstep(0.03, 0.10, lOutD - mnD);
+                        float thinD = max(isDarkD * isThinD, isBrightD * isThinBD);
+                        // Piel suave (misma receta que Detail, 0 fetches):
+                        // el pop duro en caras se ve harsh.
+                        float rmgD = outc.r - outc.g;
+                        float rmbD = outc.r - outc.b;
+                        float skinD = smoothstep(0.02, 0.1, rmgD) * smoothstep(0.01, 0.08, rmbD);
+                        skinD *= smoothstep(0.25, 0.45, outc.r) * (1.0 - smoothstep(0.7, 0.85, outc.r));
+                        skinD *= smoothstep(0.15, 0.3, outc.g) * (1.0 - smoothstep(0.6, 0.75, outc.g));
+                        skinD = clamp(skinD, 0.0, 1.0);
+                        float zoneD = smoothstep(0.01, 0.10, lOutD)
+                            * (1.0 - smoothstep(0.85, 0.98, lOutD));
+                        float dk = (1.0 - 0.5 * clamp(smoothK, 0.0, 1.0))
+                            * (1.0 - 0.8 * clamp(thinD, 0.0, 1.0))
+                            * mix(1.0, 0.5, skinD) * zoneD;
+                        float boostD = depthSig * (uDepth * 0.9) * dgate * vgd * dk;
+                        float ringD = min(0.03, rangeD * 0.2);
+                        float newLD = clamp(lOutD + boostD, mnD - ringD, mxD + ringD);
+                        outc = setLumaPreservingHue(outc, newLD);
                     }
                 }
 

@@ -24,6 +24,9 @@ private const val TAG = "MotionX2BoostEffect"
  * - HYBRID (recomendado): cuadro nítido + micro-mezcla del anterior. Mejor balance.
  * - DOUBLING: Frame x2, cada cuadro tal cual, sin mezcla. Más ligero, menos suave.
  * - BLEND: mezcla suave entre anterior y actual. Suave, pero puede verse fantasma.
+ * - STEADY: nítido en movimiento (como DOUBLING) + promedio temporal en
+ *   quieto (anti-shimmer). Lógica inversa a HYBRID/BLEND: mezcla donde NO hay
+ *   movimiento. Sin fantasma. Se agrega AL FINAL para no mover ordinales.
  */
 enum class MotionX2Mode(val label: String) {
     HYBRID("HYBRID (Doubling + Micro-Blend)"),
@@ -32,7 +35,8 @@ enum class MotionX2Mode(val label: String) {
     @Deprecated("SPIKE eliminado: se migra a REAL60")
     INTERP("Interpolación 60 (SPIKE)"),
     REAL60("60 fps reales (GRID anti-ghost · experimental)"),
-    ECO60("ECO60 (60fps liviano · bajo consumo)");
+    ECO60("ECO60 (60fps liviano · bajo consumo)"),
+    STEADY("STEADY (Nitidez + Anti-shimmer)");
 
     companion object {
         /** True si el ordinal guardado en prefs emite cuadros intermedios (fps reales extra).

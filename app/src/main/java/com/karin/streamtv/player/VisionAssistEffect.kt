@@ -38,15 +38,20 @@ import androidx.media3.effect.GlShaderProgram
  * por la curva global de Alto Contraste ni apagados por Fotofobia/Luz Azul).
  * Las etapas no elegidas se saltan por bit-test; branching solo por uniforme
  * (barato), 4 fetches extra como máximo, sin texturas auxiliares ni LUTs. GLES2.
+ *
+ * Demo split-screen ([demoSplit]): la mitad izquierda queda intacta
+ * (passthrough de la entrada) para comparar con la ayuda aplicada. Es lo
+ * que usa el checkbox "Comparar" del diálogo de ayuda visual.
  */
 class VisionAssistEffect(
     var settings: VisionAssistSettings = VisionAssistSettings(),
+    private val demoSplit: Boolean = false,
 ) : GlEffect {
 
     private var program: VisionAssistShaderProgram? = null
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return VisionAssistShaderProgram(context, useHdr, settings)
+        return VisionAssistShaderProgram(context, useHdr, settings, demoSplit)
             .also { program = it }
     }
 
@@ -63,6 +68,7 @@ class VisionAssistShaderProgram(
     context: Context,
     useHdr: Boolean,
     private var settings: VisionAssistSettings,
+    private val demoSplit: Boolean = false,
 ) : BaseGlShaderProgram(useHdr, 1) {
 
     private val glProgram: GlProgram
@@ -110,6 +116,7 @@ class VisionAssistShaderProgram(
 
     private fun pushUniforms() {
         val s = settings
+        glProgram.setIntUniform("uDemoSplit", if (demoSplit) 1 else 0)
         glProgram.setIntUniform("uProfileMask", s.mask)
         glProgram.setFloatUniform("uIntensity", s.intensity)
         glProgram.setIntUniform("uDaltonType", s.daltonType)
@@ -153,6 +160,7 @@ class VisionAssistShaderProgram(
             varying vec2 vTexCoord;
             uniform sampler2D uTexSampler;
             uniform vec2 uResolution;
+            uniform int uDemoSplit;   // 1 = demo: mitad izquierda intacta
             uniform int uProfileMask;   // bit0=dalton, 1=claridad, 2=alto contraste, 3=fotofobia, 4=luz azul, 5=vista cansada
             uniform float uIntensity;   // 0.0 - 1.0
             uniform int uDaltonType;    // 0=Protan, 1=Deutan, 2=Tritan, 3=Monocromo
@@ -195,6 +203,8 @@ class VisionAssistShaderProgram(
 
             void main() {
                 vec3 c = texture2D(uTexSampler, vTexCoord).rgb;
+                // Demo split: izquierda = entrada intacta, derecha = ayuda.
+                if (uDemoSplit == 1 && vTexCoord.x < 0.5) { gl_FragColor = vec4(c, 1.0); return; }
                 float i = clamp(uIntensity, 0.0, 1.0);
                 // Bits del mask leídos con mod() en FLOAT: GLES2 no soporta
                 // operadores bitwise (& | ~) y el % entero falla en varios

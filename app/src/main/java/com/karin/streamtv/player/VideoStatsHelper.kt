@@ -139,7 +139,7 @@ object VideoStatsHelper {
         // "pedido" para no reportar mejoras que no están corriendo.
         val motionReqOn = !ultra &&
             prefs.getBoolean(ExoPlayerSettingsHelper.KEY_MOTIONX2_EN, false)
-        val motionLegacy = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0).coerceIn(0, 5)
+        val motionLegacy = prefs.getInt(ExoPlayerSettingsHelper.KEY_MOTIONX2_MODE, 0).coerceIn(0, 6)
         val motionLabel = shortMotion(
             chainMotionLabel?.takeIf { it.isNotBlank() } ?: motionLegacyLabel(motionLegacy),
         )
@@ -432,7 +432,7 @@ object VideoStatsHelper {
             techRow("3D", detail, realOn)
         }
         if (!ultra && prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false)) {
-            techRow("Demo", "Mitad izquierda original, derecha con efectos", chainActive.contains("Demo"))
+            techRow("Demo", "Mitad izquierda original (upscaler: bilineal básico), derecha con efectos", chainActive.contains("Demo"))
         }
         // Orden real de aplicación: es lo que explica por qué se ve lo que se ve.
         if (chainActive.isNotEmpty()) {
@@ -443,7 +443,7 @@ object VideoStatsHelper {
             note("Cadena activa: (sin filtros) — la salida es idéntica a la entrada.")
         }
         if (!ultra && prefs.getBoolean(ExoPlayerSettingsHelper.KEY_DEMO_EN, false)) {
-            note("Demo split: izquierda = original, derecha = con efectos.")
+            note("Demo split: izquierda = original (con upscaler: escalado bilineal básico), derecha = con efectos.")
         }
         if (chainActive.any { it == "Modo seguro" }) {
             note("Modo seguro: sin efectos de imagen.", warn)
@@ -718,13 +718,14 @@ object VideoStatsHelper {
 
     // ---------- Etiquetas de modos (coherentes con Opciones avanzadas) ----------
 
-    /** Legacy guardado en prefs: 0=HYBRID, 1=DOUBLING, 2=BLEND, 3=INTERP(migrado a REAL60), 4=REAL60, 5=ECO60. Corto para tabla. */
+    /** Legacy guardado en prefs: 0=HYBRID, 1=DOUBLING, 2=BLEND, 3=INTERP(migrado a REAL60), 4=REAL60, 5=ECO60, 6=STEADY. Corto para tabla. */
     fun motionLegacyLabel(legacy: Int): String {
-        return when (legacy.coerceIn(0, 5)) {
+        return when (legacy.coerceIn(0, 6)) {
             1 -> "DOUBLING x2"
             2 -> "BLEND"
             3, 4 -> "REAL60"
             5 -> "ECO60"
+            6 -> "STEADY"
             else -> "HYBRID"
         }
     }
@@ -736,6 +737,7 @@ object VideoStatsHelper {
             l.contains("ECO") -> "ECO60"
             l.contains("GRID") || l.contains("60 FPS") || l.contains("REAL60") || l.contains("INTERP") -> "REAL60"
             l.contains("DOUBLING") || l.contains("X2 CUADROS") -> "DOUBLING x2"
+            l.contains("STEADY") -> "STEADY"
             l.contains("BLEND") && !l.contains("HYBRID") -> "BLEND"
             else -> "HYBRID"
         }
